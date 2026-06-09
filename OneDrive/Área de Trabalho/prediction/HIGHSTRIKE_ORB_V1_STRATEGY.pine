@@ -1,0 +1,391 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © heelandy
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE ORB V1 — Opening-Range Breakout, profitable in BOTH directions.
+// Replaces V44's VWAP/EMA-reclaim entry (which had no validated edge) with an
+// Opening-Range Breakout, validated in Python over 16y NQ:
+//   NQ 15m: net +0.13R/trade, PF 1.29, 90% bootstrap CI lower bound > 0,
+//           LONG +0.10R(PF1.21) AND SHORT +0.19R(PF1.46) both positive,
+//           positive 14/17 years (every year 2014-2026), all regime windows,
+//           survives +2-tick slippage; holds on 5m too (not TF-fragile).
+// Keeps V44's hardened machinery: real costs, macro stand-down, regime gates,
+// prop-eval guardrails, session/EOD-flat, scale-runner exit.
+// Reconcile target: data/bt_nq_15m.csv from `python hs_backtest.py NQ 15m full scale_be both orb`.
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+strategy("HIGHSTRIKE ORB V1 STRATEGY", overlay=true,
+     initial_capital=100000, pyramiding=0, max_labels_count=200, max_lines_count=200,
+     default_qty_type=strategy.fixed, default_qty_value=2,
+     commission_type=strategy.commission.cash_per_order,
+     commission_value=input.float(0.52, "Commission $ per order", group="Costs (per-instrument)", tooltip="Futures (MNQ/MES) ~0.52. Equities/ETFs are usually commission-free -> set 0 (slippage below models the spread)."),
+     slippage=input.int(2, "Slippage (min-ticks)", group="Costs (per-instrument)", tooltip="Futures: NQ 1 tick=0.25pt. Equities/ETFs: 1 tick=$0.01. 1-2 ticks for liquid SPY/QQQ."),
+     process_orders_on_close=false)
+// MULTI-ASSET: works on futures, equities and ETFs. Sizing uses syminfo.pointvalue (=$/contract
+// for futures, =1 for shares) so risk-based sizing yields contracts OR shares automatically.
+// The OR (09:30-10:00 ET) is the regular cash open -> applies to stocks/ETFs too. Macro ref = SPY.
+// FAST EXECUTION (validated: 15m +0.27->+0.35R PF 1.63->1.88; 5m +0.15->+0.25R PF 1.32->1.58):
+// a resting STOP at the OR breakout level fills the instant price crosses it (intrabar) instead
+// of waiting for the bar close. process_orders_on_close=false so the stop fills at the LEVEL.
+// (The resting order itself gives the second-level fill — no calc_on_every_tick needed, which
+//  keeps backtest == live and avoids repaint.)
+
+// ───────────────────────── INPUTS ─────────────────────────
+long_on  = input.bool(true, "LONG signals",  group="Direction", inline="d")
+short_on = input.bool(true, "SHORT signals", group="Direction", inline="d")
+
+or_start = input.session("0930-1000", "Opening Range window (ET)", group="ORB",
+             tooltip="Range is built during this window; breakout fires after it closes.")
+sess_tz  = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="ORB")
+trade_end_hhmm = input.int(1500, "Stop new entries after HHMM (ET)", group="ORB", minval=0, maxval=2359,
+                  tooltip="RESEARCH (with stop-entry + EOD-flat): looking ALL DAY (cutoff 15:00) beats morning-only on exp/PF/win/CI across SPY/QQQ/NQ — the better fills make afternoon breakouts clean too. 15:00 leaves room before the EOD flatten.")
+brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0,
+                  tooltip="Require the close to clear the OR by this x ATR -> filters false breaks, raises win% + PF.")
+auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
+            tooltip="Per-TF research optima: breakout buffer <=5m -> 0.0, else 0.25 ATR. Entry cutoff 15:00 (look all day). Reward 4R. OFF = use the manual breakout/cutoff above.")
+
+trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
+trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
+
+local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
+local_atr_hi  = input.float(2.5,  "Volatile ATR%",         group="Local Regime", step=0.25)
+block_range   = input.bool(true,  "Block entries in RANGE regime", group="Local Regime")
+
+macro_en       = input.bool(true,  "MACRO regime filter ON", group="Macro Regime")
+macro_standdown= input.bool(true,  "Macro stand-down vs SPY trend", group="Macro Regime",
+                  tooltip="No longs while SPY in a confirmed daily downtrend, no shorts while confirmed uptrend.")
+spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Macro Regime")
+vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Macro Regime")
+vix_calm = input.float(15.0, "VIX calm",     group="Macro Regime", step=1)
+vix_vol  = input.float(25.0, "VIX volatile", group="Macro Regime", step=1)
+vix_ext  = input.float(35.0, "VIX extreme",  group="Macro Regime", step=1)
+spy_adx_min = input.float(25.0, "Macro ADX min", group="Macro Regime", step=1)
+persist_n   = input.int(3, "Regime persistence bars", group="Macro Regime", minval=1)
+block_d     = input.bool(true, "Block trades in REGIME D", group="Macro Regime")
+block_b     = input.bool(true, "Block trend in REGIME B",  group="Macro Regime")
+
+mtf_on   = input.bool(false, "Higher-TF trend confirmation", group="MTF Confirm",
+            tooltip="Require N of {1h,4h,D} to agree (EMA50/200 stack). RESEARCH: this REDUCES expectancy/PF/win on the ORB (research/orb_mtf_research.py) — default OFF; available to experiment.")
+mtf_min  = input.int(2, "Min higher-TFs that must agree (0-3)", group="MTF Confirm", minval=0, maxval=3)
+
+sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk", step=0.1)
+sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk", step=0.25)
+tp1_rr      = input.float(1.0, "TP1 R", group="Risk", step=0.25)
+tp2_rr      = input.float(4.0, "TP2 R", group="Risk", step=0.25,
+              tooltip="RESEARCH: 4R target -> exp +0.24R, PF 1.55, win 59%, maxDD -20R (beats the 3R/PF-1.48 record). Peak PF 1.63 if you also set the entry cutoff to 1130. Runner captures the trend leg; TP1 win-rate unchanged.")
+exit_style  = input.string("Scale 50% @TP1 -> BE -> TP2", "Exit", options=["Scale 50% @TP1 -> BE -> TP2","Full to TP2 (2R/-1R)"], group="Risk")
+
+eval_on        = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
+eval_min_ct    = input.int(2, "EVAL: min contracts (runner floor)", group="Prop Eval", minval=1)
+risk_dlr       = input.float(150.0, "EVAL: risk $ per trade", group="Prop Eval", step=25)
+daily_loss     = input.float(600.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
+trail_dd       = input.float(1500.0,"EVAL: trailing DD $", group="Prop Eval", step=100)
+trail_buf      = input.float(300.0, "EVAL: trailing halt buffer $", group="Prop Eval", step=50)
+fixed_qty      = input.int(2, "Fixed qty: contracts/shares (0 = risk-based)", group="Prop Eval", minval=0,
+                  tooltip="Futures: contracts (2 default). EQUITIES/ETFs: this is SHARES, so 2 is tiny -> set 0 for risk-based sizing (shares = EVAL risk $ / per-share risk) or enter a real share count.")
+eod_flat       = input.bool(true, "EOD: flatten at HHMM", group="Session")
+eod_hhmm       = input.int(1558, "EOD flatten HHMM (ET)", group="Session", minval=0, maxval=2359)
+show_dash      = input.bool(true, "Show dashboard", group="Display")
+show_plan      = input.bool(true, "Show SL / TP1 / TP2 lines", group="Display")
+show_panel     = input.bool(true, "Show position-tool panel (boxes + labels)", group="Display",
+                  tooltip="Draws the active/pending trade like the TradingView long/short position tool: green target box, red stop box, with TP1/TP2/SL/entry labels and the R:R ratio.")
+
+// ───────────────────────── CORE ─────────────────────────
+atr14 = ta.atr(14)
+[dip, dim, adxV] = ta.dmi(14, 14)
+atr_pct = close > 0 ? atr14 / close * 100.0 : 0.0
+emaF = ta.ema(close, trend_ema_f)
+emaS = ta.ema(close, trend_ema_s)
+bool trend_up   = close > emaS and emaF > emaS
+bool trend_down = close < emaS and emaF < emaS
+pt_val = syminfo.pointvalue
+string asset_class = syminfo.type == "futures" ? "FUTURE" : syminfo.type == "fund" ? "ETF" : syminfo.type == "stock" ? "EQUITY" : str.upper(syminfo.type)
+bool is_equity = asset_class == "EQUITY" or asset_class == "ETF"
+
+int o_nh = hour(time, sess_tz)
+int o_nm = minute(time, sess_tz)
+int o_now = o_nh * 60 + o_nm
+bool new_day = ta.change(time("D")) != 0
+bool rth = (dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday)
+// auto per-TF config (research optima) overriding the manual breakout/cutoff
+int tf_s = timeframe.in_seconds()
+float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
+int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
+int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+
+// ───────────────────────── MACRO REGIME (ported from V44) ─────────────────────────
+spy_b() =>
+    [_a,_b,sadx] = ta.dmi(14,14)
+    [close, ta.ema(close,20), ta.ema(close,50), sadx]
+vix_b() => ta.sma(close,5)
+[spc, se20, se50, sadx] = request.security(spy_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+vix5 = request.security(vix_sym, "D", vix_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+bool spy_up = not na(spc) and spc > se20 and se20 > se50
+bool spy_dn = not na(spc) and spc < se20 and se20 < se50
+bool spy_trend = (spy_up or spy_dn) and not na(sadx) and sadx >= spy_adx_min
+
+string reg_raw = "-"
+if not na(vix5)
+    reg_raw := vix5 >= vix_ext ? "D" : vix5 >= vix_vol ? "C" : (vix5 < vix_calm and spy_trend) ? "A" : (vix5 < vix_vol and not spy_trend) ? "B" : spy_trend ? "A" : "B"
+var int reg_cnt = 0
+var string reg_pend = "-"
+var string reg_conf = "-"
+int need = reg_raw == "D" ? 0 : persist_n
+if reg_raw == "D"
+    reg_conf := "D"
+    reg_pend := "D"
+    reg_cnt := need
+else if reg_raw == reg_pend
+    reg_cnt += 1
+    if reg_cnt >= need
+        reg_conf := reg_raw
+else
+    reg_pend := reg_raw
+    reg_cnt := 1
+string regime = reg_conf != "-" ? reg_conf : reg_raw
+bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and block_b))
+bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
+bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
+
+// ───────────────────────── LOCAL REGIME ─────────────────────────
+int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2   // 1 trend 2 range 3 volatile
+bool local_ok = not block_range or local_regime != 2
+
+// ───────────────────────── MTF trend confirmation (off by default; research shows it hurts) ─────────────────────────
+f_htf_dir() =>
+    e50 = ta.ema(close, 50)
+    e200 = ta.ema(close, 200)
+    close > e50 and e50 > e200 ? 1 : close < e50 and e50 < e200 ? -1 : 0
+h1 = request.security(syminfo.tickerid, "60",  f_htf_dir(), lookahead=barmerge.lookahead_off)
+h4 = request.security(syminfo.tickerid, "240", f_htf_dir(), lookahead=barmerge.lookahead_off)
+hD = request.security(syminfo.tickerid, "D",   f_htf_dir(), lookahead=barmerge.lookahead_off)
+int mtf_up   = (h1 == 1 ? 1 : 0) + (h4 == 1 ? 1 : 0) + (hD == 1 ? 1 : 0)
+int mtf_down = (h1 == -1 ? 1 : 0) + (h4 == -1 ? 1 : 0) + (hD == -1 ? 1 : 0)
+bool mtf_long_ok  = not mtf_on or mtf_up   >= mtf_min
+bool mtf_short_ok = not mtf_on or mtf_down >= mtf_min
+
+// ───────────────────────── OPENING RANGE ─────────────────────────
+bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+var float or_high = na
+var float or_low  = na
+var bool  or_set  = false
+if new_day
+    or_high := na
+    or_low  := na
+    or_set  := false
+if in_or
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+if not in_or and not na(or_high)
+    or_set := true
+
+// ───────────────────────── ORB STOP-ENTRY LEVELS (frozen at OR close; rest as buy/sell-stops) ─────────────────────────
+float brk_buf = atr14 * eff_brk
+var float Le = na   // long resting-stop entry  (OR high + buffer)
+var float Ls = na   // long initial stop
+var float Se = na   // short resting-stop entry (OR low - buffer)
+var float Ss = na   // short initial stop
+var bool  traded_l = false
+var bool  traded_s = false
+if new_day
+    Le := na
+    Ls := na
+    Se := na
+    Ss := na
+    traded_l := false
+    traded_s := false
+if or_set and na(Le) and not na(or_high) and not na(or_low)       // freeze levels at OR close
+    Le := or_high + brk_buf
+    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Se := or_low  - brk_buf
+    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+float Lt1 = Le + (Le - Ls) * tp1_rr
+float Lt2 = Le + (Le - Ls) * tp2_rr
+float St1 = Se - (Ss - Se) * tp1_rr
+float St2 = Se - (Ss - Se) * tp2_rr
+bool window = or_set and rth and o_now < trade_end and not na(Le)
+bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
+bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
+
+// ───────────────────────── EVAL guardrails (equity-based) ─────────────────────────
+var float day_eq = na
+if new_day or na(day_eq)
+    day_eq := strategy.equity
+var float peak_eq = na
+peak_eq := na(peak_eq) ? strategy.equity : math.max(peak_eq, strategy.equity)
+bool day_breaker = eval_on and (strategy.equity - day_eq) <= -daily_loss
+bool dd_halt     = eval_on and strategy.equity <= (peak_eq - trail_dd) + trail_buf
+bool eval_block  = day_breaker or dd_halt
+
+// ───────────────────────── EXECUTION ─────────────────────────
+var float t_sl  = na
+var float t_tp1 = na
+var float t_tp2 = na
+var float t_ep  = na
+var bool  tp1_filled = false
+bool flat = strategy.position_size == 0
+bool full2 = exit_style == "Full to TP2 (2R/-1R)"
+
+f_units(entry, stop) =>
+    rk = math.abs(entry - stop)
+    int u = int(fixed_qty > 0 ? fixed_qty : (rk > 0 ? math.floor(risk_dlr / (rk * pt_val)) : 0))
+    eval_on ? math.max(eval_min_ct, u) : math.max(1, u)
+
+// place / refresh the resting STOP orders during the entry window; cancel outside it
+if window and not traded_l and flat and gate_long and not eval_block and (Le - Ls > 0)
+    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, comment="ORB L")
+else
+    strategy.cancel("L")
+if window and not traded_s and flat and gate_short and not eval_block and (Ss - Se > 0)
+    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, comment="ORB S")
+else
+    strategy.cancel("S")
+// on fill: latch traded-today + freeze the exit levels from the frozen geometry
+bool just_long  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+bool just_short = strategy.position_size < 0 and strategy.position_size[1] >= 0
+if just_long
+    traded_l := true
+    t_sl := Ls
+    t_ep := Le
+    t_tp1 := Lt1
+    t_tp2 := Lt2
+    tp1_filled := false
+if just_short
+    traded_s := true
+    t_sl := Ss
+    t_ep := Se
+    t_tp1 := St1
+    t_tp2 := St2
+    tp1_filled := false
+
+// manage LONG
+if strategy.position_size > 0
+    if full2
+        strategy.exit("Lx", from_entry="L", stop=t_sl, limit=t_tp2)
+    else
+        if high >= t_tp1
+            tp1_filled := true
+        float st = tp1_filled ? t_ep : t_sl          // runner -> breakeven after TP1
+        strategy.exit("Lx1", from_entry="L", qty_percent=50, stop=t_sl, limit=t_tp1)
+        strategy.exit("Lx2", from_entry="L", stop=st, limit=t_tp2)
+// manage SHORT
+if strategy.position_size < 0
+    if full2
+        strategy.exit("Sx", from_entry="S", stop=t_sl, limit=t_tp2)
+    else
+        if low <= t_tp1
+            tp1_filled := true
+        float st = tp1_filled ? t_ep : t_sl
+        strategy.exit("Sx1", from_entry="S", qty_percent=50, stop=t_sl, limit=t_tp1)
+        strategy.exit("Sx2", from_entry="S", stop=st, limit=t_tp2)
+
+// EOD flat
+var bool eod_done = false
+if new_day
+    eod_done := false
+int eod_min = (eod_hhmm / 100) * 60 + (eod_hhmm % 100)
+if eod_flat and not eod_done and o_now >= eod_min
+    if strategy.position_size != 0
+        strategy.close_all(comment="EOD flat")
+    eod_done := true
+
+// ───────────────────────── VISUALS ─────────────────────────
+plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55), style=plot.style_linebr)
+plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+// RESTING ENTRY LEVELS — the live buy-stop / sell-stop the strategy is waiting to trigger
+plot(window and not traded_l ? Le : na, "Long entry (buy-stop)",   color=color.new(color.lime, 0), style=plot.style_linebr, linewidth=2)
+plot(window and not traded_s ? Se : na, "Short entry (sell-stop)", color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=2)
+// FULL TRADE PLAN — stop-loss + TP1 + TP2 (while the entry is resting, and again while in the trade)
+bool lplan = show_plan and ((window and not traded_l) or strategy.position_size > 0)
+bool splan = show_plan and ((window and not traded_s) or strategy.position_size < 0)
+float lsl = strategy.position_size > 0 ? t_sl : Ls
+float ls1 = strategy.position_size > 0 ? t_tp1 : Lt1
+float ls2 = strategy.position_size > 0 ? t_tp2 : Lt2
+float ssl = strategy.position_size < 0 ? t_sl : Ss
+float ss1 = strategy.position_size < 0 ? t_tp1 : St1
+float ss2 = strategy.position_size < 0 ? t_tp2 : St2
+plot(lplan ? lsl : na, "Long SL",  color=color.new(color.red,   25), style=plot.style_linebr)
+plot(lplan ? ls1 : na, "Long TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(lplan ? ls2 : na, "Long TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(splan ? ssl : na, "Short SL",  color=color.new(color.red,   25), style=plot.style_linebr)
+plot(splan ? ss1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(splan ? ss2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(trend_ema_s > 0 ? emaS : na, "EMA slow", color=color.new(color.gray, 50))
+plotshape(just_long,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
+plotshape(just_short, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
+bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
+bgcolor(eval_block ? color.new(color.red, 80) : na)
+
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_dash
+    table.cell(dash,0,0,"HIGHSTRIKE ORB", text_color=color.yellow, text_size=size.small)
+    table.cell(dash,1,0, str.tostring(syminfo.ticker)+" · "+asset_class, text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,0,1,"Regime", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,1, regime + (spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=regime=="A"?color.lime:regime=="D"?color.red:color.aqua, text_size=size.tiny)
+    table.cell(dash,0,2,"Trend", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,2, trend_up?"UP":trend_down?"DOWN":"flat", text_color=trend_up?color.lime:trend_down?color.red:color.gray, text_size=size.tiny)
+    table.cell(dash,0,3,"Local", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,3, local_regime==1?"TREND":local_regime==2?"RANGE":"VOL", text_color=local_ok?color.lime:color.orange, text_size=size.tiny)
+    table.cell(dash,0,4,"OR", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,4, or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming", text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,0,5,"Eval", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,5, eval_block?"HALTED":"ok", text_color=eval_block?color.red:color.lime, text_size=size.tiny)
+
+// ───────────────────────── POSITION-TOOL PANEL (labeled SL/TP boxes, like the TV long/short tool) ─────────────────────────
+bool inL = strategy.position_size > 0
+bool inS = strategy.position_size < 0
+bool panel_long  = show_panel and show_plan and (inL or (window and not traded_l and gate_long))
+bool panel_short = show_panel and show_plan and (inS or (window and not traded_s and gate_short))
+var box   pbx_g = na
+var box   pbx_r = na
+var label plb_e  = na
+var label plb_t1 = na
+var label plb_t2 = na
+var label plb_sl = na
+if barstate.islast
+    bool any = panel_long or panel_short
+    float pe  = panel_long ? (inL ? t_ep  : Le)  : panel_short ? (inS ? t_ep  : Se)  : na
+    float psl = panel_long ? (inL ? t_sl  : Ls)  : panel_short ? (inS ? t_sl  : Ss)  : na
+    float pt1 = panel_long ? (inL ? t_tp1 : Lt1) : panel_short ? (inS ? t_tp1 : St1) : na
+    float pt2 = panel_long ? (inL ? t_tp2 : Lt2) : panel_short ? (inS ? t_tp2 : St2) : na
+    string etx = panel_long ? (inL ? "LONG (in trade)" : "Stop-entry BUY") : panel_short ? (inS ? "SHORT (in trade)" : "Stop-entry SELL") : ""
+    int x1 = bar_index - 5
+    int x2 = bar_index + 12
+    if any and not na(pe) and not na(psl) and not na(pt2)
+        float rr = math.abs(pe - psl) > 0 ? math.abs(pt2 - pe) / math.abs(pe - psl) : 0.0
+        if na(pbx_g)
+            pbx_g  := box.new(x1, pe, x2, pe, border_color=color.new(color.teal, 50), bgcolor=color.new(color.teal, 88))
+            pbx_r  := box.new(x1, pe, x2, pe, border_color=color.new(color.red, 50),  bgcolor=color.new(color.red, 90))
+            plb_e  := label.new(x2, pe,  "", style=label.style_label_left, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
+            plb_t1 := label.new(x2, pt1, "", style=label.style_label_left, color=color.new(color.teal, 10), textcolor=color.white, size=size.small)
+            plb_t2 := label.new(x2, pt2, "", style=label.style_label_left, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+            plb_sl := label.new(x2, psl, "", style=label.style_label_left, color=color.new(color.red, 0),   textcolor=color.white, size=size.small)
+        box.set_top(pbx_g, math.max(pe, pt2))
+        box.set_bottom(pbx_g, math.min(pe, pt2))
+        box.set_left(pbx_g, x1)
+        box.set_right(pbx_g, x2)
+        box.set_top(pbx_r, math.max(pe, psl))
+        box.set_bottom(pbx_r, math.min(pe, psl))
+        box.set_left(pbx_r, x1)
+        box.set_right(pbx_r, x2)
+        label.set_xy(plb_e, x2, pe)
+        label.set_text(plb_e, etx + "  " + str.tostring(pe, format.mintick))
+        label.set_xy(plb_t1, x2, pt1)
+        label.set_text(plb_t1, "TP1  " + str.tostring(pt1, format.mintick) + "  +" + str.tostring(tp1_rr, "#.#") + "R")
+        label.set_xy(plb_t2, x2, pt2)
+        label.set_text(plb_t2, "TP2  " + str.tostring(pt2, format.mintick) + "  +" + str.tostring(tp2_rr, "#.#") + "R   |  R:R " + str.tostring(rr, "#.##"))
+        label.set_xy(plb_sl, x2, psl)
+        label.set_text(plb_sl, "SL  " + str.tostring(psl, format.mintick) + "  -1R")
+    if not any and not na(pbx_g)
+        box.delete(pbx_g)
+        box.delete(pbx_r)
+        label.delete(plb_e)
+        label.delete(plb_t1)
+        label.delete(plb_t2)
+        label.delete(plb_sl)
+        pbx_g  := na
+        pbx_r  := na
+        plb_e  := na
+        plb_t1 := na
+        plb_t2 := na
+        plb_sl := na

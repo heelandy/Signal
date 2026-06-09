@@ -1,0 +1,125 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © heelandy
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE ORB — MULTI-TIMEFRAME SIGNALS (display).
+// Shows the ORB breakout from BOTH the 5m and 15m timeframes on ANY chart, plus a CONFLUENCE
+// mark when both fire the same direction the same day. Use it on a 1m/5m/15m chart to see
+// when the higher/other TF agrees. (Raw OR-breakout + trend + breakout-strength; the macro/
+// regime/eval gates from the strategy are NOT applied here because nested request.security is
+// not allowed — this is a visual confluence tool, not the order engine.)
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+indicator("HIGHSTRIKE ORB — MTF signals", overlay=true, max_labels_count=500)
+
+or_start     = input.session("0930-1000", "Opening Range window (ET)", group="ORB")
+sess_tz      = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="ORB")
+// breakout strength + entry cutoff auto-adapt per TF inside orb_break() (5m -> 0.0/11:30, 15m -> 0.25/11:30)
+show5    = input.bool(true, "Show 5m signals",  group="Display", inline="s")
+show15   = input.bool(true, "Show 15m signals", group="Display", inline="s")
+show_conf= input.bool(true, "Mark 5m + 15m confluence", group="Display")
+
+// self-contained ORB breakout for a given TF (no nested security inside)
+orb_break() =>
+    var float orh = na
+    var float orl = na
+    var bool  orset = false
+    var float lvl_l = na
+    var float lvl_s = na
+    var bool  ldone = false
+    var bool  sdone = false
+    nd = ta.change(time("D")) != 0
+    if nd
+        orh := na
+        orl := na
+        orset := false
+        lvl_l := na
+        lvl_s := na
+        ldone := false
+        sdone := false
+    inor = not na(time(timeframe.period, or_start, sess_tz))
+    if inor
+        orh := na(orh) ? high : math.max(orh, high)
+        orl := na(orl) ? low  : math.min(orl, low)
+    if not inor and not na(orh)
+        orset := true
+    a  = ta.atr(14)
+    ef = ta.ema(close, 21)
+    es = ta.ema(close, 50)
+    tup = close > es and ef > es
+    tdn = close < es and ef < es
+    onow = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+    tfs = timeframe.in_seconds()                 // per-TF auto config (research optima)
+    tod = 900                                    // look all day (15:00 ET)
+    buf = a * (tfs <= 300 ? 0.0 : 0.25)          // breakout strength: 0 for <=5m, 0.25 else
+    if orset and na(lvl_l) and not na(orh)       // freeze the resting-entry levels at OR close
+        lvl_l := orh + buf
+        lvl_s := orl - buf
+    aft = orset and onow < tod and not na(lvl_l)
+    lsig = aft and not ldone and high >= lvl_l and tup   // FILL = price TOUCHES the resting level
+    ssig = aft and not sdone and low  <= lvl_s and tdn
+    if lsig
+        ldone := true
+    if ssig
+        sdone := true
+    [lsig ? 1 : 0, ssig ? 1 : 0, (aft and not ldone ? lvl_l : na), (aft and not sdone ? lvl_s : na)]
+
+[l5,  s5,  l5L,  s5L]  = request.security(syminfo.tickerid, "5",  orb_break(), lookahead=barmerge.lookahead_off)
+[l15, s15, l15L, s15L] = request.security(syminfo.tickerid, "15", orb_break(), lookahead=barmerge.lookahead_off)
+// RESTING ENTRY LEVELS drawn on ANY chart TF — 5m bold (preferred), 15m faint
+plot(show5  ? l5L  : na, "5m long entry",   color=color.new(color.lime, 0),  style=plot.style_linebr, linewidth=2)
+plot(show5  ? s5L  : na, "5m short entry",  color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=2)
+plot(show15 ? l15L : na, "15m long entry",  color=color.new(color.lime, 55), style=plot.style_linebr, linewidth=1)
+plot(show15 ? s15L : na, "15m short entry", color=color.new(color.red, 55),  style=plot.style_linebr, linewidth=1)
+bool L5  = show5  and l5  == 1
+bool S5  = show5  and s5  == 1
+bool L15 = show15 and l15 == 1
+bool S15 = show15 and s15 == 1
+
+// daily-latched confluence: both 5m AND 15m fired the same direction today
+var bool l5d = false
+var bool s5d = false
+var bool l15d = false
+var bool s15d = false
+var bool lcdone = false
+var bool scdone = false
+if ta.change(time("D")) != 0
+    l5d := false
+    s5d := false
+    l15d := false
+    s15d := false
+    lcdone := false
+    scdone := false
+if l5 == 1
+    l5d := true
+if s5 == 1
+    s5d := true
+if l15 == 1
+    l15d := true
+if s15 == 1
+    s15d := true
+bool Lconf = show_conf and not lcdone and l5d and l15d
+bool Sconf = show_conf and not scdone and s5d and s15d
+if Lconf
+    lcdone := true
+if Sconf
+    scdone := true
+
+plotshape(L5  and not Lconf, "5m Long",  shape.triangleup,   location.belowbar, color.new(color.teal,30),  text="5m",  textcolor=color.teal,   size=size.tiny)
+plotshape(S5  and not Sconf, "5m Short", shape.triangledown, location.abovebar, color.new(color.maroon,30), text="5m",  textcolor=color.maroon, size=size.tiny)
+plotshape(L15 and not Lconf, "15m Long", shape.triangleup,   location.belowbar, color.new(color.lime,0),    text="15m", textcolor=color.white,  size=size.small)
+plotshape(S15 and not Sconf, "15m Short",shape.triangledown, location.abovebar, color.new(color.red,0),     text="15m", textcolor=color.white,  size=size.small)
+plotshape(Lconf, "Confluence Long",  shape.labelup,   location.belowbar, color.new(color.lime,0), text="5+15↑", textcolor=color.black, size=size.normal)
+plotshape(Sconf, "Confluence Short", shape.labeldown, location.abovebar, color.new(color.red,0),  text="5+15↓", textcolor=color.white, size=size.normal)
+alertcondition(L5 or L15, "Any ORB Long",  "HIGHSTRIKE ORB: a 5m or 15m LONG breakout")
+alertcondition(S5 or S15, "Any ORB Short", "HIGHSTRIKE ORB: a 5m or 15m SHORT breakout")
+alertcondition(Lconf, "ORB 5m+15m LONG confluence",  "HIGHSTRIKE ORB: 5m + 15m LONG confluence")
+alertcondition(Sconf, "ORB 5m+15m SHORT confluence", "HIGHSTRIKE ORB: 5m + 15m SHORT confluence")
+
+var table t = table.new(position.bottom_right, 2, 3, bgcolor=color.new(color.black,70), frame_color=color.gray, frame_width=1)
+if barstate.islast
+    table.cell(t,0,0,"MTF ORB today", text_color=color.yellow, text_size=size.tiny)
+    table.cell(t,1,0,"L / S", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,0,1,"5m",  text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,1,(l5d?"✓":"–")+" / "+(s5d?"✓":"–"),  text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,0,2,"15m", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,2,(l15d?"✓":"–")+" / "+(s15d?"✓":"–"), text_color=color.aqua, text_size=size.tiny)

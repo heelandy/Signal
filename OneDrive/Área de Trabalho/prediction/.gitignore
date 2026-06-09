@@ -1,0 +1,24 @@
+# HIGHSTRIKE — keep the repo light; raw data + derived stores are large and rebuildable
+# (see README "Deploy from scratch" to regenerate everything from the source 1m files).
+
+# derived data stores (parquet, duckdb, continuous-1m) — rebuild via the pipeline
+data/
+
+# raw market data (Databento 1m exports, VIX) — 100 MB+ each, re-download per README step 1
+*.csv
+*.zst
+2011-2018vix*
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

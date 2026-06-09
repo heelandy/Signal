@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python hs_build_continuous.py glbx-mdp3-20100606-20260607.ohlcv-1m.csv)",
+      "Bash(python hs_resample.py)",
+      "Bash(python hs_db.py)",
+      "Bash(python hs_qa.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

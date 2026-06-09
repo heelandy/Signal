@@ -1,0 +1,50 @@
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE V44 — Phase 1 RECONCILE EXPORT BLOCK
+// PASTE this at the very END of HIGHSTRIKE_V44_STRATEGY.pine (after the dashboard).
+// These plots draw NOTHING on the chart (display.data_window) but ARE included when you
+// use TradingView → right-click the chart → "Export chart data..." (CSV).
+//
+// HOW TO RECONCILE:
+//   1. Paste this block, add V44 to a chart (e.g. NQ1! / @NQ continuous, 5m).
+//      Recommended for the first pass: Structure > "Adaptive lookback" = OFF (fixed 5),
+//      so the Python pivots match exactly. Macro Regime ON, Session "Allow 24/7".
+//   2. Set the chart range to the slice you want (e.g. 2022), let it load fully.
+//   3. Export chart data -> CSV.  4. python hs_reconcile.py <that.csv>
+// The harness recomputes state from the same OHLCV + the x_* macro/HTF/VWAP inputs below,
+// and diffs its derived state vs these x_* Pine outputs. Identical bars => pure logic diff.
+// ═══════════════════════════════════════════════════════════════════
+
+// --- derived state (what we DIFF) ---
+plot(st_state,                                      "x_st_state",     display=display.data_window)
+plot(is_hh ? 1 : 0,                                 "x_is_hh",        display=display.data_window)
+plot(is_hl ? 1 : 0,                                 "x_is_hl",        display=display.data_window)
+plot(is_lh ? 1 : 0,                                 "x_is_lh",        display=display.data_window)
+plot(is_ll ? 1 : 0,                                 "x_is_ll",        display=display.data_window)
+plot(st_bos_bull ? 1 : 0,                           "x_bos_bull",     display=display.data_window)
+plot(st_bos_bear ? 1 : 0,                           "x_bos_bear",     display=display.data_window)
+plot(st_choch_bull ? 1 : 0,                         "x_choch_bull",   display=display.data_window)
+plot(st_choch_bear ? 1 : 0,                         "x_choch_bear",   display=display.data_window)
+plot(struct_long_ok ? 1 : 0,                        "x_struct_long",  display=display.data_window)
+plot(struct_short_ok ? 1 : 0,                       "x_struct_short", display=display.data_window)
+plot(macro_regime=="A"?1:macro_regime=="B"?2:macro_regime=="C"?3:macro_regime=="D"?4:0,
+                                                    "x_regime",       display=display.data_window)
+plot(dir_bias,                                      "x_dir_bias",     display=display.data_window)
+plot(master_bias=="LONG"?1:master_bias=="SHORT"?-1:0,"x_master_bias", display=display.data_window)
+plot(trigger_long ? 1 : 0,                          "x_trig_long",    display=display.data_window)
+plot(trigger_short ? 1 : 0,                         "x_trig_short",   display=display.data_window)
+plot(long_fire ? 1 : 0,                             "x_long_fire",    display=display.data_window)
+plot(short_fire ? 1 : 0,                            "x_short_fire",   display=display.data_window)
+
+// --- request.security INPUTS the harness consumes (so external data matches exactly) ---
+plot(macro_spy_close,                               "x_spy_close",    display=display.data_window)
+plot(macro_spy_e20,                                 "x_spy_e20",      display=display.data_window)
+plot(macro_spy_e50,                                 "x_spy_e50",      display=display.data_window)
+plot(macro_spy_adx,                                 "x_spy_adx",      display=display.data_window)
+plot(macro_vix,                                     "x_vix_sma5",     display=display.data_window)
+plot(macro_vix_prev,                                "x_vix_prev5",    display=display.data_window)
+plot(vwap_sess,                                     "x_vwap_sess",    display=display.data_window)
+plot(vwap_wk,                                       "x_vwap_wk",      display=display.data_window)
+plot(htf_bull ? 1 : 0,                              "x_htf_bull",     display=display.data_window)
+plot(htf_bear ? 1 : 0,                              "x_htf_bear",     display=display.data_window)
+plot(sig_htf_bull ? 1 : 0,                          "x_sig_htf_bull", display=display.data_window)
+plot(sig_htf_bear ? 1 : 0,                          "x_sig_htf_bear", display=display.data_window)
