@@ -132,6 +132,18 @@ Loosest threshold = within noise; tighter = culls trades and WORSENS drawdown. S
 /retest/bigger-buffer — trend+regime+buffer already select; more confirmation trades fills for noise.
 **NOT adopted** — `vol_conf` stays an off-by-default engine toggle, NOT wired into any Pine file.
 
+## Finding 12 — VWAP-side = dud; entry-bar STRENGTH = real lead (but a catch) — `research/orb_levers.py`
+POST-HOC screen (filter the taken trades, see if the subset is better; not the final number):
+- **VWAP-side** (long>VWAP / short<VWAP): 96% of breaks are ALREADY on the right side -> filters almost
+  nothing and slightly HURTS (QQQ +0.342->+0.301, NQ +0.274->+0.242). NQ wrong-side n=30 +1.17R is a
+  tiny outlier sample. **Dropped.**
+- **Entry-bar STRENGTH** (break bar closes in the top/bottom half toward the trade): clearly separates —
+  QQQ strong-body PF 2.11->2.42 (+0.405R, CI+0.319, 73% kept) vs weak-body PF1.45; NQ 1.83->2.13
+  (+0.335R, maxDD −10.5->−6.7, 72% kept) vs weak-body PF1.28. **Real quality signal.**
+  ⚠️ CATCH: body is only known at BAR CLOSE, but stop-entry fills INTRABAR on the touch — so it can't be
+  applied at entry. Using it = switch to CLOSE-CONFIRM (which gave worse fills). Net unproven until
+  "close-confirm + strong-body" is tested at SIGNAL level. NOT adopted; flagged for a proper test.
+
 ## Remaining untested levers (ranked) — adopt only if it clears the gate on QQQ AND NQ, then propagate to ALL scripts
 1. **VWAP-side filter** (long above / short below session VWAP) — strongest candidate; directional quality not just confirmation.
 2. OR-width filter (skip too-wide / too-narrow OR days).
