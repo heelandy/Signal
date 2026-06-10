@@ -151,9 +151,11 @@ if short_fire
 // ───────────────────────── OPTIONS TRANSLATION ─────────────────────────
 f_strike(p) => math.round(p / strike_inc) * strike_inc
 f_px(p) => str.tostring(p, "#.##")
-// active (fired) play takes priority, else the pending gated setup
-int play = traded_l ? 1 : traded_s ? -1 : (window and gate_long) ? 1 : (window and gate_short) ? -1 : 0
-bool islong = play == 1
+// display side: a FILLED side first, else the trend-aligned side (armed/pending)
+bool have = or_set and not na(Le) and not na(Se)
+int dside = traded_l ? 1 : traded_s ? -1 : trend_up ? 1 : trend_down ? -1 : 0
+bool islong = dside == 1
+bool shc = dside != 0                                        // a side chosen -> show the option contracts
 float e_  = islong ? Le  : Se
 float s_  = islong ? Ls  : Ss
 float t1_ = islong ? Lt1 : St1
@@ -163,8 +165,12 @@ float cs_s = f_strike(s_)                                    // credit-spread sh
 float cs_l = islong ? cs_s - spread_w : cs_s + spread_w      // credit-spread long leg = protection
 string oc = islong ? "C" : "P"                               // directional / debit = call(long) put(short)
 string cc = islong ? "P" : "C"                               // credit spread uses the OTHER side
-string dir_txt = play == 1 ? "LONG" : play == -1 ? "SHORT" : "—"
-string status = play == 0 ? "" : (islong ? traded_l : traded_s) ? "ACTIVE" : "pending"
+bool side_macro = islong ? macro_long_ok : macro_short_ok
+bool gated  = macro_allow and side_macro and local_ok
+bool filled = traded_l or traded_s
+string dir_txt = dside == 1 ? "LONG" : dside == -1 ? "SHORT" : "—"
+// live status — the stop-entry FIRES ON A TOUCH of the trigger, any bar until the cutoff (no close/retest needed)
+string st = tf_s > 1800 ? "use a 5m / 15m chart" : not have ? "OR forming…" : filled ? "FILLED ✓ — manage the trade" : not rth ? "off-session" : not window ? "window closed — no entry today" : dside == 0 ? "waiting: trend flat (need EMA stack)" : not gated ? "blocked: regime " + regime + (not side_macro ? " + SPY stand-down" : "") : "ARMED — fires when price touches " + f_px(e_)
 // expiry labels — show BOTH 0DTE and the nearest weekly Friday
 int wk_add = (6 - dayofweek + 7) % 7
 int t_wk = time + wk_add * 86400000
@@ -180,29 +186,25 @@ plotshape(short_fire, "Short fire", shape.triangledown, location.abovebar, color
 alertcondition(long_fire,  "ORB Options LONG",  "HIGHSTRIKE ORB options: LONG — buy CALL / debit call spread / credit put spread (strikes from ORB levels)")
 alertcondition(short_fire, "ORB Options SHORT", "HIGHSTRIKE ORB options: SHORT — buy PUT / debit put spread / credit call spread (strikes from ORB levels)")
 
-var table t = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1, border_color=color.new(color.gray, 70), border_width=1)
+var table t = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 60), frame_color=color.gray, frame_width=1, border_color=color.new(color.gray, 70), border_width=1)
 if barstate.islast and show_table
-    color hd = play == 1 ? color.lime : play == -1 ? color.red : color.silver
+    color hd  = dside == 1 ? color.lime : dside == -1 ? color.red : color.silver
+    color stc = filled ? color.lime : (have and gated and dside != 0) ? color.aqua : color.orange
     table.cell(t, 0, 0, "ORB OPTIONS", text_color=color.yellow, text_size=size.small)
-    table.cell(t, 1, 0, syminfo.ticker + "  " + dir_txt + (status != "" ? " (" + status + ")" : ""), text_color=hd, text_size=size.small)
-    if play == 0
-        table.cell(t, 0, 1, "Setup", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 1, or_set ? "no signal — waiting" : "OR forming", text_color=color.gray, text_size=size.tiny)
-        for r = 2 to 7
-            table.cell(t, 0, r, "", text_size=size.tiny)
-            table.cell(t, 1, r, "", text_size=size.tiny)
-    else
-        table.cell(t, 0, 1, "Bias", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 1, (islong ? "LONG while > " : "SHORT while < ") + f_px(s_), text_color=hd, text_size=size.tiny)
-        table.cell(t, 0, 2, "Buy " + (islong ? "call" : "put"), text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 2, f_px(atm) + oc + "  (ATM)", text_color=color.aqua, text_size=size.tiny)
-        table.cell(t, 0, 3, "Debit spread", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 3, f_px(atm) + "/" + f_px(ds_s) + oc + "  cap @TP1", text_color=color.teal, text_size=size.tiny)
-        table.cell(t, 0, 4, "Credit spread", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 4, f_px(cs_s) + "/" + f_px(cs_l) + cc + "  collect", text_color=color.new(color.green, 0), text_size=size.tiny)
-        table.cell(t, 0, 5, "Expiry", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 5, exp_both, text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 0, 6, "Levels", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 6, "E " + f_px(e_) + "  S " + f_px(s_) + "  T1 " + f_px(t1_), text_color=color.aqua, text_size=size.tiny)
-        table.cell(t, 0, 7, "Note", text_color=color.silver, text_size=size.tiny)
-        table.cell(t, 1, 7, "strikes from ORB levels · price/IV at broker", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 0, syminfo.ticker + "  " + dir_txt, text_color=hd, text_size=size.small)
+    table.cell(t, 0, 1, "Status", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 1, st, text_color=stc, text_size=size.tiny)
+    table.cell(t, 0, 2, "OR", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 2, have ? f_px(or_low) + " / " + f_px(or_high) : "forming", text_color=color.aqua, text_size=size.tiny)
+    table.cell(t, 0, 3, "Triggers", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 3, have ? "long > " + f_px(Le) + "   short < " + f_px(Se) : "—", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 0, 4, "Buy " + (shc ? (islong ? "call" : "put") : ""), text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 4, shc ? f_px(atm) + oc + "  (ATM)" : "(waiting for trend side)", text_color=color.aqua, text_size=size.tiny)
+    table.cell(t, 0, 5, "Debit", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 5, shc ? f_px(atm) + "/" + f_px(ds_s) + oc + "  cap @TP1" : "—", text_color=color.teal, text_size=size.tiny)
+    table.cell(t, 0, 6, "Credit", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 6, shc ? f_px(cs_s) + "/" + f_px(cs_l) + cc + "  collect" : "—", text_color=color.new(color.green, 0), text_size=size.tiny)
+    table.cell(t, 0, 7, "Expiry", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 7, exp_both, text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 0, 8, "Note", text_color=color.silver, text_size=size.tiny)
+    table.cell(t, 1, 8, "strikes from ORB levels · price/IV at broker", text_color=color.gray, text_size=size.tiny)

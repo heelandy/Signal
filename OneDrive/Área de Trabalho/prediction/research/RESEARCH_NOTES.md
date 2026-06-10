@@ -124,6 +124,22 @@ now 15:00 (auto_tf), all TFs.** 5m drawdown worsens slightly (afternoon noise) b
 NOTE: Finding 4/5/6/7 numbers predate EOD-flat (used close-confirm, held overnight) — Finding 9/10 are
 the current, EOD-accurate, stop-entry numbers.
 
+## Finding 11 — volume confirmation does NOT help (within-noise / hurts)
+Require breakout-bar relative volume > k x SMA(vol,20) (`vol_conf`/`vol_mult` in `_orb_signals`/`backtest`).
+QQQ 15m: base +0.342/PF2.11 -> vol>1.0x +0.355/2.14 (marginal, -34 trades) -> vol>1.5x +0.346/2.07 (worse).
+NQ 15m: base +0.274/PF1.83/maxDD−10.5 -> vol>1.2x +0.273/1.79/−15.6 -> vol>1.5x +0.265/1.74/−21.4 (DD blows out).
+Loosest threshold = within noise; tighter = culls trades and WORSENS drawdown. Same pattern as close-confirm
+/retest/bigger-buffer — trend+regime+buffer already select; more confirmation trades fills for noise.
+**NOT adopted** — `vol_conf` stays an off-by-default engine toggle, NOT wired into any Pine file.
+
+## Remaining untested levers (ranked) — adopt only if it clears the gate on QQQ AND NQ, then propagate to ALL scripts
+1. **VWAP-side filter** (long above / short below session VWAP) — strongest candidate; directional quality not just confirmation.
+2. OR-width filter (skip too-wide / too-narrow OR days).
+3. Dynamic reward by regime (wider TP in A, tighter in C).
+4. Gap filter (equity-only: SPY/QQQ overnight gap).
+5. Entry-bar body filter (close near extreme).
+6. Stop-placement variants (structure stop vs OR-opposite).
+
 ## Next levers to try (in this file)
 - ATR-volatility filter on the breakout bar.
 - Per-regime reward (wider target in regime A/trend, tighter in C/volatile).

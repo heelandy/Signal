@@ -79,7 +79,8 @@ def attach_mtf(con, sym, d):
     return d
 
 
-def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False):
+def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False,
+                 reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
@@ -104,18 +105,23 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
     orh, orl = m["orh"].to_numpy(), m["orl"].to_numpy()
     c = d["close"].to_numpy(); tup = d["trend_up"].to_numpy(); tdn = d["trend_down"].to_numpy()
     atr = d["atr14"].to_numpy()
+    vol = d["volume"].to_numpy() if "volume" in d else np.full(len(d), np.nan)
+    vavg = pd.Series(vol).rolling(vol_len, min_periods=5).mean().to_numpy()    # relative-volume baseline
     n = len(d); lsig = np.zeros(n, bool); ssig = np.zeros(n, bool)
     lvl_l = np.full(n, np.nan); lvl_s = np.full(n, np.nan)
-    cur = None; done_l = done_s = broke_l = broke_s = False
+    cur = None; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True
     for i in range(n):
         if date[i] != cur:
-            cur = date[i]; done_l = done_s = broke_l = broke_s = False
+            cur = date[i]; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True
         if not rth[i] or mins[i] < or_e or np.isnan(orh[i]):
             continue
         buf = (atr[i] * brk_buf_atr) if not np.isnan(atr[i]) else 0.0
         lh, ll = orh[i] + buf, orl[i] - buf
         if hp[i] >= lh: broke_l = True            # price has cleared the breakout level today
         if lp[i] <= ll: broke_s = True
+        if reentry:                                # re-arm after price falls back INSIDE the OR (fresh break)
+            if c[i] < orh[i]: armed_l = True
+            if c[i] > orl[i]: armed_s = True
         if execm == "retest":                      # require break THEN pullback to the OR edge
             l_cross, ll_lvl = (broke_l and lp[i] <= orh[i]), orh[i]   # enter at OR high on the retest
             s_cross, ls_lvl = (broke_s and hp[i] >= orl[i]), orl[i]
@@ -125,10 +131,13 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         else:                                       # close-confirm
             l_cross, ll_lvl = c[i] > lh, lh
             s_cross, ls_lvl = c[i] < ll, ll
-        if not done_l and l_cross and tup[i]:
-            lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True
-        if not done_s and s_cross and tdn[i]:
-            ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True
+        ok_l = armed_l if reentry else (not done_l)
+        ok_s = armed_s if reentry else (not done_s)
+        vok = (not vol_conf) or (not np.isnan(vavg[i]) and vavg[i] > 0 and vol[i] >= vol_mult * vavg[i])
+        if ok_l and l_cross and tup[i] and vok:
+            lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False
+        if ok_s and s_cross and tdn[i] and vok:
+            ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False
     return lsig, ssig, orl, orh, lvl_l, lvl_s
 
 
@@ -143,7 +152,7 @@ def _nearest(close, levels, below):
 
 def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema", mtf_min=0,
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
-             tradeday=False, eod_min=958):
+             tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -169,7 +178,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     t1 = TP1_RR if tp1_rr is None else tp1_rr
     t2 = TP2_RR if tp2_rr is None else tp2_rr
     if entry_type == "orb":                       # Opening-Range Breakout entry
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday)
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)
@@ -189,10 +198,15 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
 
     trades = []; n = len(d); i = 0
     pos = 0  # 0 flat, +1 long, -1 short
+    last_day = -1; day_n = 0   # per-day taken-entry count (re-entry cap)
     while i < n:
         if pos == 0:
             sig = 1 if long_ok[i] else (-1 if short_ok[i] else 0)
             if sig == 0 or np.isnan(atr[i]) or atr[i] <= 0:
+                i += 1; continue
+            if daykey[i] != last_day:
+                last_day = daykey[i]; day_n = 0
+            if reentry and day_n >= max_entries:
                 i += 1; continue
             entry = (lvl_l[i] if sig == 1 else lvl_s[i]) if (entry_type == "orb" and execm in ("stop", "retest")) else c[i]
             if entry_type == "orb":
@@ -208,6 +222,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
             risk = abs(entry - stop)
             if risk <= 0:
                 i += 1; continue
+            day_n += 1                          # committed to an entry this day
             tp1 = entry + sig * risk * t1
             tp2 = entry + sig * risk * t2
             entry_i, entry_ts, entry_reg = i, ts[i], reg[i]

@@ -16,10 +16,11 @@
 strategy("HIGHSTRIKE ORB V1 STRATEGY", overlay=true,
      initial_capital=100000, pyramiding=0, max_labels_count=200, max_lines_count=200,
      default_qty_type=strategy.fixed, default_qty_value=2,
-     commission_type=strategy.commission.cash_per_order,
-     commission_value=input.float(0.52, "Commission $ per order", group="Costs (per-instrument)", tooltip="Futures (MNQ/MES) ~0.52. Equities/ETFs are usually commission-free -> set 0 (slippage below models the spread)."),
-     slippage=input.int(2, "Slippage (min-ticks)", group="Costs (per-instrument)", tooltip="Futures: NQ 1 tick=0.25pt. Equities/ETFs: 1 tick=$0.01. 1-2 ticks for liquid SPY/QQQ."),
-     process_orders_on_close=false)
+     commission_type=strategy.commission.cash_per_order, commission_value=0.52,
+     slippage=2, process_orders_on_close=false)
+// COSTS ARE PER-INSTRUMENT: defaults are FUTURES (MNQ/MES: 0.52/order, 2-tick slip). For EQUITIES/
+// ETFs set commission 0 + slippage 1-2 in the Strategy Tester -> Properties tab (TradingView requires
+// these header values to be constants, so they can't be script inputs — adjust them in Properties).
 // MULTI-ASSET: works on futures, equities and ETFs. Sizing uses syminfo.pointvalue (=$/contract
 // for futures, =1 for shares) so risk-based sizing yields contracts OR shares automatically.
 // The OR (09:30-10:00 ET) is the regular cash open -> applies to stocks/ETFs too. Macro ref = SPY.
@@ -42,6 +43,9 @@ brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="
                   tooltip="Require the close to clear the OR by this x ATR -> filters false breaks, raises win% + PF.")
 auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
             tooltip="Per-TF research optima: breakout buffer <=5m -> 0.0, else 0.25 ATR. Entry cutoff 15:00 (look all day). Reward 4R. OFF = use the manual breakout/cutoff above.")
+reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
+            tooltip="OFF (default) = ONE entry per side per day — the first opening-drive break is the highest quality. ON = re-arm after price falls back inside the OR and re-take a fresh break, up to N/day. RESEARCH: re-entries pass the gate but DILUTE the edge (QQQ 15m PF 2.11->1.99, NQ 1.83->1.67, worse drawdown). Quantity over quality — use deliberately.")
+max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", minval=1, maxval=5)
 
 trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
@@ -187,6 +191,9 @@ var float Se = na   // short resting-stop entry (OR low - buffer)
 var float Ss = na   // short initial stop
 var bool  traded_l = false
 var bool  traded_s = false
+var bool  armed_l = true     // re-entry: armed when price is inside the OR
+var bool  armed_s = true
+var int   day_n = 0          // entries taken today (re-entry cap)
 if new_day
     Le := na
     Ls := na
@@ -194,6 +201,9 @@ if new_day
     Ss := na
     traded_l := false
     traded_s := false
+    armed_l := true
+    armed_s := true
+    day_n := 0
 if or_set and na(Le) and not na(or_high) and not na(or_low)       // freeze levels at OR close
     Le := or_high + brk_buf
     Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
@@ -206,6 +216,21 @@ float St2 = Se - (Ss - Se) * tp2_rr
 bool window = or_set and rth and o_now < trade_end and not na(Le)
 bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
 bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
+// re-entry: re-arm once price falls back INSIDE the OR; cap entries/day. OFF => one entry per side.
+if reentry and not na(or_high) and close < or_high
+    armed_l := true
+if reentry and not na(or_low) and close > or_low
+    armed_s := true
+bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
+bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
+
+// ───────────────────────── ARMED pre-alert (heads-up the moment a setup is ready, BEFORE the touch) ─────────────────────────
+bool arm_l = window and ok_l and gate_long  and (Le - Ls > 0)
+bool arm_s = window and ok_s and gate_short and (Ss - Se > 0)
+if arm_l and not arm_l[1]
+    alert("HIGHSTRIKE ORB " + syminfo.ticker + " — LONG ARMED. Buy-stop " + str.tostring(Le, format.mintick) + " | SL " + str.tostring(Ls, format.mintick) + " | TP " + str.tostring(Lt2, format.mintick), alert.freq_once_per_bar)
+if arm_s and not arm_s[1]
+    alert("HIGHSTRIKE ORB " + syminfo.ticker + " — SHORT ARMED. Sell-stop " + str.tostring(Se, format.mintick) + " | SL " + str.tostring(Ss, format.mintick) + " | TP " + str.tostring(St2, format.mintick), alert.freq_once_per_bar)
 
 // ───────────────────────── EVAL guardrails (equity-based) ─────────────────────────
 var float day_eq = na
@@ -232,11 +257,11 @@ f_units(entry, stop) =>
     eval_on ? math.max(eval_min_ct, u) : math.max(1, u)
 
 // place / refresh the resting STOP orders during the entry window; cancel outside it
-if window and not traded_l and flat and gate_long and not eval_block and (Le - Ls > 0)
+if window and ok_l and flat and gate_long and not eval_block and (Le - Ls > 0)
     strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, comment="ORB L")
 else
     strategy.cancel("L")
-if window and not traded_s and flat and gate_short and not eval_block and (Ss - Se > 0)
+if window and ok_s and flat and gate_short and not eval_block and (Ss - Se > 0)
     strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, comment="ORB S")
 else
     strategy.cancel("S")
@@ -245,6 +270,8 @@ bool just_long  = strategy.position_size > 0 and strategy.position_size[1] <= 0
 bool just_short = strategy.position_size < 0 and strategy.position_size[1] >= 0
 if just_long
     traded_l := true
+    armed_l := false
+    day_n := day_n + 1
     t_sl := Ls
     t_ep := Le
     t_tp1 := Lt1
@@ -252,6 +279,8 @@ if just_long
     tp1_filled := false
 if just_short
     traded_s := true
+    armed_s := false
+    day_n := day_n + 1
     t_sl := Ss
     t_ep := Se
     t_tp1 := St1

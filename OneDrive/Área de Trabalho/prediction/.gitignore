@@ -17,6 +17,9 @@ __pycache__/
 .venv/
 venv/
 
+# claude code tool config (not project code)
+.claude/
+
 # editor / OS
 .vscode/
 .idea/

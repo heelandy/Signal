@@ -19,6 +19,9 @@ trade_end_hhmm = input.int(1500, "Stop new signals after HHMM (ET)", group="ORB"
 brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
 auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
             tooltip="Breakout buffer <=5m -> 0.0, else 0.25 ATR. Cutoff 15:00 (all day). OFF = manual.")
+reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
+            tooltip="OFF (default) = one signal per side per day (the first break is highest quality). ON = re-arm after price falls back inside the OR, up to N/day. RESEARCH: re-entries DILUTE the edge (QQQ 15m PF 2.11->1.99) — opt-in.")
+max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", minval=1, maxval=5)
 trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
 local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
@@ -140,6 +143,9 @@ var float Se = na
 var float Ss = na
 var bool  traded_l = false
 var bool  traded_s = false
+var bool  armed_l = true
+var bool  armed_s = true
+var int   day_n = 0
 if new_day
     Le := na
     Ls := na
@@ -147,6 +153,9 @@ if new_day
     Ss := na
     traded_l := false
     traded_s := false
+    armed_l := true
+    armed_s := true
+    day_n := 0
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     Le := or_high + brk_buf
     Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
@@ -159,12 +168,23 @@ float St2 = Se - (Ss - Se) * tp2_rr
 bool window = or_set and rth and o_now < trade_end and not na(Le)
 bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
 bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
-bool long_fire  = window and not traded_l and gate_long  and high >= Le
-bool short_fire = window and not traded_s and gate_short and low  <= Se
+// re-entry: re-arm once price falls back inside the OR; cap entries/day. OFF => one signal per side.
+if reentry and not na(or_high) and close < or_high
+    armed_l := true
+if reentry and not na(or_low) and close > or_low
+    armed_s := true
+bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
+bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
+bool long_fire  = window and ok_l and gate_long  and high >= Le
+bool short_fire = window and ok_s and gate_short and low  <= Se
 if long_fire
     traded_l := true
+    armed_l := false
+    day_n := day_n + 1
 if short_fire
     traded_s := true
+    armed_s := false
+    day_n := day_n + 1
 
 // ───────────────────────── PLOTS + ALERTS ─────────────────────────
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
@@ -188,6 +208,11 @@ bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
 alertcondition(long_fire,  "ORB Long",  "HIGHSTRIKE ORB: LONG breakout confirmed")
 alertcondition(short_fire, "ORB Short", "HIGHSTRIKE ORB: SHORT breakout confirmed")
+// ARMED pre-alerts — fire the moment a gated setup is ready, BEFORE price touches the trigger
+bool arm_l = window and ok_l and gate_long  and (Le - Ls > 0)
+bool arm_s = window and ok_s and gate_short and (Ss - Se > 0)
+alertcondition(arm_l and not arm_l[1], "ORB ARMED Long",  "HIGHSTRIKE ORB: LONG setup ARMED — buy-stop level live, will fire on the touch")
+alertcondition(arm_s and not arm_s[1], "ORB ARMED Short", "HIGHSTRIKE ORB: SHORT setup ARMED — sell-stop level live, will fire on the touch")
 
 // ───────────────────────── MULTI-TF SIGNALS (5m + 15m, on ANY chart TF) ─────────────────────────
 // raw OR breakout (trend filter only; no macro/regime — nested security not allowed) pulled per-TF
