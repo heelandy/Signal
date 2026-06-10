@@ -152,7 +152,8 @@ def _nearest(close, levels, below):
 
 def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema", mtf_min=0,
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
-             tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2):
+             tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
+             time_stop=0, vwap_cap=0.0):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -161,6 +162,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     h, l, c, o = d["high"].to_numpy(), d["low"].to_numpy(), d["close"].to_numpy(), d["open"].to_numpy()
     atr = d["atr14"].to_numpy()
     vs, vw = d["vwap_sess"].to_numpy(), d["vwap_wk"].to_numpy()
+    vs_prev = np.concatenate([[np.nan], vs[:-1]])     # prior-bar session VWAP (causal: known before the fill)
     e9, e20, e50 = d["ema9"].to_numpy(), d["ema20"].to_numpy(), d["ema50"].to_numpy()
     ts = d["ts"].to_numpy(); reg = d["macro_regime"].to_numpy()
     # asset-aware economics: equities/ETFs trade in $0.01 ticks, commission-free; futures use MNQ costs
@@ -209,6 +211,10 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
             if reentry and day_n >= max_entries:
                 i += 1; continue
             entry = (lvl_l[i] if sig == 1 else lvl_s[i]) if (entry_type == "orb" and execm in ("stop", "retest")) else c[i]
+            if vwap_cap > 0 and not np.isnan(vs_prev[i]) and not np.isnan(atr[i]) and atr[i] > 0:
+                ext = (entry - vs_prev[i]) / atr[i] if sig == 1 else (vs_prev[i] - entry) / atr[i]
+                if ext > vwap_cap:                 # breakout already extended beyond prior-bar VWAP -> skip (stay flat)
+                    i += 1; continue
             if entry_type == "orb":
                 anc = (or_low[i] if sig == 1 else or_high[i])
             else:
@@ -255,7 +261,8 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                         gross_R = 0.5 * t1 + 0.5 * t2; orders = 3; exitpx = tp2; break
                     if hit_stop:                                   # runner stopped at BE
                         gross_R = 0.5 * t1 + 0.0; orders = 3; exitpx = cur_stop; break
-                if daykey[i] != entry_day or tod_[i] >= eod_min:   # EOD flat (match Pine ~15:58)
+                if (daykey[i] != entry_day or tod_[i] >= eod_min or
+                        (time_stop and (i - entry_i) >= time_stop)):   # EOD flat (~15:58) or time-stop (research)
                     rem = sig * (c[i] - entry) / risk
                     gross_R = (0.5 * t1 + 0.5 * rem) if tp1_done else rem
                     orders = 3 if tp1_done else 2; exitpx = c[i]; break
