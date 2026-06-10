@@ -34,14 +34,31 @@ and no overnight gap risk give roughly a quarter of the drawdown. **QQQ 15m is t
 
 | File | What it is |
 |---|---|
-| `HIGHSTRIKE_ORB_V1_STRATEGY.pine` | **The strategy.** ORB resting stop-entry, per-TF auto-config, macro/regime/trend gates, scale-50%@TP1→BE→TP2 exit, prop-eval guardrails, EOD-flat, SL/TP lines + position-tool panel. Multi-asset (futures + equities/ETFs). |
-| `HIGHSTRIKE_ORB_V1_INDICATOR.pine` | **The main indicator.** Mirrors the strategy's gated signal + SL/TP + resting entry + position-tool panel, plus a folded-in 5m/15m MTF overlay. Use this on your chart. |
-| `HIGHSTRIKE_ORB_OPTIONS.pine` | **Options-friendly indicator (SPY/QQQ).** Translates the ORB signal into option structures — buy call/put, debit spread, credit spread — with strikes derived from the ORB levels, in a clean dashboard. Strikes/structure only (no chain/IV access in Pine). |
-| `HIGHSTRIKE_ORB_MTF_SIGNALS.pine` | Standalone 5m/15m signal display. Now redundant (its feature lives in the V1 indicator) — kept for reference. |
-| `HIGHSTRIKE_V44_STRATEGY.pine`, `hs_recon_export.pine` | Legacy V44 + reconcile export (its VWAP/EMA entry had no edge; kept for the reconcile only). |
+| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | **The strategy.** ORB resting stop-entry, per-TF auto-config, macro/regime/trend gates, scale-50%@TP1→BE→TP2 exit, prop-eval guardrails, EOD-flat, SL/TP lines + position-tool panel. Multi-asset (futures + equities/ETFs). |
+| `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine` | **The main indicator.** Mirrors the strategy's gated signal + SL/TP + resting entry + position-tool panel, plus a folded-in 5m/15m MTF overlay. Use this on your chart. |
+| `production/HIGHSTRIKE_ORB_OPTIONS.pine` | **Options-friendly indicator (SPY/QQQ).** Translates the ORB signal into option structures — buy call/put, debit spread, credit spread — with strikes derived from the ORB levels, in a clean dashboard. Strikes/structure only (no chain/IV access in Pine). |
+| `production/HIGHSTRIKE_ORB_MTF_SIGNALS.pine` | Standalone 5m/15m signal display. Now redundant (its feature lives in the V1 indicator) — kept for reference. |
+| `validatedResearch/HIGHSTRIKE_ORB_STRUCTURE.pine` | **Candidate (not yet adopted).** The walk-forward-validated 5m stack — TF-adaptive HH/HL structure gate + VWAP-extension cap (Findings 20-21). Pending a TradingView compile + harness reconcile of `st_state`. |
+| `research/HIGHSTRIKE_V44_STRATEGY.pine`, `research/hs_recon_export.pine` | Legacy V44 + reconcile export (its VWAP/EMA entry had no edge; kept for the reconcile only). |
 
 In TradingView set the per-instrument cost inputs: **futures** commission ≈ 0.52, slippage 2 ticks;
 **equities/ETFs** commission 0 (slippage models the spread).
+
+---
+
+## Repo layout
+
+```
+production/         deployed Pine — V1 strategy/indicator, AUTO, OPTIONS, MTF signals
+validatedResearch/  walk-forward-validated candidates, pending reconcile + adoption (ORB_STRUCTURE)
+research/           Python sweeps + RESEARCH_NOTES.md + research/legacy Pine (MTF entries, V44, recon export)
+engine/             shared library — hs_harness · hs_backtest · hs_db · hs_validate
+pipeline/           data ETL — build_continuous · ingest_equity · build_vix · resample · recon_contracts
+qa/                 data QA + Python↔Pine reconcile
+data/               processed store (DuckDB + parquet); data/raw/ = source CSV downloads (git-ignored)
+docs/               guides (AUTOMATION_SETUP.md)
+```
+**Run all Python from the repo root** (the `data/` paths resolve relative to root). Each code folder has its own README.
 
 ---
 
@@ -63,24 +80,24 @@ python -m pip install -r requirements.txt      # pandas, numpy, duckdb, pyarrow
 
 **2. Ingest → continuous 1-minute parquet** (`data/<sym>_continuous_1m.parquet`)
 ```
-python hs_build_continuous.py <futures_csv> <SYM>     # futures: volume roll + ratio back-adjust
-python hs_ingest_equity.py "<equity_csv>" <SYM>       # equities: no roll (adj_factor=1)
+python pipeline/hs_build_continuous.py <futures_csv> <SYM>   # futures: volume roll + ratio back-adjust
+python pipeline/hs_ingest_equity.py "<equity_csv>" <SYM>     # equities: no roll (adj_factor=1)
 ```
 
 **3. Resample → all timeframes** (`data/bars/sym=/tf=/session=/year=`, hive parquet)
 ```
-python hs_resample.py <SYM>                           # 5m/15m/30m/1h/4h/1d, RTH + full
+python pipeline/hs_resample.py <SYM>                  # 5m/15m/30m/1h/4h/1d, RTH + full
 ```
 
 **4. Build the macro VIX** (unified daily; spot + VX futures)
 ```
-python hs_build_vix.py
+python pipeline/hs_build_vix.py
 ```
 
 **5. Build the DuckDB views + sanity report**
 ```
-python hs_db.py                                       # views: <sym>_1m, bars, vix_daily
-python hs_db.py "SELECT sym, tf, count(*) FROM bars GROUP BY 1,2 ORDER BY 1,2"
+python engine/hs_db.py                                # views: <sym>_1m, bars, vix_daily
+python engine/hs_db.py "SELECT sym, tf, count(*) FROM bars GROUP BY 1,2 ORDER BY 1,2"
 ```
 
 **6. Backtest + validate** (confirm the four metrics + the gate)
@@ -91,12 +108,12 @@ python research/orb_sessions.py        # session check (US RTH is the edge; Asia
 ```
 Or a one-liner reproducing the flagship:
 ```
-python -c "import sys; sys.path.insert(0,'research'); import hs_backtest as B; from orb_optimize import state, metrics; m=metrics(B.backtest(state('QQQ','15m'),'scale_be','both',False,'orb',0,None,4.0,570,600,0.25,900,'stop')); print(m['exp'], m['pf'], m['loCI'])"
+python -c "import sys; sys.path[:0]=['engine','research']; import hs_backtest as B; from orb_optimize import state, metrics; m=metrics(B.backtest(state('QQQ','15m'),'scale_be','both',False,'orb',0,None,4.0,570,600,0.25,900,'stop')); print(m['exp'], m['pf'], m['loCI'])"
 ```
 The engine is **asset-aware** (equity vs futures economics, auto-detected from the symbol) and
 **EOD-flat** (`eod_min=958`, flatten ~15:58 to match the Pine).
 
-**7. TradingView** — paste `HIGHSTRIKE_ORB_V1_STRATEGY.pine` + `HIGHSTRIKE_ORB_V1_INDICATOR.pine`,
+**7. TradingView** — paste `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` + `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine`,
 set the cost inputs per instrument, and confirm the Strategy Tester is in the ballpark of the Python.
 Known reconcile deltas (not bugs): intrabar same-bar exits, gap-through fills at the bar open, and
 TradingView's real `SPY`/`CBOE:VIX` vs the Python's ES/stitched-VIX proxy.
@@ -110,16 +127,17 @@ slippage in fast breaks, which no backtest fully captures.
 
 | File | Role |
 |---|---|
-| `hs_ingest_equity.py` | Databento equity 1m CSV → continuous-1m parquet (no roll) |
-| `hs_build_continuous.py` | Futures continuous front-month (volume roll, ratio back-adjust) |
-| `hs_resample.py` | 1m → 5m/15m/30m/1h/4h/1d (RTH + full), hive parquet |
-| `hs_build_vix.py` | Unified daily macro VIX (spot + VX futures) |
-| `hs_db.py` | DuckDB query layer over the parquet (`connect()`, `bars()`) |
-| `hs_qa.py`, `hs_qa_data.py`, `hs_recon_contracts.py` | Data QA + contract inventory |
-| `hs_harness.py` | Python port of the chart logic (indicators, regime, levels) for `state()` |
-| `hs_backtest.py` | Event-driven backtest → trade list (ORB entry, stop/close/retest exec, asset-aware costs, EOD-flat) |
-| `hs_validate.py` | Expectancy + 90% bootstrap CI, PF, win%, maxDD, regime/year stratification, slippage stress |
-| `hs_reconcile.py` | Diff Python state vs a TradingView export (the trust gate) |
+| `pipeline/hs_ingest_equity.py` | Databento equity 1m CSV → continuous-1m parquet (no roll) |
+| `pipeline/hs_build_continuous.py` | Futures continuous front-month (volume roll, ratio back-adjust) |
+| `pipeline/hs_resample.py` | 1m → 5m/15m/30m/1h/4h/1d (RTH + full), hive parquet |
+| `pipeline/hs_build_vix.py` | Unified daily macro VIX (spot + VX futures) |
+| `pipeline/hs_recon_contracts.py` | Futures contract inventory from a raw drop |
+| `engine/hs_db.py` | DuckDB query layer over the parquet (`connect()`, `bars()`) |
+| `engine/hs_harness.py` | Python port of the chart logic (indicators, regime, structure, levels) for `state()` |
+| `engine/hs_backtest.py` | Event-driven backtest → trade list (ORB entry, stop/close/retest/fade/sweepgo/rebreak exec, asset-aware costs, EOD-flat) |
+| `engine/hs_validate.py` | Expectancy + 90% bootstrap CI, PF, win%, maxDD, regime/year stratification, slippage stress |
+| `qa/hs_qa.py`, `qa/hs_qa_data.py` | Data QA suite + raw-drop QA |
+| `qa/hs_reconcile.py` | Diff Python state vs a TradingView export (the trust gate) |
 
 ## Research lab
 `research/RESEARCH_NOTES.md` records every experiment (Findings 1-10): why MTF confirmation hurts,

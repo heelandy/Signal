@@ -17,8 +17,8 @@ peaks below spot). Free daily spot ^VIX 2019+ would make the whole series spot-c
 import sys, os
 import pandas as pd
 
-VX_PATH   = sys.argv[1] if len(sys.argv) > 1 else "xcbf-pitch-20191204-20260608.ohlcv-1d.csv"
-SPOT_PATH = sys.argv[2] if len(sys.argv) > 2 else "2011-2018vix"
+VX_PATH   = sys.argv[1] if len(sys.argv) > 1 else "data/raw/xcbf-pitch-20191204-20260608.ohlcv-1d.csv"
+SPOT_PATH = sys.argv[2] if len(sys.argv) > 2 else "data/raw/2011-2018vix"
 ET  = "America/New_York"
 OUT = os.path.join("data", "vix_daily.parquet")
 os.makedirs("data", exist_ok=True)

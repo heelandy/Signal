@@ -11,7 +11,7 @@ bar -> no lookahead) with the breakout direction. Sweeps N=0..3 x {scale_be, tp2
 Computes the harness state + MTF once, then the trade sim is cheap per config.
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_db, hs_harness as H, hs_backtest as B, hs_validate as V
 

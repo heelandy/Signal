@@ -10,7 +10,7 @@ implementation + full re-validation if it clearly lifts PF/CI on QQQ AND NQ whil
     python research/orb_levers.py [SYM=QQQ] [TF=15m]
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_backtest as B
 from orb_optimize import state, metrics

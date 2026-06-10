@@ -222,6 +222,150 @@ param `vwap_cap` (0 = production, unchanged). Swept k on QQQ/NQ/SPY at 15m AND 5
   real edge, clears the gate; promotion to production is a user decision (changes the tested system +
   frequency, triggers the all-scripts propagation).**
 
+## Finding 17 — up/down/range STRUCTURE: prod is the robust all-weather point; loosening is strictly bad, tightening is a TF-dependent lead — `research/orb_structure_opt.py`
+Tested alternative definitions of the two structure gates the ORB uses — **up/down** (the EMA trend filter
+inside `_orb_signals`) and **range** (the `local_regime` ADX block) — holding everything else at prod (OR
+0930-1000, cutoff 15:00, per-TF buffer, 4R/scale, EOD-flat, macro ON). Efficient: harness state computed
+ONCE/sym/TF, then only the `trend_up/down` and `local_regime` columns are swapped per variant and the cheap
+trade loop re-runs. Adoption gate = beat prod on ALL FOUR metrics AND clear (both>0, CI>0) on BOTH NQ and QQQ,
+BOTH TFs. Cells show Δexp R vs prod; ✓ = beats prod on all four.
+
+**TREND (up/down) filter** — range held at prod ADX20:
+| variant | NQ 5m | NQ 15m | QQQ 5m | QQQ 15m |
+|---|---|---|---|---|
+| none (no trend gate)      | −0.131 | −0.176 | −0.119 | −0.163 |
+| close>EMA50 (drop stack)  | −0.104 | −0.108 | −0.086 | −0.107 |
+| EMA 8/21 (faster)         | −0.086 | −0.095 | −0.077 | −0.082 |
+| **EMA 21/50 (PROD)**      | +0.255 | +0.274 | +0.358 | +0.342 |
+| EMA 50/200 (slower)       | +0.086 ✓ | −0.059 | +0.085 ✓ | −0.030 |
+| HH/HL st_state            | +0.229 ✓ | +0.012 ✓ | +0.300 ✓ | −0.014 |
+
+**RANGE filter** — trend held at prod 21/50:
+| variant | NQ 5m | NQ 15m | QQQ 5m | QQQ 15m |
+|---|---|---|---|---|
+| no range block            | −0.079 | −0.060 | −0.093 | −0.033 |
+| ADX≥15                    | −0.055 | −0.045 | −0.070 | −0.035 |
+| **ADX≥20 (PROD)**         | +0.255 | +0.274 | +0.358 | +0.342 |
+| ADX≥25                    | −0.002 | +0.035 ✓ | +0.045 ✓ | +0.006 (PF↓) |
+| ADX≥30                    | −0.036 | +0.052 ✓ | +0.044 ✓ | −0.014 |
+| st_state-3 (struct range) | −0.099 | −0.033 | −0.135 | −0.058 |
+
+- **Loosening either gate is strictly worse — all 4 cells, every metric.** `none`/`close>EMA50`/`8/21`
+  (looser trend) and `no-block`/`ADX15` (looser range) all lose. The prod up/down/range filter is NOT too
+  tight; trend+regime+buffer already select (rhymes with F1/F11). **Don't loosen anything.**
+- **Tightening helps but is TF-dependent → a lead, not a clean adopt.** Slower trend (50/200) and HH/HL win
+  on 5m but lose on 15m; stricter range (ADX25/30) wins on NQ-15m + QQQ-5m but not QQQ-15m. No variant
+  clears all four on both symbols × both TFs. Consistent shape: tighter = fewer trades, higher per-trade
+  quality, lower DD — the same frequency↔quality tradeoff as F16.
+- **HH/HL st_state is the standout AND the trap.** It is CAUSAL (5-bar confirmed pivots, no lookahead) and
+  applied at signal time, so it's a genuine signal-level filter, not a post-hoc screen — and it's spectacular
+  on 5m (QQQ 5m +0.658R / PF 3.76 / win 75% / DD −4.1; NQ 5m +0.484 / PF 2.58 / DD −10.7). BUT PF 3.76 sits in
+  the documented "4.0 = curve-fit" zone, it culls ~15-20% of trades, and it FAILS on QQQ 15m. → **#1 structure
+  lead; candidate for a dedicated walk-forward (like F15/F16) before any adoption; NOT adopted (TF-inconsistent
+  + PF warning).**
+- **st_state-3 (structure) range block = DEAD** — worse than the ADX range filter on every cell. ADX is the
+  better range definition.
+
+VERDICT: **production 21/50 trend + ADX20 range is the robust all-weather point — confirmed, no change.** The
+only forward lead is a TF-adaptive *tighter* structure gate (HH/HL on the fast TF / higher ADX on the slow TF),
+which must clear an honest walk-forward first and would trigger the all-scripts propagation.
+
+## Finding 18 — FADING the false ORB breakout is DEAD (it's the wrong side of the momentum edge) — `research/orb_false_breakout.py`
+Engine gained an off-by-default `execm="fade"` (LONG = swept below the OR low by k·ATR then a bar CLOSES
+back above it; SHORT = swept above the OR high then closes back below; entry = reclaim-bar close, OR-anchored
+stop with the same clamps, 1R/4R scale_be, EOD-flat). Swept k ∈ {0.0, 0.1, 0.25} × trend {aligned, off} on
+NQ+QQQ × 5m+15m, head-to-head vs the breakout-stop baseline. Δ = fade vs breakout.
+
+- **0 of 24 fade configs clear the gate** (both>0 & lower-CI>0). Fade PF 0.66-1.11 vs the breakout's
+  1.66-2.11; expectancy −0.22R..+0.05R vs +0.26..+0.36R. The fade systematically loses because it takes the
+  OPPOSITE side of ORB's validated continuation edge — most breakouts continue, so the fade gets run over.
+- **trend-OFF fade is catastrophic** (NQ 5m maxDD **−201R**): fading with no trend context just bleeds.
+  **trend-aligned** (buy the failed breakdown in an uptrend / sell the failed breakout in a downtrend) is
+  ~breakeven-to-slightly-negative — much better, still fails.
+- **deeper sweep helps monotonically** (k=0.25 least-bad everywhere). Single best corner = QQQ 15m, k=0.25,
+  trend-aligned: +0.048R / PF 1.11 — but lower-CI −0.073 → still FAILS. Equities/slow-TF/deep-sweep is the
+  only faintly-alive corner; not adoptable.
+- The chart instance that motivated this was a genuine false-breakout reversal, but a SURVIVOR example.
+  **VERDICT: DEAD — keep trading the breakout, do not fade it.** `execm="fade"` stays an off-by-default
+  engine option for future research only.
+
+## Finding 19 — the false breakout is no ENTRY, but "clean vs messy day" is a powerful breakout QUALITY filter — `research/orb_fb_variations.py`
+Four false-breakout variations on NQ+QQQ × 5m+15m vs the breakout baseline (engine gained off-by-default
+execm `sweepgo`/`rebreak`; `fade` from F18). Gate = both sides >0 AND lower-90%-CI >0.
+1. **FADE + reversion exit = still DEAD.** Re-ran the fade with a reversion exit (tp2_full 1.0R/1.5R, not
+   the 4R runner) to check F18 wasn't an exit artifact. Fails every cell (exp −0.15..+0.02, CI<0). The fade
+   ENTRY has no edge — the exit was not the problem. **F18 confirmed.**
+2. **SWEEP-THEN-GO (stop-run → opposite-edge breakout) is DOMINATED by the plain breakout.** Passes 3/4
+   standalone (NQ 15m fails, long −0.02) but exp +0.15..+0.25 / PF 1.40..1.78 is WORSE than the breakout's
+   +0.26..+0.36 / PF 1.66..2.11 on every cell, with far fewer trades. Requiring a prior sweep selects WORSE
+   breakouts — opposite of the liquidity-grab thesis (and consistent with #3).
+3. **CLEAN vs MESSY day = the win (strongest lead since F16).** Split breakout trades by whether a false
+   break (sweep+reclaim of EITHER OR edge) happened earlier that day. CLEAN-day breakouts crush messy-day
+   ones on ALL FOUR cells:
+   | cell | CLEAN exp / PF / win / DD | MESSY exp / PF / win / DD |
+   |---|---|---|
+   | NQ 5m  | +0.472 / 2.62 / 72% / −5.7 | +0.092 / 1.20 / 56% / −29.4 |
+   | NQ 15m | +0.430 / 2.57 / 72% / −7.6 | +0.142 / 1.37 / 58% / −16.9 |
+   | QQQ 5m | +0.621 / 3.49 / 76% / −3.1 | +0.152 / 1.34 / 55% / −13.2 |
+   | QQQ 15m| +0.473 / 2.80 / 73% / −3.8 | +0.216 / 1.61 / 60% / −5.2 |
+   Clean ~doubles expectancy, lifts PF to 2.5-3.5, win to 72-76%, cuts DD 3-5×, and beats the all-days
+   baseline. Both sides +, lower-CI>0 every cell. Mechanism: an earlier false break = a whippy/indecisive
+   day where the breakout is far likelier to fail — this is WHY sweep-then-go (#2) loses (it trades the messy
+   subset). ⚠️⚠️ **UPDATE — strict-causal retest KILLED this (`research/orb_cleanday.py`, NQ+QQQ+SPY × 5m+15m):
+   it was a SAME-BAR LOOKAHEAD ARTIFACT.** Reimplemented as a real signal-time skip using only the PRIOR-bar
+   false-break flag, the 2× gap VANISHES and inverts: CLEAN beats production on just 3/6 cells by trivial
+   margins (+0.001..+0.031R), LOSES on all three 5m cells (−0.000..−0.056R), and the MESSY complement is often
+   BETTER (SPY 5m messy +0.437 vs clean +0.272; NQ 5m +0.312 vs +0.231). The post-hoc gap came from a breakout
+   that reversed intrabar tagging its OWN bar "messy" via that bar's close, so "clean" excluded the losers by
+   construction — the exact F13 body-filter trap. **DEAD — not a lever.** (Faint 5m hint that a prior false
+   break is mildly POSITIVE — reversal/expansion day — but not both-TF consistent → no lever either.)
+4. **RE-BREAK (second break only) = valid but NOT better.** Passes all 4 cells but ≈ baseline (NQ 5m worse
+   DD −34.7; QQQ 15m marginally better PF 2.40 vs 2.11). No improvement, no adoption.
+
+VERDICT: the false breakout yields NOTHING usable — fade dead, sweep-then-go dominated, re-break neutral, and
+the clean-day filter was a LOOKAHEAD MIRAGE that dies under the strict-causal retest. Best new lead reverts to
+the HH/HL structure gate (F17). Lesson reinforced: a post-hoc day/trade screen MUST be reimplemented as a
+prior-bar signal-time skip before it can be believed (F13, now F19).
+
+## Finding 20 — HH/HL structure gate GRADUATES via walk-forward: a real 5m-specific edge (neutral on 15m) — `research/orb_hhhl_walkforward.py`
+The F17 #1 lead, put through the F15 protocol (per-year positivity + 70/30 OOS split) on NQ+QQQ+SPY × 5m+15m.
+Replace the EMA 21/50 up/down trend gate with the harness swing-structure state (long = st_state 1 = HH+HL,
+short = 2 = LL+LH); range gate held at prod ADX20. CAUSAL (5-bar confirmed pivots) — no same-bar lookahead,
+unlike the F19 clean-day mirage.
+- **5m = a large, walk-forward-validated, cross-asset WIN.** exp NQ +0.255→+0.484, QQQ +0.358→+0.658, SPY
+  +0.328→+0.548; PF to 2.6-3.8; DD roughly HALVED (NQ −21→−11, QQQ −9→−4, SPY −8→−4). Positive EVERY year
+  (NQ 15/17 — only 2013-14 deep-past chop; QQQ 9/9; SPY 9/9) and the 70/30 OOS HOLDS on all three (e.g. QQQ
+  in +0.737 → out +0.475, still > production's full +0.358). The QQQ-5m PF 3.76 is high but EARNED — 9/9 years
+  + OOS holds = quality concentration, not curve-fit.
+- **15m = NEUTRAL.** NQ +0.286 vs +0.274 (tiny+), QQQ +0.328 vs +0.342, SPY +0.264 vs +0.298 (tiny−). All
+  still robust (every year +, OOS holds) but EMA trend is as good or better → 15m keeps EMA.
+- **VERDICT: GRADUATED as a TF-adaptive trend gate** — st_state HH/HL on ≤5m, EMA 21/50 on ≥15m (mirrors the
+  per-TF mapping of F6). First new entry-logic edge to clear the walk-forward since the original system.
+  ⚠️ ADOPTION COST: (1) signal-level entry change → all-scripts-consistency propagation (5 Pine + engine,
+  re-validate); (2) requires PORTING the pivot/st_state structure machine into the ORB Pine (today it lives
+  only in the harness/V44, not the ORB indicators) + reconcile vs the Python harness; (3) ~17% fewer trades on
+  5m. Real engineering + a user go-ahead before adoption.
+
+## Finding 21 — HH/HL gate + VWAP cap are ADDITIVE on 5m (stack them — but PF enters the curve-fit zone) — `research/orb_hhhl_vwapcap.py`
+The two graduated 5m edges (F20 structure gate + F16 VWAP-cap k=2.0), stacked, on NQ+QQQ+SPY 5m. BOTH beats
+the better single filter on ALL THREE:
+| | PROD exp/PF/DD | HH/HL | cap | BOTH exp/PF/win/DD/CI (kept) |
+|---|---|---|---|---|
+| NQ  | +0.255/1.66/−21.2 | +0.484/2.58 | +0.449/2.56 | **+0.736/4.53/79%/−3.7/+0.64** (42%) |
+| QQQ | +0.358/2.01/−8.6  | +0.658/3.76 | +0.408/2.27 | **+0.801/5.32/81%/−3.1/+0.70** (53%) |
+| SPY | +0.328/1.86/−7.8  | +0.548/2.78 | +0.438/2.30 | **+0.680/3.61/74%/−5.1/+0.58** (63%) |
+They measure DIFFERENT quality axes — in-structure (HH/HL) AND not-overextended-from-VWAP (cap) — so stacking
+roughly DOUBLES production expectancy and cuts DD 2-6× (NQ −21→−4), both sides +, CI strongly +.
+⚠️ PF 4.53 (NQ) / 5.32 (QQQ) is in the "4.0+ = curve-fit" zone — the natural result of intersecting two
+validated filters (thin samples n=303-406), NOT a fitted spike (each half already cleared its own walk-forward,
+F16/F20). So the COMBINED config must clear its OWN per-year + OOS walk-forward before adoption. Keeps 42-63%
+of trades. VERDICT: additive AND **WALK-FORWARD CONFIRMED** (`research/orb_stack_walkforward.py`): the stack is
+positive EVERY adequately-sampled year (NQ 15/15, QQQ 9/9, SPY 9/9 — no negative years) and the 70/30 OOS HOLDS
+on all three (NQ in +0.708→out +0.801, QQQ →+0.636 still > prod's full +0.358, SPY →+0.660 ≈ in), both sides +,
+CI +0.58..+0.71 → the PF 3.6-5.3 is EARNED quality concentration, not curve-fit. Fully validated; the ONLY
+barrier to adoption is engineering — the Pine st_state PORT + all-scripts propagation F20 requires. Frequency
+cost: keeps 42-63% (~20-25 trades/yr on NQ).
+
 ## Lever scorecard (cumulative) — adopt only if it clears the gate on QQQ AND NQ, then propagate to ALL scripts
 | lever | verdict |
 |---|---|
@@ -230,6 +374,13 @@ param `vwap_cap` (0 = production, unchanged). Swept k on QQQ/NQ/SPY at 15m AND 5
 | stop-entry · all-day · 4R/scale · per-TF buffer · EOD-flat | ✅ ADOPTED (production) |
 | **against-gap (equity)** (F13) | 🟡 real tilt, thin + PF-warning + equity-only → confidence signal, not a filter |
 | **VWAP-extension cap** (F16) | ✅ PASSED honest signal-level test (k≈2.0, all 3 assets × both TFs, NQ DD ~halves) — promotion = user decision; costs ~25-60% of trades |
+| false-breakout fade (F18) | ❌ dead — 0/24 configs pass, loses to the breakout (wrong side of the momentum edge); trend-off catastrophic |
+| false-breakout entries: fade reversion-exit · sweep-then-go · re-break (F19) | ❌ no entry edge — fade dead even w/ reversion exit; sweep-then-go dominated by the plain breakout; re-break ≈ baseline |
+| clean-vs-messy-day breakout filter (F19) | ❌ LOOKAHEAD ARTIFACT — post-hoc 2× gap was same-bar close lookahead; strict-causal (`orb_cleanday.py`, NQ/QQQ/SPY×5m/15m) it vanishes/inverts (beats prod only 3/6 by <0.03R, loses on all 5m; messy often better). Dead (same trap as F13) |
+| loosening up/down/range gates (F17) | ❌ strictly worse on all 4 cells — prod filter is not too tight |
+| **HH/HL structure gate** (F17→F20) | ✅ GRADUATED on 5m — walk-forward holds on NQ+QQQ+SPY (every yr +, OOS holds, exp +60-90%, DD halved, PF earned not curve-fit); NEUTRAL on 15m. TF-adaptive adopt (st_state ≤5m, EMA ≥15m); needs Pine st_state PORT + all-scripts propagation + user go-ahead |
+| **HH/HL + VWAP-cap stacked, 5m** (F21) | ✅ ADDITIVE + WALK-FORWARD CONFIRMED (NQ+QQQ+SPY) — exp ~2× prod (+0.68..+0.80), DD cut 2-6×, positive every yr (15/15·9/9·9/9), OOS holds, CI +0.58..+0.71; PF 3.6-5.3 is earned not curve-fit. FULLY VALIDATED — only barrier = Pine st_state port + propagation. Recommended 5m adoption |
+| stricter trend (50/200) / range (ADX25-30) (F17) | 🟡 TF-dependent quality↑/DD↓; not robust across all 4 cells |
 | stop-placement variants (structure vs OR-opposite); per-regime reward | ⬜ untested |
 
 Discipline: every screen here is post-hoc (filters taken trades) — a screen says "does this separate good

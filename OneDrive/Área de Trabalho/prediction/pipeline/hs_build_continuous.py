@@ -20,7 +20,7 @@ Usage: python hs_build_continuous.py [path-to-csv]
 import sys, os
 import pandas as pd, numpy as np
 
-PATH   = sys.argv[1] if len(sys.argv) > 1 else "glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
+PATH   = sys.argv[1] if len(sys.argv) > 1 else "data/raw/glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
 SYM    = (sys.argv[2] if len(sys.argv) > 2 else "nq").lower()   # symbol namespace for outputs
 CHUNK  = 1_000_000
 ET     = "America/New_York"

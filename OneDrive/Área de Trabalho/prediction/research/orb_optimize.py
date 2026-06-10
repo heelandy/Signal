@@ -9,7 +9,7 @@ TIME-OF-DAY cutoff (morning breaks are cleaner), reward, exit. Validates the win
     python research/orb_optimize.py
 """
 import sys, os, itertools
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_db, hs_harness as H, hs_backtest as B, hs_validate as V
 

@@ -147,6 +147,22 @@ if long_fire
     traded_l := true
 if short_fire
     traded_s := true
+// keep the plan on screen AFTER the fill too (until SL / TP / session end) — for managing the live trade
+var bool in_long  = false
+var bool in_short = false
+if new_day
+    in_long  := false
+    in_short := false
+if long_fire
+    in_long  := true
+if short_fire
+    in_short := true
+if in_long and (low <= Ls or high >= Lt1)
+    in_long  := false
+if in_short and (high >= Ss or low <= St1)
+    in_short := false
+bool l_live = (window and not traded_l) or in_long
+bool s_live = (window and not traded_s) or in_short
 
 // ───────────────────────── OPTIONS TRANSLATION ─────────────────────────
 f_strike(p) => math.round(p / strike_inc) * strike_inc
@@ -177,12 +193,44 @@ int t_wk = time + wk_add * 86400000
 string exp_both = "0DTE " + str.tostring(month(time)) + "/" + str.tostring(dayofmonth(time)) + "  ·  Wk " + str.tostring(month(t_wk)) + "/" + str.tostring(dayofmonth(t_wk))
 
 // ───────────────────────── VISUALS ─────────────────────────
+show_line_labels = input.bool(true, "Write ENTRY / SL / TP on the chart lines", group="Display")
 plot(show_levels and or_set ? or_high : na, "OR high", color=color.new(color.aqua, 70), style=plot.style_linebr)
 plot(show_levels and or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 70), style=plot.style_linebr)
-plot(show_levels and window and not traded_l ? Le : na, "Long entry",  color=color.new(color.lime, 30), style=plot.style_linebr, linewidth=2)
-plot(show_levels and window and not traded_s ? Se : na, "Short entry", color=color.new(color.red, 30),  style=plot.style_linebr, linewidth=2)
+plot(show_levels and l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(show_levels and s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(show_levels and l_live ? Ls  : na, "Long SL",   color=color.new(color.red, 25),   style=plot.style_linebr)
+plot(show_levels and l_live ? Lt1 : na, "Long TP",   color=color.new(color.green, 10),  style=plot.style_linebr)
+plot(show_levels and s_live ? Ss  : na, "Short SL",  color=color.new(color.red, 25),   style=plot.style_linebr)
+plot(show_levels and s_live ? St1 : na, "Short TP",  color=color.new(color.green, 10),  style=plot.style_linebr)
 plotshape(long_fire,  "Long fire",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="↑", size=size.tiny)
 plotshape(short_fire, "Short fire", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="↓", size=size.tiny)
+// WRITE ENTRY / SL / TP on the chart lines (single TP1; armed AND while in the trade)
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le = na
+var label lbl_Ls = na
+var label lbl_Lt = na
+var label lbl_Se = na
+var label lbl_Ss = na
+var label lbl_St = na
+if barstate.islast and show_line_labels
+    string rt = str.tostring(tp1_rr, "#.#")
+    lbl_Le := f_setlbl(lbl_Le, l_live, Le,  "▲ ENTRY " + str.tostring(Le,  format.mintick),                color.new(color.yellow, 0))
+    lbl_Ls := f_setlbl(lbl_Ls, l_live, Ls,  "SL " + str.tostring(Ls,  format.mintick) + "  -1R",            color.new(color.red, 0))
+    lbl_Lt := f_setlbl(lbl_Lt, l_live, Lt1, "TP " + str.tostring(Lt1, format.mintick) + "  +" + rt + "R",   color.new(color.green, 0))
+    lbl_Se := f_setlbl(lbl_Se, s_live, Se,  "▼ ENTRY " + str.tostring(Se,  format.mintick),                color.new(color.yellow, 0))
+    lbl_Ss := f_setlbl(lbl_Ss, s_live, Ss,  "SL " + str.tostring(Ss,  format.mintick) + "  -1R",            color.new(color.red, 0))
+    lbl_St := f_setlbl(lbl_St, s_live, St1, "TP " + str.tostring(St1, format.mintick) + "  +" + rt + "R",   color.new(color.green, 0))
 alertcondition(long_fire,  "ORB Options LONG",  "HIGHSTRIKE ORB options: LONG — buy CALL / debit call spread / credit put spread (strikes from ORB levels)")
 alertcondition(short_fire, "ORB Options SHORT", "HIGHSTRIKE ORB options: SHORT — buy PUT / debit put spread / credit call spread (strikes from ORB levels)")
 

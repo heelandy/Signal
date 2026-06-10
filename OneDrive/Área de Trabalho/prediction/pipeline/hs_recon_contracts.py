@@ -5,7 +5,7 @@ the roll correctly. Outright vs spread, per-instrument date range + volume.
 """
 import sys, pandas as pd, numpy as np
 
-PATH  = sys.argv[1] if len(sys.argv) > 1 else "glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
+PATH  = sys.argv[1] if len(sys.argv) > 1 else "data/raw/glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
 CHUNK = 1_000_000
 use = ["ts_event","instrument_id","symbol","close","volume"]
 
@@ -53,5 +53,5 @@ print("\nOUTRIGHT CONTRACTS (sorted by first-seen), all rows:")
 with pd.option_context('display.max_rows', None, 'display.width', 200):
     print(outr[['symbol','instrument_id','first','last','bars','volume']].to_string(index=False))
 
-outr.to_csv("hs_outright_inventory.csv", index=False)
+outr.to_csv("data/hs_outright_inventory.csv", index=False)
 print("\nwrote hs_outright_inventory.csv")

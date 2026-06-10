@@ -91,6 +91,7 @@ eod_flat       = input.bool(true, "EOD: flatten at HHMM", group="Session")
 eod_hhmm       = input.int(1558, "EOD flatten HHMM (ET)", group="Session", minval=0, maxval=2359)
 show_dash      = input.bool(true, "Show dashboard", group="Display")
 show_plan      = input.bool(true, "Show SL / TP1 / TP2 lines", group="Display")
+show_line_labels = input.bool(true, "Write ENTRY / SL / TP1 / TP2 on the chart lines", group="Display")
 show_panel     = input.bool(true, "Show position-tool panel (boxes + labels)", group="Display",
                   tooltip="Draws the active/pending trade like the TradingView long/short position tool: green target box, red stop box, with TP1/TP2/SL/entry labels and the R:R ratio.")
 
@@ -322,8 +323,8 @@ if eod_flat and not eod_done and o_now >= eod_min
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55), style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
 // RESTING ENTRY LEVELS — the live buy-stop / sell-stop the strategy is waiting to trigger
-plot(window and not traded_l ? Le : na, "Long entry (buy-stop)",   color=color.new(color.lime, 0), style=plot.style_linebr, linewidth=2)
-plot(window and not traded_s ? Se : na, "Short entry (sell-stop)", color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=2)
+plot(window and not traded_l ? Le : na, "Long entry (buy-stop)",   color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(window and not traded_s ? Se : na, "Short entry (sell-stop)", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 // FULL TRADE PLAN — stop-loss + TP1 + TP2 (while the entry is resting, and again while in the trade)
 bool lplan = show_plan and ((window and not traded_l) or strategy.position_size > 0)
 bool splan = show_plan and ((window and not traded_s) or strategy.position_size < 0)
@@ -339,6 +340,42 @@ plot(lplan ? ls2 : na, "Long TP2", color=color.new(color.green, 10), style=plot.
 plot(splan ? ssl : na, "Short SL",  color=color.new(color.red,   25), style=plot.style_linebr)
 plot(splan ? ss1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
 plot(splan ? ss2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+// WRITE ENTRY / SL / TP on the chart lines — armed AND while in the trade (uses the frozen in-trade levels)
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le  = na
+var label lbl_Ls  = na
+var label lbl_Lt1 = na
+var label lbl_Lt2 = na
+var label lbl_Se  = na
+var label lbl_Ss  = na
+var label lbl_St1 = na
+var label lbl_St2 = na
+bool l_live = (window and not traded_l) or strategy.position_size > 0
+bool s_live = (window and not traded_s) or strategy.position_size < 0
+float lep = strategy.position_size > 0 ? t_ep : Le
+float sep = strategy.position_size < 0 ? t_ep : Se
+if barstate.islast and show_line_labels
+    string r1 = str.tostring(tp1_rr, "#.#")
+    string r2 = str.tostring(tp2_rr, "#.#")
+    lbl_Le  := f_setlbl(lbl_Le,  l_live, lep, "▲ ENTRY " + str.tostring(lep, format.mintick),               color.new(color.yellow, 0))
+    lbl_Ls  := f_setlbl(lbl_Ls,  l_live, lsl, "SL "  + str.tostring(lsl, format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_Lt1 := f_setlbl(lbl_Lt1, l_live, ls1, "TP1 " + str.tostring(ls1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_Lt2 := f_setlbl(lbl_Lt2, l_live, ls2, "TP2 " + str.tostring(ls2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
+    lbl_Se  := f_setlbl(lbl_Se,  s_live, sep, "▼ ENTRY " + str.tostring(sep, format.mintick),               color.new(color.yellow, 0))
+    lbl_Ss  := f_setlbl(lbl_Ss,  s_live, ssl, "SL "  + str.tostring(ssl, format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_St1 := f_setlbl(lbl_St1, s_live, ss1, "TP1 " + str.tostring(ss1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_St2 := f_setlbl(lbl_St2, s_live, ss2, "TP2 " + str.tostring(ss2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
 plot(trend_ema_s > 0 ? emaS : na, "EMA slow", color=color.new(color.gray, 50))
 plotshape(just_long,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
 plotshape(just_short, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)

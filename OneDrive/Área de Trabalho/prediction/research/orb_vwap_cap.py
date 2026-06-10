@@ -13,7 +13,7 @@ BOTH sides stay > 0, lower-90% CI stays > 0, and enough trades remain. Otherwise
     python research/orb_vwap_cap.py [TF=15m]
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np
 import hs_backtest as B
 from orb_optimize import state, metrics

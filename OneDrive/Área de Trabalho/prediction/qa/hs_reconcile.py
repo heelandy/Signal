@@ -10,7 +10,8 @@ then diffs harness-derived state vs the Pine's x_* state, per column, and logs m
 
 Bars are identical (same export) so every mismatch is a pure logic divergence to resolve (1.2).
 """
-import sys
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))  # shared library
 import numpy as np, pandas as pd
 import hs_harness as H
 

@@ -14,7 +14,7 @@ No Pine file or production default is touched.
     python research/orb_exits.py [SYM] [TF=15m]
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_backtest as B, hs_validate as V
 from orb_optimize import state, metrics

@@ -17,6 +17,7 @@ CLI (runs the suite over the built NQ artifacts via the DuckDB layer):
     python hs_qa.py
 """
 import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))  # shared library
 import numpy as np, pandas as pd
 from pandas.tseries.holiday import (
     AbstractHolidayCalendar, Holiday, nearest_workday, GoodFriday,

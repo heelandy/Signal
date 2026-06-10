@@ -1,6 +1,6 @@
 # HIGHSTRIKE ORB — Automation Setup (full step-by-step)
 
-End-to-end guide to run `HIGHSTRIKE_ORB_AUTO.pine` on autopilot into a **paper** account, then live.
+End-to-end guide to run `production/HIGHSTRIKE_ORB_AUTO.pine` on autopilot into a **paper** account, then live.
 No prior webhook experience assumed. Two paths are covered: **SPY/QQQ shares** and **MNQ futures**.
 
 > ⚠️ **PAPER FIRST, ALWAYS.** Do every step below on a paper/demo account and run it ≥ 2 weeks,
@@ -67,7 +67,7 @@ No prior webhook experience assumed. Two paths are covered: **SPY/QQQ shares** a
 
 ## 2 · Load the strategy on TradingView
 
-1. Open `HIGHSTRIKE_ORB_AUTO.pine` in the Pine Editor → **Add to chart**.
+1. Open `production/HIGHSTRIKE_ORB_AUTO.pine` in the Pine Editor → **Add to chart**.
 2. **Strategy Tester → ⚙ Properties** (this is where per-instrument costs live, because the header
    values must be constants):
    - **Shares (QQQ/SPY):** Commission = **0**, Slippage = **1** tick.
@@ -114,7 +114,7 @@ alert that goes to your phone/email/Discord instead of the webhook (see Step 6).
 ## 4 · Match the JSON to your bridge
 
 The `stopLoss`/`takeProfit` shape above follows **TradersPost's documented schema**. If you use a
-different bridge (PickMyTrade, Capitalise, etc.) the keys differ — open `HIGHSTRIKE_ORB_AUTO.pine`,
+different bridge (PickMyTrade, Capitalise, etc.) the keys differ — open `production/HIGHSTRIKE_ORB_AUTO.pine`,
 find **`f_entry_json()`**, and edit the string to match your bridge's docs. The **`Webhook qty field`**
 input lets you swap `{{strategy.order.contracts}}` for a fixed number if the bridge wants a literal.
 
@@ -182,7 +182,7 @@ the bar to clear before going live.
   vs the exact level. Modeled by the slippage setting; small on liquid SPY/QQQ/MNQ.
 - **Single SL/TP bracket**, not the V1 scale-out (50%@TP1→BE→TP2). Validated and simpler; the scale-out
   would need partial-close webhooks (a later upgrade).
-- **Options are NOT covered** — Pine can't build the contract. Use `HIGHSTRIKE_ORB_OPTIONS.pine` for the
+- **Options are NOT covered** — Pine can't build the contract. Use `production/HIGHSTRIKE_ORB_OPTIONS.pine` for the
   strike suggestions and place those manually (or a bridge that constructs option orders).
 - **TradingView must keep the alert running** — it lives on their servers, but if your plan lapses or the
   alert expires, automation stops silently. Set expiration **Open-ended** and watch your alert count.

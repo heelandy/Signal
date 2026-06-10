@@ -8,7 +8,7 @@ Same engine: stop-entry, 4R, scale, breakout-strength 0.1, macro/regime/trend ga
 Windows (trade-day mins, 18:00 ET = 0): 20:00=120, 00:00=360, 03:00=540, 09:30=930, 13:00=1140.
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import hs_backtest as B
 from orb_optimize import metrics, state
 

@@ -243,12 +243,50 @@ if eod_flat and not eod_done and o_now >= eod_min
     eod_done := true
 
 // ───────────────────────── VISUALS ─────────────────────────
+show_line_labels = input.bool(true, "Write ENTRY / SL / TP on the chart lines", group="Display")
+bool l_live = (window and ok_l) or strategy.position_size > 0
+bool s_live = (window and ok_s) or strategy.position_size < 0
+float a_lsl = strategy.position_size > 0 ? t_sl : Ls
+float a_ltp = strategy.position_size > 0 ? t_tp : Ltp
+float a_ssl = strategy.position_size < 0 ? t_sl : Ss
+float a_stp = strategy.position_size < 0 ? t_tp : Stp
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 60), style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 60), style=plot.style_linebr)
-plot(window and ok_l ? Le : na, "Long entry",  color=color.new(color.lime, 0), style=plot.style_linebr, linewidth=2)
-plot(window and ok_s ? Se : na, "Short entry", color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=2)
+plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(show_line_labels and l_live ? a_lsl : na, "Long SL",  color=color.new(color.red, 25),  style=plot.style_linebr)
+plot(show_line_labels and l_live ? a_ltp : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(show_line_labels and s_live ? a_ssl : na, "Short SL", color=color.new(color.red, 25),  style=plot.style_linebr)
+plot(show_line_labels and s_live ? a_stp : na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr)
 plotshape(just_long,  "Long entry",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="BUY",  textcolor=color.white, size=size.tiny)
 plotshape(just_short, "Short entry", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.tiny)
+// WRITE ENTRY / SL / TP on the chart lines (single-bracket TP; armed AND while in the trade)
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le = na
+var label lbl_Ls = na
+var label lbl_Lt = na
+var label lbl_Se = na
+var label lbl_Ss = na
+var label lbl_St = na
+if barstate.islast and show_line_labels
+    string rt = str.tostring(tp_rr, "#.#")
+    lbl_Le := f_setlbl(lbl_Le, l_live, Le,    "▲ ENTRY " + str.tostring(Le, format.mintick),                 color.new(color.yellow, 0))
+    lbl_Ls := f_setlbl(lbl_Ls, l_live, a_lsl, "SL " + str.tostring(a_lsl, format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_Lt := f_setlbl(lbl_Lt, l_live, a_ltp, "TP " + str.tostring(a_ltp, format.mintick) + "  +" + rt + "R", color.new(color.green, 0))
+    lbl_Se := f_setlbl(lbl_Se, s_live, Se,    "▼ ENTRY " + str.tostring(Se, format.mintick),                 color.new(color.yellow, 0))
+    lbl_Ss := f_setlbl(lbl_Ss, s_live, a_ssl, "SL " + str.tostring(a_ssl, format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_St := f_setlbl(lbl_St, s_live, a_stp, "TP " + str.tostring(a_stp, format.mintick) + "  +" + rt + "R", color.new(color.green, 0))
 
 var table t = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
 if barstate.islast

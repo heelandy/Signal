@@ -6,7 +6,7 @@ Streams in 1M-row chunks; safe on ~800MB.
 """
 import sys, pandas as pd, numpy as np
 
-PATH  = sys.argv[1] if len(sys.argv) > 1 else "glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
+PATH  = sys.argv[1] if len(sys.argv) > 1 else "data/raw/glbx-mdp3-20100606-20260607.ohlcv-1m.csv"
 CHUNK = 1_000_000
 
 # --- sniff schema ----------------------------------------------------------

@@ -7,7 +7,7 @@ Sweeps breakout-strength x time-of-day cutoff x reward, scale exit, for 5m / 15m
     python research/orb_per_tf.py
 """
 import sys, os, itertools
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import hs_backtest as B
 from orb_optimize import metrics, state
 
