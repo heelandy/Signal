@@ -490,3 +490,16 @@ The three sessions trade on different clocks (near-independent) → the auto-ses
 Discipline: every screen here is post-hoc (filters taken trades) — a screen says "does this separate good
 from bad", NOT the final number. Graduation = signal-level reimplementation + full re-validation (both
 signals >0, lower CI >0) on QQQ AND NQ, THEN propagate to ALL Pine scripts + engine (the consistency rule).
+
+## Propagation log (all-scripts consistency rule)
+| Script | Stack status (structure gate + VWAP cap + structure stop + trail + sessions) |
+|---|---|
+| `production/HIGHSTRIKE_ORB_STACK.pine` | ✅ PRIMARY — full stack, RTH/Asia/London + Auto (incl. 18:00-19:00 stale-gap guard) |
+| `production/HIGHSTRIKE_ORB_AUTO.pine` | ✅ REBUILT as the STACK's automation twin — same engine as a strategy; trail via broker-held initial structure SL + EXIT webhook (bracket mode = fallback); provider-agnostic webhooks (TradersPost / PickMyTrade / Generic relay multi-account / custom template), token + account-id inputs ready for keys |
+| `production/HIGHSTRIKE_ORB_OPTIONS.pine` | ✅ REBUILT on the stack engine (was V1/EMA + OR-edge stop, reported not working) — SPY/QQQ, RTH only, 0DTE entry / max 4-DTE hold, naked BUY-only call/put at 1-2 ITM/OTM (selector + ladder), debit spread capped @TP1, credit vertical short @structure stop, trail-break = EXIT alert. Multi-day hold ≤4 DTE is an options-layer allowance, NOT separately backtested (underlying edge is intraday) |
+| `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine` | ✅ structure-stop + trail available, off by default |
+| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | ⚠ PENDING — still scale_be/OR-edge V1 logic |
+| `engine/hs_*.py` | ✅ logic-of-record (stop_mode="struct", scale_frac, sessions) |
+
+Remaining adoption gate: **forward paper-test of fills** (≥2 weeks clean reconciliation, RTH first, then
+Asia/London — slippage-sensitive). The AUTO file + `docs/AUTOMATION_SETUP.md` are the harness for it.

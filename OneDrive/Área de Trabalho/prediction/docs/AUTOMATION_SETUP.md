@@ -1,11 +1,15 @@
 # HIGHSTRIKE ORB — Automation Setup (full step-by-step)
 
 End-to-end guide to run `production/HIGHSTRIKE_ORB_AUTO.pine` on autopilot into a **paper** account, then live.
-No prior webhook experience assumed. Two paths are covered: **SPY/QQQ shares** and **MNQ futures**.
+No prior webhook experience assumed. The script is the automation twin of the validated STACK
+(structure gate + VWAP cap + structure stop + ATR trail, RTH / Asia / London / Auto), with a
+**provider-agnostic webhook layer**: everything is configured by inputs, so when your webhook URL,
+API token, or account IDs arrive you plug them in — no code edits.
 
 > ⚠️ **PAPER FIRST, ALWAYS.** Do every step below on a paper/demo account and run it ≥ 2 weeks,
-> reconciling every fill, before a single real dollar. Automation fails silently (a missed webhook, a
-> stale stop) — paper is how you find those bugs cheaply.
+> reconciling every fill, before a single real dollar. This is also the project's last open adoption
+> gate (forward paper-test of fills). Automation fails silently (a missed webhook, a stale stop) —
+> paper is how you find those bugs cheaply.
 
 ---
 
@@ -15,151 +19,158 @@ No prior webhook experience assumed. Two paths are covered: **SPY/QQQ shares** a
    TradingView (cloud)  ── runs HIGHSTRIKE_ORB_AUTO on live data, 24/7, even if your PC is off
         │  fires an alert the instant price touches the OR level (calc_on_every_tick = intrabar)
         ▼  HTTPS webhook (a JSON message)
-   Bridge  (TradersPost)  ── receives the JSON, translates it to a broker API order
+   Bridge  (TradersPost / PickMyTrade / your relay)  ── translates the JSON into a broker API order
         │  REST API call
         ▼
-   Broker PAPER account  (Alpaca = shares · Tradovate = MNQ)  ── fills the order + holds the SL/TP bracket
+   Broker account(s)  (Tradovate/MNQ · Alpaca/shares · prop-firm eval)  ── fills + holds the stop
 ```
 
-- **TradingView is the brain.** It decides *when* to trade (your validated ORB logic) and fires alerts.
-- **The bridge is the translator.** TradingView can't talk to most brokers directly; the bridge turns
-  the alert JSON into a real order.
-- **The broker executes** and manages the bracket (stop-loss + take-profit) you sent with the entry.
-- **Three messages** come out of the script: **ARMED** (heads-up), **ENTRY** (order-fill bracket), and
-  **EOD flatten** (close everything at 15:58 ET so nothing is held overnight).
+- **TradingView is the brain.** It decides *when* to trade (the validated stack) and fires alerts.
+- **The bridge is the translator.** Pick its JSON format with the **`Webhook format`** input.
+- **The broker executes** and holds the initial stop you sent with the entry.
+
+### The five messages the script can emit
+| Message | Channel | When | Purpose |
+|---|---|---|---|
+| **ARMED** | `alert()` | setup ready, before the touch | heads-up (text → phone/Discord, or JSON for a relay) |
+| **ENTRY** | order fill | resting stop-entry fills | entry + qty + **initial structure SL** (+ TP in bracket mode) |
+| **TRAIL SYNC** | `alert()` (optional, OFF) | chandelier ratchets ≥ N ticks | `event:stop_update` JSON so a relay/PMT can move the broker stop |
+| **EXIT** | order fill | trail/stop/TP fills in TV | flatten (market) at the broker |
+| **SESSION END / EVAL HALT** | order fill | session cutoff / daily-loss halt | flatten — nothing held across sessions |
+
+### How the TRAIL works over webhooks (important)
+The validated exit is a 2-ATR chandelier trail — but most bridges can't hold a trailing stop. So:
+1. The **ENTRY** webhook carries the **initial structure stop** → the broker holds that as the
+   catastrophic bracket (you're protected even if the webhook pipe dies mid-trade).
+2. TradingView manages the ratcheting trail internally. When the trail is hit, the **EXIT** webhook
+   flattens at market. The broker's resting stop is cancelled by the bridge's exit handling.
+3. Optional: turn **`Send TRAIL stop updates`** ON to also push `stop_update` JSONs as the trail
+   ratchets (only if your bridge/relay supports stop modification — TradersPost does not; leave OFF).
+
+If you can't trust the bridge to process exit webhooks reliably, switch **`Exit`** to
+**Fixed TP bracket (broker-held)** — the broker holds SL **and** TP and nothing depends on a
+mid-trade webhook. It gives up the run-more upside of the trail but is the most failure-proof mode.
 
 ### What it costs (monthly, paper stage)
 | Piece | Why | Cost |
 |---|---|---|
 | TradingView **Essential/Plus or higher** | webhook alerts require a paid plan | ~$15-30/mo |
-| **TradersPost** | the bridge | free tier exists; paid ~$49/mo for live/more alerts |
-| **Alpaca** paper (shares) | broker | free |
-| **Tradovate** demo (MNQ) | broker | free demo |
+| Bridge (TradersPost / PickMyTrade) | the translator | free tiers exist; ~$25-50/mo paid |
+| Tradovate **demo** (MNQ) / Alpaca **paper** (shares) | broker | free |
 
 ---
 
-## 1 · Create the accounts (do these in order)
+## 1 · Pick your path (one webhook URL per alert)
 
-### 1A · TradingView
-1. Upgrade to a plan that allows **webhook alerts** (Essential or higher — verify "Webhook URL" is an
-   available alert notification on your plan).
-2. Open a chart of **QQQ** (shares path) or **MNQ1!** (futures path) on the **15-minute** timeframe.
+One TradingView alert can call **one** webhook URL. Your options:
 
-### 1B · Broker paper account
-**Shares → Alpaca**
-1. Sign up at alpaca.markets → switch the dashboard to **Paper Trading** (toggle, top of the page).
-2. Generate **API Key** + **Secret** (you'll paste these into the bridge, not the script).
+**A — TradersPost (simplest, shares + futures).** `Webhook format = TradersPost`. TradersPost can
+route one strategy to **multiple connected brokers/accounts** on its side, which is the easiest
+multi-account setup — the script doesn't need account IDs at all.
 
-**Futures → Tradovate**
-1. Sign up at tradovate.com → open a **Demo** (simulated) account.
-2. Note your demo login — the bridge (or Tradovate's native TradingView link) uses it.
+**B — PickMyTrade → Tradovate (futures-focused, supports stop-modify).** `Webhook format =
+PickMyTrade / Tradovate`, paste your **API token** and **Account ID** into the Webhook inputs.
+Their schema also accepts extra flags (e.g. `"duplicate_position_allow":true` for copying to
+multiple accounts) — put those in **`Extra raw JSON fields`**. ⚠️ Verify the key names against
+PickMyTrade's current docs when your token arrives — the preset is close but providers move.
 
-### 1C · Bridge — TradersPost
-1. Sign up at traderspost.io.
-2. **Connect a broker:** Brokers → Connect → choose **Alpaca (Paper)** and paste the key/secret from
-   1B (or **Tradovate Demo** for futures).
-3. **Create a Strategy:** Strategies → New → name it `HIGHSTRIKE ORB`.
-4. Open that strategy → copy its **Webhook URL** (looks like
-   `https://webhooks.traderspost.io/trading/webhook/xxxxxxxx/...`). **You'll paste this into the
-   TradingView alert in Step 3.** Keep it secret — anyone with it can place orders in your account.
+**C — Generic JSON → your own relay (max flexibility, true multi-account/multi-provider).**
+`Webhook format = Generic JSON`. Every payload carries the full plan
+(`event, ticker, action, quantity, entryLevel, stopLoss, takeProfit, exitMode, trailAtr, session,
+accountIds[], token, sentAt`). Point it at an n8n flow / Cloudflare worker / small Flask app that
+fans out to as many providers/accounts as you like. Fill **`Account IDs, comma-separated`** and the
+relay receives `accountIds:["acct1","acct2",...]`.
+
+**D — Custom template.** `Webhook format = Custom template` and edit the ENTRY/EXIT template inputs
+using `%TICKER% %ACTION% %QTY% %ENTRY% %STOP% %TP% %EVENT%` placeholders — matches any schema
+without touching the code.
+
+**Multiple providers at once?** Either path C (one relay fans out), or add the strategy to the
+chart **twice** with different `Webhook format` settings and one alert each.
 
 ---
 
-## 2 · Load the strategy on TradingView
+## 2 · Create the accounts
+
+1. **TradingView** — plan with webhook alerts (Essential+). Chart **NQ1!** or **MNQ1!**, **5-minute**
+   timeframe (the validated config; the trade-day/Asia logic assumes futures' 18:00 ET roll).
+2. **Broker paper** — Tradovate demo (futures) or Alpaca paper (shares).
+3. **Bridge** — sign up (TradersPost / PickMyTrade), connect the broker's paper account, create a
+   strategy/connection, and **copy its Webhook URL**. Keep it secret — anyone with it can place orders.
+
+---
+
+## 3 · Load + configure the strategy
 
 1. Open `production/HIGHSTRIKE_ORB_AUTO.pine` in the Pine Editor → **Add to chart**.
-2. **Strategy Tester → ⚙ Properties** (this is where per-instrument costs live, because the header
-   values must be constants):
-   - **Shares (QQQ/SPY):** Commission = **0**, Slippage = **1** tick.
-   - **MNQ futures:** Commission = **0.52**, Slippage = **2** ticks (defaults).
-3. **Strategy settings (⚙ on the strategy name):**
-   - `Fixed qty` → a **real size**: e.g. **10** shares for QQQ, or **1** contract for MNQ.
-     (Do **not** leave it at 2 for shares — that's $1.5k, trivially small. Use 0 only if you set
-     `Risk $ per trade` and want auto-sizing.)
-   - `Take-profit R` → **2** (or 3 for more expectancy). Leave the gates at defaults.
-4. Sanity-check the Strategy Tester reads roughly **+0.3–0.4R/trade, PF ~2.0** on QQQ/NQ 15m — this
-   confirms the file is behaving before you wire money to it.
+2. **Strategy Tester → ⚙ Properties** (per-instrument costs; header values must be const):
+   - **MNQ/NQ futures:** Commission **0.52**/order, Slippage **2** ticks (the defaults).
+   - **Shares (QQQ/SPY):** Commission **0**, Slippage **1** tick.
+3. **Strategy settings (⚙):**
+   - `Session` → start with **US RTH**; once fills reconcile cleanly, switch to **Auto (Asia +
+     London + RTH)** for all three validated cycles per day. (Asia/London are futures-only and the
+     most slippage-sensitive — paper-verify their fills especially.)
+   - `Stop placement` → **Structure swing** · `Exit` → **Trail (ATR chandelier), 2.0** — the
+     validated defaults. Switch exit to **Fixed TP bracket** only if the bridge can't do exits.
+   - `Fixed qty` → **1** MNQ to start (or 0 + `Risk $ per trade` for risk-based sizing — note the
+     structure stop is ~half as wide, so risk-based sizes larger; `Max qty safety cap` bounds it).
+   - **Webhook group** → pick the format (Step 1) and paste token / account ID(s) when you have
+     them. `Ticker override` lets you send `MNQ` or a front-month code while charting `NQ1!`.
+   - `EVAL: prop guardrails` → ON if running a funded-eval account (daily-loss halt flattens and
+     stands down for the day).
+4. Sanity-check the Strategy Tester on NQ 5m shows the stack's behavior (selective entries — a few
+   per week per session — positive expectancy, trail exits letting winners run) before wiring it up.
 
 ---
 
-## 3 · Create the alert (the actual automation)
+## 4 · Create the alert (the actual automation)
 
-1. Right-click the chart → **Add alert** (or the ⏰ icon).
-2. **Condition:** select **`HIGHSTRIKE ORB AUTO`** (the strategy) — *not* "any indicator value".
-3. In the dropdown beneath it, choose **"Order fills and alert() function calls."** ← critical. This
-   sends BOTH the `alert()` heads-ups (ARMED, EOD) and the order-fill bracket JSON.
-4. **Trigger / frequency:** leave default (the script controls frequency).
-5. **Expiration:** set **Open-ended** (so it doesn't expire in a few weeks).
-6. **Notifications tab → Webhook URL:** paste the **TradersPost Webhook URL** from Step 1C. Tick the
-   **Webhook URL** box on.
-7. **Message:** leave it as the default `{{strategy.order.alert_message}}` — the script supplies the
-   real JSON per order; don't overwrite it.
-8. Click **Create.**
-
-That single alert now runs the whole pipeline.
-
-### What the script actually sends (for reference)
-On an entry fill, the order's `alert_message` is already built for you, e.g. a long:
-```json
-{"ticker":"QQQ","action":"buy","quantity":{{strategy.order.contracts}},
- "stopLoss":{"type":"stop","stopPrice":737.10},
- "takeProfit":{"type":"limit","limitPrice":746.20}}
-```
-On the 15:58 EOD flatten it sends `{"ticker":"QQQ","action":"exit"}`. The **ARMED** message is plain
-text (a heads-up). If TradersPost rejects the plain-text ARMED message, route ARMED to a **second**
-alert that goes to your phone/email/Discord instead of the webhook (see Step 6).
-
----
-
-## 4 · Match the JSON to your bridge
-
-The `stopLoss`/`takeProfit` shape above follows **TradersPost's documented schema**. If you use a
-different bridge (PickMyTrade, Capitalise, etc.) the keys differ — open `production/HIGHSTRIKE_ORB_AUTO.pine`,
-find **`f_entry_json()`**, and edit the string to match your bridge's docs. The **`Webhook qty field`**
-input lets you swap `{{strategy.order.contracts}}` for a fixed number if the bridge wants a literal.
-
-**MNQ note:** in TradersPost (or Tradovate's native link) map the ticker to the **front-month MNQ
-contract**. For Tradovate's *native* TradingView integration you skip TradersPost entirely — connect
-Tradovate in TradingView's trading panel and the alert routes through it (fewest hops, lowest latency).
+1. Right-click the chart → **Add alert**.
+2. **Condition:** the **`HIGHSTRIKE ORB AUTO`** strategy → **"Order fills and alert() function calls."**
+   ← critical: this sends BOTH the `alert()` messages (ARMED, trail sync) and the order-fill JSONs.
+3. **Expiration: Open-ended.**
+4. **Notifications → Webhook URL:** paste the bridge URL. **Message:** leave as
+   `{{strategy.order.alert_message}}` — the script supplies the JSON per order; don't overwrite it.
+5. If the bridge rejects the plain-text ARMED message: either set `ARMED alert as JSON` ON (relays),
+   or create a **second** alert routed to phone/email/Discord for ARMED and keep the webhook alert
+   for order fills only.
 
 ---
 
 ## 5 · Test before trusting it
 
-1. **Manual webhook test:** in TradersPost, use **"Send test"** on the strategy (or paste a sample
-   buy JSON) → confirm a paper order appears in Alpaca/Tradovate. This proves the bridge↔broker link.
-2. **Dry-run the alert:** with the market open, watch the script's dashboard go
-   `OR forming… → ARMED → IN TRADE`. When it ARMS, you should get the heads-up; when price touches the
-   level, the ENTRY webhook should place a paper order with the SL/TP bracket attached.
-3. **First real signal:** when the first automated trade fires, immediately check **all three** match:
-   - TradingView Strategy Tester shows the entry,
-   - TradersPost shows the webhook received + order sent,
-   - the broker shows the filled position **with a stop and a target** attached.
+1. **Manual webhook test:** use the bridge's "send test" (or curl a sample entry JSON) → confirm a
+   paper order appears at the broker. Proves the bridge↔broker link.
+2. **Dry-run:** watch the dashboard go `OR forming… → ARMED — order resting → IN TRADE`. The VWAP-cap
+   row shows when the entry order is pulled because the level is extended (`EXT ⚠ (order pulled)`).
+3. **First real signal — check all three agree:** TV Strategy Tester entry ≈ bridge log ≈ broker fill
+   **with the initial stop attached**. In trail mode also verify the EXIT webhook flattened the
+   position AND the broker's resting stop was cancelled (no orphans).
 
 ---
 
 ## 6 · Daily reconciliation routine (non-negotiable on paper)
 
-Every trading day, confirm:
-- ☑ Entry filled **at/near the OR level** (a tick or two of slippage is normal).
-- ☑ The **bracket is live** at the broker (stop + target both present).
-- ☑ The position is **flat by ~15:58 ET** (the EOD flatten fired — nothing held overnight).
-- ☑ TradingView fills ≈ broker fills ≈ what the backtest would have done.
-- ☑ No **duplicate** orders and no **orphaned** stops (a stop left behind after an exit).
+- ☑ Entry filled at/near the OR level (a tick or two of slippage is normal — Asia/London tolerate
+  less; that's why they're paper-tested first).
+- ☑ The **initial structure stop is live** at the broker the moment the entry fills.
+- ☑ Trail exits: TV exit price vs broker market-fill — log the slippage.
+- ☑ Flat at each **session cutoff** (RTH 15:58, London 08:00, Asia 03:00 ET) — nothing held over.
+- ☑ No duplicate orders, no orphaned stops after exits.
+- ☑ TV fills ≈ broker fills ≈ what the Python engine would have done.
 
-Keep a simple log (date, signal, TV fill, broker fill, slippage, result). Two weeks of clean logs is
-the bar to clear before going live.
+Keep a log (date, session, signal, TV fill, broker fill, slippage, result). **Two weeks of clean
+logs** is the bar — this doubles as the project's forward paper-test gate.
 
 ---
 
 ## 7 · Go-live checklist (in order — do not skip)
-1. ☑ Strategy Tester on QQQ/NQ 15m ≈ Python (+0.3–0.4R, PF ~2.0).
+1. ☑ Strategy Tester behavior on NQ/MNQ 5m matches the engine's stack results.
 2. ☑ Bridge↔broker link proven with a manual test order.
-3. ☑ Alert live on a **paper** account; runs **2+ weeks**.
-4. ☑ Daily reconciliation clean (Step 6) — entries, brackets, EOD-flat, no dupes/orphans.
-5. ☑ Latency measured: ARMED/fill timestamp vs broker fill is a couple of seconds (if 10s+, the bridge
-   or broker is the bottleneck — fix before live).
-6. ☑ Only now: point the bridge at a **live** broker, **smallest size**, and re-reconcile daily.
+3. ☑ Alert live on **paper**, RTH first; runs **2+ weeks** clean (Step 6).
+4. ☑ Asia + London cycles paper-verified separately (slippage within 2 ticks).
+5. ☑ Latency measured: touch → broker fill is a couple of seconds (10s+ = fix the bridge first).
+6. ☑ Only now: point at a **live** account, **1 MNQ**, re-reconcile daily before sizing up.
 
 ---
 
@@ -167,22 +178,26 @@ the bar to clear before going live.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No webhook received | Alert not "Order fills and alert() function calls", or wrong URL | Recreate the alert; recopy the TradersPost URL |
-| Webhook received, no order | JSON schema mismatch, or broker not connected | Check TradersPost logs; fix `f_entry_json()` to the bridge's schema |
-| Order placed, **no stop/target** | bridge ignored `stopLoss`/`takeProfit` | Verify the bridge supports brackets; check the key names |
-| Entry fires at bar close, late | `calc_on_every_tick` off | It's ON in the auto file — confirm you loaded the auto file, not the V1 strategy |
-| Double orders | both an ARMED-as-order and a fill-order routed to the webhook | Route ARMED to a non-webhook notification; only order fills hit the bridge |
-| Position held overnight | EOD flatten didn't reach the broker | Confirm `EOD: flatten` is on and the bridge processed the `"action":"exit"` |
-| Bridge errors on ARMED text | bridge expects JSON only | Second alert for ARMED → phone/email/Discord, not the webhook |
+| No webhook received | Alert not "Order fills and alert() function calls", or wrong URL | Recreate the alert; recopy the URL |
+| Webhook received, no order | JSON schema mismatch / broker not connected | Check bridge logs; switch `Webhook format` or fix via Custom template |
+| Order placed, **no stop** | bridge ignored `stopLoss` | Verify bracket support + key names for your bridge |
+| Trail exit fired but position still open | bridge didn't process the EXIT webhook | This is the failure the broker-held initial stop bounds; fix the bridge or switch to bracket mode |
+| Stop left behind after an exit (orphan) | bridge exit didn't cancel the resting stop | Confirm the bridge's exit/flatten cancels working orders |
+| Entry fires at bar close, late | `calc_on_every_tick` off | It's ON in this file — confirm you loaded AUTO, not the V1 strategy |
+| Double orders | ARMED routed to the webhook as an order | `ARMED as JSON` OFF + second non-webhook alert for ARMED |
+| Stale order 18:00-19:00 ET (Auto) | pre-Asia gap | Guarded in the script (no orders in that hour) — if you see one, you're on an old file |
+| Position held past the session | flatten webhook missed | Confirm the bridge processed `session_end`; check alert is open-ended |
 
 ---
 
 ## 9 · Known limits
-- **Entry is market-on-fill** (the bridge market-buys when TV's stop fills) → a tick or two of slippage
-  vs the exact level. Modeled by the slippage setting; small on liquid SPY/QQQ/MNQ.
-- **Single SL/TP bracket**, not the V1 scale-out (50%@TP1→BE→TP2). Validated and simpler; the scale-out
-  would need partial-close webhooks (a later upgrade).
-- **Options are NOT covered** — Pine can't build the contract. Use `production/HIGHSTRIKE_ORB_OPTIONS.pine` for the
-  strike suggestions and place those manually (or a bridge that constructs option orders).
-- **TradingView must keep the alert running** — it lives on their servers, but if your plan lapses or the
-  alert expires, automation stops silently. Set expiration **Open-ended** and watch your alert count.
+- **Entry is market-on-fill** at the bridge → a tick or two of slippage vs the level. Asia/London are
+  more slippage-sensitive (validated to 2-3×, but paper-verify YOUR bridge's latency).
+- **The trail lives in TradingView**, not at the broker (unless your bridge supports `stop_update`).
+  The broker-held initial structure stop bounds the damage of a dead webhook pipe; bracket mode
+  removes the dependency entirely.
+- **The scale-out exit is not offered here** — partial-close webhooks are bridge-specific; trail
+  (validated better) and bracket cover automation.
+- **Options are NOT covered** — use `production/HIGHSTRIKE_ORB_OPTIONS.pine` manually.
+- **TradingView must keep the alert running** — open-ended expiration, watch your alert count, and
+  re-create the alert after every script update (an edited script detaches its alerts!).

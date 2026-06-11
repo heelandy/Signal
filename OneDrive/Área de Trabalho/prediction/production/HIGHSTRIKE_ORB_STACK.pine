@@ -233,7 +233,9 @@ bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
 bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
 
 // ───────────────────────── GATES + FIRING ─────────────────────────
-bool window = or_set and wkday and o_now < trade_end and not na(Le)
+// auto guard: 18:00-19:00 ET (trade-day start, pre-Asia-OR) still carries yesterday's RTH levels — no signals there
+bool stale_gap = is_auto and o_now < 60
+bool window = or_set and wkday and o_now < trade_end and not na(Le) and not stale_gap
 bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok
 bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok
 if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries

@@ -1,71 +1,133 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © heelandy
 // ═══════════════════════════════════════════════════════════════════
-// HIGHSTRIKE ORB — AUTOMATION (webhook) engine. INDEPENDENT of the V1 strategy/indicator.
-// Same gated ORB stop-entry, but a SINGLE SL/TP bracket (fully automatable) instead of the scale-out.
-// Emits webhook JSON for a bridge (TradersPost -> Alpaca for SPY/QQQ shares; Tradovate/PickMyTrade
-// for MNQ futures). Validated single-bracket (stop-entry, all-day, EOD-flat):
-//   QQQ 15m 2R: +0.37R PF 2.00 win 59% ; NQ 15m 2R: +0.31R PF 1.80 ; 3R bumps expectancy + CI.
+// HIGHSTRIKE ORB — AUTO  (webhook automation twin of HIGHSTRIKE_ORB_STACK · NQ/MNQ 5m primary)
+// Same validated engine as the STACK indicator, as an executable strategy that emits broker-ready
+// webhook JSON. Validated stack (walk-forward graduated):
+//   • SESSIONS    — US RTH (flagship) + Asia/Tokyo (F22) + London (F29), all 17/17 yrs on NQ 5m,
+//                   plus an Auto mode that runs all three OR cycles per trade-day by the clock.
+//   • TREND GATE  — TF-adaptive HH/HL swing-STRUCTURE state (st_state) ≤5m, EMA ≥15m       (F20)
+//   • VWAP CAP    — entry order only rests while the level is ≤ k·ATR beyond session VWAP   (F16)
+//   • STOP        — STRUCTURE-anchored at the last HH/HL swing (~half the risk, exp +0.74→+1.00R) (F25b)
+//   • EXIT        — TRAIL 2ATR chandelier (cut short / run long); broker-held fixed-TP bracket kept
+//                   as a fallback mode (most robust if the webhook pipe dies mid-trade)       (F27b)
 //
-// ALERTS this fires (set ONE alert on this strategy = "Order fills and alert() function calls",
-// webhook = your bridge URL):
-//   • ARMED   (alert()) — heads-up the moment a setup is ready, before the touch
-//   • ENTRY   (order-fill alert_message) — bracket order JSON (entry + SL + TP) when the stop fills
-//   • EXIT/EOD(alert()) — flatten + cancel at the session close
-// See AUTOMATION_SETUP.md for the full broker/bridge/paper-account playbook.
+// WEBHOOK LAYER (provider-agnostic — ready for whenever the keys/URLs arrive):
+//   Format presets: TradersPost · PickMyTrade/Tradovate · Generic JSON (for an n8n/CF-worker relay
+//   that fans out to MULTIPLE accounts/brokers) · Custom template (%TICKER% %ACTION% %QTY% %ENTRY%
+//   %STOP% %TP% %EVENT% placeholders). Token / account-id / extra-raw-JSON inputs are embedded into
+//   every payload. One TradingView alert = ONE webhook URL, so multi-PROVIDER = either the Generic
+//   format into a relay, or this script added twice with different presets.
+//
+// ALERTS it fires (set ONE alert = "Order fills and alert() function calls", webhook = bridge URL):
+//   • ARMED      (alert)       — heads-up when a setup is ready, before the touch (text or JSON)
+//   • ENTRY      (order fill)  — entry + initial structure SL (+ TP in bracket mode) as JSON
+//   • TRAIL SYNC (alert, opt.) — stop-update JSON each time the chandelier ratchets ≥ N ticks (relay/PMT)
+//   • EXIT       (order fill)  — flatten JSON when the trail/stop/TP fills in TV
+//   • SESSION END(order fill)  — flatten JSON at the session cutoff (nothing held across sessions)
+// In TRAIL mode the broker holds the INITIAL structure stop as the catastrophic bracket; the
+// chandelier is managed here and exits by webhook (market). See docs/AUTOMATION_SETUP.md.
+// ⚠️ FUTURES (NQ1!/MNQ1!): trade-day rolls at 18:00 ET (Globex) so Asia stays contiguous.
+// ⚠️ Forward paper-test fills ≥2 weeks before sizing (the one remaining adoption gate).
 // ═══════════════════════════════════════════════════════════════════
 //@version=6
 strategy("HIGHSTRIKE ORB AUTO", overlay=true,
      initial_capital=100000, pyramiding=0, max_labels_count=100,
-     default_qty_type=strategy.fixed, default_qty_value=2,
+     default_qty_type=strategy.fixed, default_qty_value=1,
      commission_type=strategy.commission.cash_per_order, commission_value=0.52,
      slippage=2, process_orders_on_close=false, calc_on_every_tick=true)
-// COSTS PER-INSTRUMENT: defaults = futures (MNQ 0.52/order, 2-tick). For SPY/QQQ shares set
-// commission 0 + slippage 1 in Strategy Tester -> Properties (header values must be const).
-// SPEED: calc_on_every_tick=true so the entry alert fires the INSTANT price touches the level
-// (intrabar), not at the bar close — the single biggest latency factor. The ARMED alert is
-// freq_once_per_bar and only ORDER FILLS post webhooks, so intrabar recalc can't spam orders.
+// COSTS PER-INSTRUMENT: defaults = futures (MNQ 0.52/order, 2-tick). For shares set commission 0 +
+// slippage 1 in Strategy Tester -> Properties (header values must be const).
+// SPEED: calc_on_every_tick=true so the resting stop-entry fills the INSTANT price touches the level.
+// Only ORDER FILLS post the trade webhooks, so intrabar recalc can't spam orders.
 
-// ───────────────────────── INPUTS ─────────────────────────
+// ───────────────────────── SESSION ─────────────────────────
+sess_preset = input.string("US RTH (0930-1000 ET)", "Session", group="Session",
+              options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "London (0300-0330 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
+              tooltip="Auto runs all THREE cycles per trade-day: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). Each cycle flattens at its cutoff.")
+or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
+cut_custom  = input.int(300, "Custom: stop new entries after HHMM (ET)", group="Session", minval=0, maxval=2359)
+sess_tz     = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="Session")
+eod_hhmm    = input.int(1558, "RTH flatten HHMM (ET, RTH preset only)", group="Session", minval=0, maxval=2359,
+              tooltip="Standalone RTH flattens here (entries already stop at 15:00). Asia/London/Auto flatten at the session cutoff.")
+// ───────────────────────── DIRECTION / ORB ─────────────────────────
 long_on  = input.bool(true, "LONG",  group="Direction", inline="d")
 short_on = input.bool(true, "SHORT", group="Direction", inline="d")
-or_start = input.session("0930-1000", "Opening Range window (ET)", group="ORB")
-sess_tz  = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="ORB")
-trade_end_hhmm = input.int(1500, "Stop new entries after HHMM (ET)", group="ORB", minval=0, maxval=2359)
 brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
-auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
-            tooltip="<=5m -> buffer 0.0, else 0.25 ATR. Cutoff 15:00. OFF = manual.")
-reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
-            tooltip="OFF = one entry per side/day (best). ON = re-arm after price falls back inside the OR, up to N/day (dilutes the edge).")
-max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", minval=1, maxval=5)
-trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
-trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
-local_adx_min = input.float(20.0, "Local ADX min", group="Local Regime", step=1)
-local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Local Regime", step=0.25)
-block_range   = input.bool(true,  "Block in RANGE regime", group="Local Regime")
-macro_en       = input.bool(true,  "MACRO regime filter ON", group="Macro Regime")
-macro_standdown= input.bool(true,  "Macro stand-down vs SPY trend", group="Macro Regime")
-spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Macro Regime")
-vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Macro Regime")
-vix_calm = input.float(15.0, "VIX calm",     group="Macro Regime", step=1)
-vix_vol  = input.float(25.0, "VIX volatile", group="Macro Regime", step=1)
-vix_ext  = input.float(35.0, "VIX extreme",  group="Macro Regime", step=1)
-spy_adx_min = input.float(25.0, "Macro ADX min", group="Macro Regime", step=1)
-persist_n   = input.int(3, "Regime persistence bars", group="Macro Regime", minval=1)
-block_d     = input.bool(true, "Block in REGIME D", group="Macro Regime")
-block_b     = input.bool(true, "Block trend in REGIME B", group="Macro Regime")
-sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk", step=0.1)
-min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk", step=0.1)
-sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk", step=0.25)
-tp_rr       = input.float(2.0, "Take-profit R (single bracket)", group="Risk", step=0.5,
-              tooltip="Full position to TP at this R or stop at -1R. 2R = +0.37R/PF2.0/59% (QQQ). 3R = +0.40R/PF2.08 (more expectancy, same win%).")
-fixed_qty   = input.int(2, "Fixed qty: contracts/shares (0 = risk-based)", group="Sizing", minval=0,
-              tooltip="Futures: contracts. EQUITIES: SHARES (2 is tiny -> set 0 for risk-based, or a real share count).")
+auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip="<=5m -> 0.0, else 0.25 ATR. OFF = manual.")
+allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
+            tooltip="OFF = one breakout per side per session (validated default). ON = re-arm when price falls back inside the OR; capped by Max entries.")
+max_entries  = input.int(2, "Max entries per side / session", group="ORB", minval=1)
+// ───────────────────────── STRUCTURE GATE ─────────────────────────
+trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
+             options=["Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"])
+struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
+struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
+trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
+trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
+// ───────────────────────── VWAP CAP ─────────────────────────
+cap_on = input.bool(true, "VWAP-extension cap", group="VWAP cap")
+cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
+// ───────────────────────── REGIME ─────────────────────────
+local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
+local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Regime", step=0.25)
+block_range   = input.bool(true,  "Block RANGE regime", group="Regime")
+macro_en       = input.bool(true,  "MACRO filter ON", group="Regime")
+macro_standdown= input.bool(true,  "Stand-down vs SPY trend", group="Regime")
+spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Regime")
+vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Regime")
+vix_calm = input.float(15.0, "VIX calm",     group="Regime", step=1)
+vix_vol  = input.float(25.0, "VIX volatile", group="Regime", step=1)
+vix_ext  = input.float(35.0, "VIX extreme",  group="Regime", step=1)
+spy_adx_min = input.float(25.0, "Macro ADX min", group="Regime", step=1)
+persist_n   = input.int(3, "Regime persistence bars", group="Regime", minval=1)
+block_d     = input.bool(true, "Block REGIME D", group="Regime")
+block_b     = input.bool(true, "Block trend in REGIME B", group="Regime")
+// ───────────────────────── RISK PLAN (the two graduated upgrades) ─────────────────────────
+stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Risk plan",
+            options=["Structure swing (HH/HL)", "OR edge"],
+            tooltip="F25b: stop at the last HH/HL swing (vs the OR edge) ~halves risk per trade and lifts R.")
+sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
+sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+exit_mode = input.string("Trail (ATR chandelier)", "Exit", group="Risk plan",
+            options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)"],
+            tooltip="F27b: trail 2ATR beats fixed-TP on the stack (most slip-robust). Bracket mode = broker holds SL+TP, survives a dead webhook pipe — use it if the bridge can't process exit webhooks reliably.")
+trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
+tp_rr       = input.float(2.0, "Take-profit R (bracket mode)", group="Risk plan", step=0.5)
+// ───────────────────────── SIZING ─────────────────────────
+fixed_qty   = input.int(1, "Fixed qty: contracts/shares (0 = risk-based)", group="Sizing", minval=0,
+              tooltip="Futures: contracts. EQUITIES: SHARES. 0 = size from Risk $ per trade (structure stop ~halves risk, so risk-based sizes larger — capped below).")
 risk_dlr    = input.float(150.0, "Risk $ per trade (qty=0)", group="Sizing", step=25)
-eod_flat    = input.bool(true, "EOD: flatten at HHMM", group="Session")
-eod_hhmm    = input.int(1558, "EOD flatten HHMM (ET)", group="Session", minval=0, maxval=2359)
-wh_qty_ph   = input.string("{{strategy.order.contracts}}", "Webhook qty field", group="Webhook",
-              tooltip="What to send as quantity in the JSON. Default = TradingView fill-contracts placeholder. Some bridges want a fixed number.")
+max_qty     = input.int(10, "Max qty safety cap", group="Sizing", minval=1)
+// ───────────────────────── PROP EVAL GUARDRAILS (F26) ─────────────────────────
+eval_on   = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
+daily_loss= input.float(600.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
+// ───────────────────────── WEBHOOK ─────────────────────────
+wh_provider = input.string("TradersPost", "Webhook format", group="Webhook",
+              options=["TradersPost", "PickMyTrade / Tradovate", "Generic JSON (relay / multi-account)", "Custom template"],
+              tooltip="Generic JSON carries the FULL trade plan + accountIds[] — point it at a relay (n8n / Cloudflare worker / TradersPost multi-broker) to fan out to several accounts/providers. Custom template: build any schema with %TICKER% %ACTION% %QTY% %ENTRY% %STOP% %TP% %EVENT%.")
+wh_ticker_ov= input.string("", "Ticker override (blank = chart symbol)", group="Webhook",
+              tooltip="e.g. send MNQ (root) or MNQZ2026 (front month) while charting NQ1!. Leave blank to send the chart ticker.")
+wh_qty_ph   = input.string("{{strategy.order.contracts}}", "Qty field", group="Webhook",
+              tooltip="What goes in the JSON quantity. Default = TradingView fill-contracts placeholder; some bridges want a literal number.")
+wh_token    = input.string("", "API token (PickMyTrade etc.)", group="Webhook")
+wh_account  = input.string("", "Account ID (primary)", group="Webhook")
+wh_accounts = input.string("", "Account IDs, comma-separated (Generic relay, no spaces)", group="Webhook",
+              tooltip="Emitted as accountIds:[...] in Generic JSON so one webhook can drive MULTIPLE accounts via a relay. Leave blank for single-account.")
+wh_extra    = input.string("", "Extra raw JSON fields", group="Webhook",
+              tooltip='Appended verbatim into every payload, e.g. "duplicate_position_allow":true,"risk_percentage":0 — whatever the provider needs when the keys arrive.')
+armed_as_json = input.bool(false, "ARMED alert as JSON (default: human text)", group="Webhook",
+              tooltip="OFF: ARMED is a readable heads-up (route to phone/Discord). ON: ARMED is an event:armed JSON a relay can consume. Bridges that choke on non-order text need this OFF + a second non-webhook alert.")
+sync_on     = input.bool(false, "Send TRAIL stop updates to webhook", group="Webhook",
+              tooltip="ON: every time the chandelier ratchets >= N ticks, fire an event:stop_update JSON so the relay/bridge can move the broker stop. OFF (default): broker keeps the initial structure stop; the trail exits via the EXIT webhook (market). TradersPost has no stop-modify — leave OFF there.")
+sync_ticks  = input.int(20, "Min ratchet ticks per update", group="Webhook", minval=1)
+tmpl_entry  = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","quantity":%QTY%,"entry":%ENTRY%,"stopLoss":%STOP%,"takeProfit":%TP%,"event":"%EVENT%"}', "Custom ENTRY template", group="Webhook")
+tmpl_exit   = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","event":"%EVENT%"}', "Custom EXIT template", group="Webhook")
+// ───────────────────────── DISPLAY ─────────────────────────
+show_plan        = input.bool(true, "Show stop / target lines", group="Display")
+show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
+show_dash        = input.bool(true, "Show dashboard", group="Display")
 
 // ───────────────────────── CORE ─────────────────────────
 atr14 = ta.atr(14)
@@ -75,14 +137,72 @@ emaF = ta.ema(close, trend_ema_f)
 emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
+float vwap_c = ta.vwap
 pt_val = syminfo.pointvalue
-int o_now = hour(time, sess_tz) * 60 + minute(time, sess_tz)
-bool new_day = ta.change(time("D")) != 0
-bool rth = (dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday)
+// TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so a session crossing midnight stays contiguous.
+int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+int o_now  = (et_min - 1080 + 1440) % 1440
+bool is_auto = sess_preset == "Auto (Asia + London + RTH by clock)"
+bool phase_rth    = is_auto and o_now >= 930 and o_now < 1260   // 09:30-15:00 ET = RTH cycle
+bool phase_london = is_auto and o_now >= 540 and o_now < 930    // 03:00-09:30 ET = London cycle
+string or_start = is_auto ? (phase_rth ? "0930-1000" : phase_london ? "0300-0330" : "1900-2000") :
+     sess_preset == "US RTH (0930-1000 ET)" ? "0930-1000" :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "1900-2000" :
+     sess_preset == "London (0300-0330 ET)" ? "0300-0330" : or_custom
+int cut_hhmm = is_auto ? (phase_rth ? 1500 : phase_london ? 800 : 300) :
+     sess_preset == "US RTH (0930-1000 ET)" ? 1500 :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? 300 :
+     sess_preset == "London (0300-0330 ET)" ? 800 : cut_custom
+int trade_end = ((cut_hhmm / 100) * 60 + (cut_hhmm % 100) - 1080 + 1440) % 1440
+// flatten: standalone RTH at eod_hhmm (entries stop 15:00); every other mode at the session cutoff
+int flat_hhmm = (not is_auto and sess_preset == "US RTH (0930-1000 ET)") ? eod_hhmm : cut_hhmm
+int flat_min  = ((flat_hhmm / 100) * 60 + (flat_hhmm % 100) - 1080 + 1440) % 1440
+string sess_lbl = is_auto ? (phase_rth ? "RTH" : phase_london ? "London" : "Asia") :
+     sess_preset == "US RTH (0930-1000 ET)" ? "RTH" :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" :
+     sess_preset == "London (0300-0330 ET)" ? "London" : "Custom"
+bool new_day = ta.change(time("D")) != 0                        // CME futures: rolls at 18:00 ET = trade-day start
+int td_dow = dayofweek(time + 6 * 60 * 60 * 1000, sess_tz)      // weekday of the TRADE-day (Sun-eve = Mon)
+bool wkday = td_dow != dayofweek.saturday and td_dow != dayofweek.sunday
 int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
-int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
-int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+
+// ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
+float ph = ta.pivothigh(high, struct_lb, struct_lb)
+float pl = ta.pivotlow(low,  struct_lb, struct_lb)
+var float ph_last = na
+var float ph_prev = na
+var float pl_last = na
+var float pl_prev = na
+var int   st_state = 0
+int st_prev = st_state
+if not na(ph)
+    if na(ph_last) or math.abs(ph - ph_last) / ph_last * 100.0 >= struct_tol
+        ph_prev := ph_last
+        ph_last := ph
+if not na(pl)
+    if na(pl_last) or math.abs(pl - pl_last) / pl_last * 100.0 >= struct_tol
+        pl_prev := pl_last
+        pl_last := pl
+bool s_hh = not na(ph_last) and not na(ph_prev) and ph_last > ph_prev
+bool s_lh = not na(ph_last) and not na(ph_prev) and ph_last < ph_prev
+bool s_hl = not na(pl_last) and not na(pl_prev) and pl_last > pl_prev
+bool s_ll = not na(pl_last) and not na(pl_prev) and pl_last < pl_prev
+if s_hh and s_hl
+    st_state := 1
+else if s_ll and s_lh
+    st_state := 2
+else if (s_hh and s_ll) or (s_hl and s_lh)
+    st_state := 3
+if st_prev == 2 and not na(ph_last) and close > ph_last and close[1] <= ph_last
+    st_state := 0
+if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
+    st_state := 0
+
+// ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
+bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
+bool eff_up   = use_struct ? (st_state == 1) : trend_up
+bool eff_down = use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -119,12 +239,13 @@ bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
 int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
 bool local_ok = not block_range or local_regime != 2
 
-// ───────────────────────── OPENING RANGE + LEVELS (single bracket) ─────────────────────────
+// ───────────────────────── OPENING RANGE ─────────────────────────
 bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+bool reset_now = is_auto ? (in_or and not in_or[1]) : new_day   // auto: reset at each session's OR start
 var float or_high = na
 var float or_low  = na
 var bool  or_set  = false
-if new_day
+if reset_now
     or_high := na
     or_low  := na
     or_set  := false
@@ -134,46 +255,55 @@ if in_or
 if not in_or and not na(or_high)
     or_set := true
 float brk_buf = atr14 * eff_brk
+
+// ───────────────────────── ENTRY + STOP LEVELS ─────────────────────────
 var float Le = na
-var float Ls = na
 var float Se = na
-var float Ss = na
-var bool  armed_l = true
-var bool  armed_s = true
-var int   day_n = 0
-if new_day
+var bool  traded_l = false
+var bool  traded_s = false
+var int   n_l = 0
+var int   n_s = 0
+if reset_now
     Le := na
-    Ls := na
     Se := na
-    Ss := na
-    armed_l := true
-    armed_s := true
-    day_n := 0
-if or_set and na(Le) and not na(or_high) and not na(or_low)
-    Le := or_high + brk_buf
-    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
-    Se := or_low  - brk_buf
-    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
-float Ltp = Le + (Le - Ls) * tp_rr        // single take-profit
-float Stp = Se - (Ss - Se) * tp_rr
-bool window = or_set and rth and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok
-bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok
-if reentry and not na(or_high) and close < or_high
-    armed_l := true
-if reentry and not na(or_low) and close > or_low
-    armed_s := true
-var bool traded_l = false
-var bool traded_s = false
-if new_day
     traded_l := false
     traded_s := false
-bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
-bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
+    n_l := 0
+    n_s := 0
+if or_set and na(Le) and not na(or_high) and not na(or_low)
+    Le := or_high + brk_buf                                     // breakout entry levels (frozen at OR close)
+    Se := or_low  - brk_buf
+// stop anchor: last HH/HL swing (structure) or the OR edge. Recomputed while ARMED, frozen at fill.
+float anchorL = (stop_mode == "Structure swing (HH/HL)" and not na(pl_last)) ? pl_last : or_low
+float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? ph_last : or_high
+var float Ls = na
+var float Ss = na
+if not na(Le) and strategy.position_size <= 0
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+if not na(Se) and strategy.position_size >= 0
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+bool is_trail = exit_mode == "Trail (ATR chandelier)"
+float Ltp = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp_rr      // bracket-mode targets only
+float Stp = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp_rr
+
+// ───────────────────────── VWAP-EXTENSION CAP (order rests only while NEAR) ─────────────────────────
+float extL = na(Le) ? na : (Le - vwap_c) / atr14
+float extS = na(Se) ? na : (vwap_c - Se) / atr14
+bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
+bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
+
+// ───────────────────────── GATES ─────────────────────────
+// auto guard: 18:00-19:00 ET (trade-day start, pre-Asia-OR) still carries yesterday's RTH levels — no orders there
+bool stale_gap = is_auto and o_now < 60
+bool window = or_set and wkday and o_now < trade_end and not na(Le) and not stale_gap
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok
+if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
+    traded_l := false
+if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
+    traded_s := false
 
 // ───────────────────────── EVAL guardrails ─────────────────────────
-eval_on   = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
-daily_loss= input.float(600.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
 var float day_eq = na
 if new_day or na(day_eq)
     day_eq := strategy.equity
@@ -183,84 +313,153 @@ bool flat = strategy.position_size == 0
 f_units(entry, stop) =>
     rk = math.abs(entry - stop)
     int u = int(fixed_qty > 0 ? fixed_qty : (rk > 0 ? math.floor(risk_dlr / (rk * pt_val)) : 0))
-    math.max(1, u)
+    math.min(max_qty, math.max(1, u))
 
-// ───────────────────────── WEBHOOK JSON (TradersPost-style; adapt per bridge in the doc) ─────────────────────────
-f_entry_json(act, sl, tp) =>
-    '{"ticker":"' + syminfo.ticker + '","action":"' + act + '","quantity":' + wh_qty_ph +
-      ',"stopLoss":{"type":"stop","stopPrice":' + str.tostring(sl, format.mintick) +
-      '},"takeProfit":{"type":"limit","limitPrice":' + str.tostring(tp, format.mintick) + '}}'
-string flat_json = '{"ticker":"' + syminfo.ticker + '","action":"exit"}'
+// ───────────────────────── WEBHOOK JSON BUILDERS (provider switch) ─────────────────────────
+string wh_ticker = wh_ticker_ov == "" ? syminfo.ticker : wh_ticker_ov
+f_px(p) => str.tostring(p, format.mintick)
+f_extra() => wh_extra == "" ? "" : "," + wh_extra
+f_accounts() =>
+    string out = ""
+    if wh_accounts != ""
+        arr = str.split(wh_accounts, ",")
+        for i = 0 to array.size(arr) - 1
+            out := out + (i > 0 ? "," : "") + '"' + array.get(arr, i) + '"'
+    out == "" ? (wh_account == "" ? "" : '"' + wh_account + '"') : out
+f_tmpl(t, act, e, sl, tp, ev) =>
+    string s = str.replace_all(t, "%TICKER%", wh_ticker)
+    s := str.replace_all(s, "%ACTION%", act)
+    s := str.replace_all(s, "%QTY%", wh_qty_ph)
+    s := str.replace_all(s, "%ENTRY%", na(e) ? "0" : f_px(e))
+    s := str.replace_all(s, "%STOP%", na(sl) ? "0" : f_px(sl))
+    s := str.replace_all(s, "%TP%", na(tp) ? "0" : f_px(tp))
+    s := str.replace_all(s, "%EVENT%", ev)
+    s
+// ENTRY payload: act = buy|sell. Trail mode sends NO take-profit (broker holds only the structure SL).
+f_entry_json(act, e, sl, tp) =>
+    string j = ""
+    if wh_provider == "TradersPost"
+        j := '{"ticker":"' + wh_ticker + '","action":"' + act + '","quantity":' + wh_qty_ph +
+             ',"stopLoss":{"type":"stop","stopPrice":' + f_px(sl) + '}' +
+             (is_trail or na(tp) ? "" : ',"takeProfit":{"type":"limit","limitPrice":' + f_px(tp) + '}') + f_extra() + '}'
+    else if wh_provider == "PickMyTrade / Tradovate"
+        // verify key names vs current PickMyTrade docs when the token arrives
+        j := '{"symbol":"' + wh_ticker + '","data":"' + act + '","quantity":' + wh_qty_ph +
+             ',"price":0,"sl":' + f_px(sl) + ',"tp":' + (is_trail or na(tp) ? "0" : f_px(tp)) +
+             ',"token":"' + wh_token + '","account_id":"' + wh_account + '","date":"{{timenow}}"' + f_extra() + '}'
+    else if wh_provider == "Generic JSON (relay / multi-account)"
+        j := '{"event":"entry","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","action":"' + act +
+             '","quantity":' + wh_qty_ph + ',"entryLevel":' + f_px(e) + ',"stopLoss":' + f_px(sl) +
+             ',"takeProfit":' + (is_trail or na(tp) ? "null" : f_px(tp)) +
+             ',"exitMode":"' + (is_trail ? "trail" : "bracket") + '","trailAtr":' + str.tostring(trail_atr) +
+             ',"session":"' + sess_lbl + '","timeframe":"' + timeframe.period + '"' +
+             (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+             (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+    else
+        j := f_tmpl(tmpl_entry, act, e, sl, tp, "entry")
+    j
+// EXIT / flatten payload: ev = exit (stop/trail/tp fill) | session_end | eval_halt
+f_exit_json(ev) =>
+    string j = ""
+    if wh_provider == "TradersPost"
+        j := '{"ticker":"' + wh_ticker + '","action":"exit"' + f_extra() + '}'
+    else if wh_provider == "PickMyTrade / Tradovate"
+        j := '{"symbol":"' + wh_ticker + '","data":"close","quantity":0,"price":0' +
+             ',"token":"' + wh_token + '","account_id":"' + wh_account + '","date":"{{timenow}}"' + f_extra() + '}'
+    else if wh_provider == "Generic JSON (relay / multi-account)"
+        j := '{"event":"' + ev + '","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","action":"exit"' +
+             ',"session":"' + sess_lbl + '"' + (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+             (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+    else
+        j := f_tmpl(tmpl_exit, "exit", na, na, na, ev)
+    j
+f_stop_update_json(sl) =>
+    '{"event":"stop_update","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","stopLoss":' + f_px(sl) +
+     ',"session":"' + sess_lbl + '"' + (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+     (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+f_armed_json(side, e, sl, tp) =>
+    '{"event":"armed","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","side":"' + side +
+     '","entryLevel":' + f_px(e) + ',"stopLoss":' + f_px(sl) +
+     ',"takeProfit":' + (is_trail or na(tp) ? "null" : f_px(tp)) + ',"session":"' + sess_lbl + '","sentAt":"{{timenow}}"' + f_extra() + '}'
 
-// ───────────────────────── ARMED pre-alert ─────────────────────────
-bool arm_l = window and ok_l and gate_long  and not eval_block and (Le - Ls > 0)
-bool arm_s = window and ok_s and gate_short and not eval_block and (Ss - Se > 0)
+// ───────────────────────── ARMED + RESTING ORDERS ─────────────────────────
+// the order rests ONLY while every gate (incl. the VWAP cap) holds — cancel pulls it the moment one breaks
+bool past_flat = o_now >= flat_min
+bool arm_l = window and not past_flat and not traded_l and gate_long  and cap_long_ok  and not eval_block and flat and not na(Ls) and (Le - Ls > 0)
+bool arm_s = window and not past_flat and not traded_s and gate_short and cap_short_ok and not eval_block and flat and not na(Ss) and (Ss - Se > 0)
 if arm_l and not arm_l[1]
-    alert("HIGHSTRIKE AUTO " + syminfo.ticker + " LONG ARMED — buy-stop " + str.tostring(Le, format.mintick) + " | SL " + str.tostring(Ls, format.mintick) + " | TP " + str.tostring(Ltp, format.mintick), alert.freq_once_per_bar)
+    alert(armed_as_json ? f_armed_json("long", Le, Ls, Ltp) :
+         "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] LONG ARMED — buy-stop " + f_px(Le) + " | SL " + f_px(Ls) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Ltp)), alert.freq_once_per_bar)
 if arm_s and not arm_s[1]
-    alert("HIGHSTRIKE AUTO " + syminfo.ticker + " SHORT ARMED — sell-stop " + str.tostring(Se, format.mintick) + " | SL " + str.tostring(Ss, format.mintick) + " | TP " + str.tostring(Stp, format.mintick), alert.freq_once_per_bar)
-
-// ───────────────────────── EXECUTION (resting stop entry + single bracket) ─────────────────────────
-var float t_sl = na
-var float t_tp = na
-if arm_l and flat
-    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, alert_message=f_entry_json("buy", Ls, Ltp))
+    alert(armed_as_json ? f_armed_json("short", Se, Ss, Stp) :
+         "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] SHORT ARMED — sell-stop " + f_px(Se) + " | SL " + f_px(Ss) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Stp)), alert.freq_once_per_bar)
+if arm_l
+    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, alert_message=f_entry_json("buy", Le, Ls, Ltp))
 else
     strategy.cancel("L")
-if arm_s and flat
-    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, alert_message=f_entry_json("sell", Ss, Stp))
+if arm_s
+    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, alert_message=f_entry_json("sell", Se, Ss, Stp))
 else
     strategy.cancel("S")
+
+// ───────────────────────── POSITION MANAGEMENT (frozen SL -> trail ratchet OR broker bracket) ─────────────────────────
+var float t_sl = na
+var float t_tp = na
+var float sync_sl = na        // last stop level pushed to the webhook (trail sync)
 bool just_long  = strategy.position_size > 0 and strategy.position_size[1] <= 0
 bool just_short = strategy.position_size < 0 and strategy.position_size[1] >= 0
 if just_long
     traded_l := true
-    armed_l := false
-    day_n := day_n + 1
+    n_l += 1
     t_sl := Ls
     t_tp := Ltp
+    sync_sl := Ls
 if just_short
     traded_s := true
-    armed_s := false
-    day_n := day_n + 1
+    n_s += 1
     t_sl := Ss
     t_tp := Stp
-// internal TV bracket (so the Strategy Tester matches the bridge's broker bracket)
+    sync_sl := Ss
 if strategy.position_size > 0
-    strategy.exit("Lx", from_entry="L", stop=t_sl, limit=t_tp)
+    if is_trail and not just_long
+        t_sl := math.max(t_sl, close - trail_atr * atr14)            // chandelier ratchet
+    strategy.exit("Lx", from_entry="L", stop=t_sl, limit=is_trail ? na : t_tp, alert_message=f_exit_json("exit"))
 if strategy.position_size < 0
-    strategy.exit("Sx", from_entry="S", stop=t_sl, limit=t_tp)
+    if is_trail and not just_short
+        t_sl := math.min(t_sl, close + trail_atr * atr14)
+    strategy.exit("Sx", from_entry="S", stop=t_sl, limit=is_trail ? na : t_tp, alert_message=f_exit_json("exit"))
+// optional trail->broker stop sync (relay/PMT only; OFF default — see header)
+if sync_on and is_trail and not flat and math.abs(t_sl - sync_sl) >= sync_ticks * syminfo.mintick
+    alert(f_stop_update_json(t_sl), alert.freq_once_per_bar)
+    sync_sl := t_sl
 
-// EOD flat + webhook flatten
-var bool eod_done = false
-if new_day
-    eod_done := false
-int eod_min = (eod_hhmm / 100) * 60 + (eod_hhmm % 100)
-if eod_flat and not eod_done and o_now >= eod_min
-    if strategy.position_size != 0
-        strategy.close_all(comment="EOD")
-        alert(flat_json, alert.freq_once_per_bar)
-    eod_done := true
+// ───────────────────────── SESSION-END FLATTEN ─────────────────────────
+var bool flat_sent = false
+if just_long or just_short
+    flat_sent := false
+if (past_flat or reset_now) and strategy.position_size != 0 and not flat_sent
+    strategy.close_all(comment="SESSION END", alert_message=f_exit_json("session_end"))
+    flat_sent := true
+if eval_block and strategy.position_size != 0 and not flat_sent                  // eval halt: flatten + stop for the day
+    strategy.close_all(comment="EVAL HALT", alert_message=f_exit_json("eval_halt"))
+    flat_sent := true
 
 // ───────────────────────── VISUALS ─────────────────────────
-show_line_labels = input.bool(true, "Write ENTRY / SL / TP on the chart lines", group="Display")
-bool l_live = (window and ok_l) or strategy.position_size > 0
-bool s_live = (window and ok_s) or strategy.position_size < 0
-float a_lsl = strategy.position_size > 0 ? t_sl : Ls
-float a_ltp = strategy.position_size > 0 ? t_tp : Ltp
-float a_ssl = strategy.position_size < 0 ? t_sl : Ss
-float a_stp = strategy.position_size < 0 ? t_tp : Stp
-plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 60), style=plot.style_linebr)
-plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 60), style=plot.style_linebr)
+bool l_live = arm_l or strategy.position_size > 0
+bool s_live = arm_s or strategy.position_size < 0
+float l_stop_now = strategy.position_size > 0 ? t_sl : Ls
+float s_stop_now = strategy.position_size < 0 ? t_sl : Ss
+plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
+plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
 plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
-plot(show_line_labels and l_live ? a_lsl : na, "Long SL",  color=color.new(color.red, 25),  style=plot.style_linebr)
-plot(show_line_labels and l_live ? a_ltp : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
-plot(show_line_labels and s_live ? a_ssl : na, "Short SL", color=color.new(color.red, 25),  style=plot.style_linebr)
-plot(show_line_labels and s_live ? a_stp : na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(show_plan and l_live ? l_stop_now : na, "Long stop",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(show_plan and s_live ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(show_plan and l_live and not is_trail ? (strategy.position_size > 0 ? t_tp : Ltp) : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(show_plan and s_live and not is_trail ? (strategy.position_size < 0 ? t_tp : Stp) : na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr)
 plotshape(just_long,  "Long entry",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="BUY",  textcolor=color.white, size=size.tiny)
 plotshape(just_short, "Short entry", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.tiny)
-// WRITE ENTRY / SL / TP on the chart lines (single-bracket TP; armed AND while in the trade)
+bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 f_setlbl(lbl, cond, price, txt, col) =>
     label out = lbl
     if cond and not na(price)
@@ -280,22 +479,36 @@ var label lbl_Se = na
 var label lbl_Ss = na
 var label lbl_St = na
 if barstate.islast and show_line_labels
-    string rt = str.tostring(tp_rr, "#.#")
-    lbl_Le := f_setlbl(lbl_Le, l_live, Le,    "▲ ENTRY " + str.tostring(Le, format.mintick),                 color.new(color.yellow, 0))
-    lbl_Ls := f_setlbl(lbl_Ls, l_live, a_lsl, "SL " + str.tostring(a_lsl, format.mintick) + "  -1R",          color.new(color.red, 0))
-    lbl_Lt := f_setlbl(lbl_Lt, l_live, a_ltp, "TP " + str.tostring(a_ltp, format.mintick) + "  +" + rt + "R", color.new(color.green, 0))
-    lbl_Se := f_setlbl(lbl_Se, s_live, Se,    "▼ ENTRY " + str.tostring(Se, format.mintick),                 color.new(color.yellow, 0))
-    lbl_Ss := f_setlbl(lbl_Ss, s_live, a_ssl, "SL " + str.tostring(a_ssl, format.mintick) + "  -1R",          color.new(color.red, 0))
-    lbl_St := f_setlbl(lbl_St, s_live, a_stp, "TP " + str.tostring(a_stp, format.mintick) + "  +" + rt + "R", color.new(color.green, 0))
+    string trail_txt = "TRAIL " + str.tostring(trail_atr, "#.#") + "ATR "
+    lbl_Le := f_setlbl(lbl_Le, l_live, Le, "▲ ENTRY " + f_px(Le), color.new(color.yellow, 0))
+    lbl_Ls := f_setlbl(lbl_Ls, l_live, l_stop_now, (strategy.position_size > 0 and is_trail ? trail_txt : "STOP ") + f_px(l_stop_now), color.new(color.red, 0))
+    lbl_Lt := f_setlbl(lbl_Lt, l_live and not is_trail, strategy.position_size > 0 ? t_tp : Ltp, "TP +" + str.tostring(tp_rr, "#.#") + "R", color.new(color.green, 0))
+    lbl_Se := f_setlbl(lbl_Se, s_live, Se, "▼ ENTRY " + f_px(Se), color.new(color.yellow, 0))
+    lbl_Ss := f_setlbl(lbl_Ss, s_live, s_stop_now, (strategy.position_size < 0 and is_trail ? trail_txt : "STOP ") + f_px(s_stop_now), color.new(color.red, 0))
+    lbl_St := f_setlbl(lbl_St, s_live and not is_trail, strategy.position_size < 0 ? t_tp : Stp, "TP +" + str.tostring(tp_rr, "#.#") + "R", color.new(color.green, 0))
 
-var table t = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
-if barstate.islast
-    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : not window ? "window closed" : (arm_l or arm_s) ? "ARMED — waiting for touch" : "waiting (no gated setup)"
+// ───────────────────────── DASHBOARD ─────────────────────────
+f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
+var table t = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_dash
+    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : "waiting (no gated setup)"
+    color stc = strategy.position_size != 0 ? color.lime : (arm_l or arm_s) ? color.aqua : eval_block ? color.red : color.orange
+    string prov = wh_provider == "TradersPost" ? "TradersPost" : wh_provider == "PickMyTrade / Tradovate" ? "PickMyTrade" : wh_provider == "Generic JSON (relay / multi-account)" ? "Generic→relay" : "Custom"
     table.cell(t,0,0,"ORB AUTO", text_color=color.yellow, text_size=size.small)
-    table.cell(t,1,0, syminfo.ticker, text_color=color.silver, text_size=size.small)
-    table.cell(t,0,1,"Status", text_color=color.silver, text_size=size.tiny)
-    table.cell(t,1,1, st, text_color=strategy.position_size!=0?color.lime:(arm_l or arm_s)?color.aqua:color.orange, text_size=size.tiny)
-    table.cell(t,0,2,"Bracket", text_color=color.silver, text_size=size.tiny)
-    table.cell(t,1,2, "SL -1R / TP +" + str.tostring(tp_rr,"#.#") + "R", text_color=color.silver, text_size=size.tiny)
-    table.cell(t,0,3,"Regime", text_color=color.silver, text_size=size.tiny)
-    table.cell(t,1,3, regime + (spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,1,0, wh_ticker + "  " + timeframe.period, text_color=color.silver, text_size=size.small)
+    table.cell(t,0,1,"Session", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,1, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,0,2,"Status", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,2, st, text_color=stc, text_size=size.tiny)
+    table.cell(t,0,3,"Trend gate", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,3, use_struct ? "STRUCT: " + f_st(st_state) : "EMA: " + (trend_up ? "UP" : trend_down ? "DOWN" : "flat"), text_color=eff_up ? color.lime : eff_down ? color.red : color.gray, text_size=size.tiny)
+    table.cell(t,0,4,"Stop", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,4, (stop_mode == "Structure swing (HH/HL)" ? "structure swing" : "OR edge"), text_color=color.red, text_size=size.tiny)
+    table.cell(t,0,5,"Exit", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,5, is_trail ? "trail " + str.tostring(trail_atr, "#.#") + "ATR (broker SL = initial)" : "bracket SL/TP +" + str.tostring(tp_rr, "#.#") + "R", text_color=color.teal, text_size=size.tiny)
+    table.cell(t,0,6,"VWAP cap", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,6, not cap_on ? "off" : (cap_long_ok and cap_short_ok ? "NEAR ✓" : "EXT ⚠ (order pulled)"), text_color=cap_long_ok and cap_short_ok ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(t,0,7,"Regime", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,7, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,0,8,"Webhook", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,8, prov + (wh_account != "" ? " · acct set" : "") + (wh_accounts != "" ? " · multi" : ""), text_color=color.silver, text_size=size.tiny)
