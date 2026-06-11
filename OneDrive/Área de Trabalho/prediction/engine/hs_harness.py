@@ -54,8 +54,10 @@ def dmi(h, l, c, length, adxlen):
     return plus_di, minus_di, rma(dx.fillna(0), adxlen)
 
 
-def pivots(values, left, right, kind):
+def pivots(values, left, right, kind, tie="strict"):
     """Pine ta.pivothigh/low with PER-BAR lookback (left==right==lookback[i]).
+    tie='strict' = strict > / < on BOTH sides; tie='tv' = TradingView ta.pivothigh exactly (a TIE is
+    allowed on the LEFT, strict on the RIGHT — so an equal-high plateau pivots at its first bar).
     Returns a Series: at the confirm bar (right bars after the pivot) the pivot price, else NaN."""
     v = values.to_numpy(); n = len(v); out = np.full(n, np.nan)
     lb = (left.to_numpy() if hasattr(left, "to_numpy") else np.full(n, left)).astype(int)
@@ -67,10 +69,12 @@ def pivots(values, left, right, kind):
         c = v[ci]
         seg = v[ci - L: i + 1]          # L left + center + L right
         if kind == "high":
-            if c > seg[:L].max() and c > seg[L + 1:].max():
+            okL = c >= seg[:L].max() if tie == "tv" else c > seg[:L].max()
+            if okL and c > seg[L + 1:].max():
                 out[i] = c
         else:
-            if c < seg[:L].min() and c < seg[L + 1:].min():
+            okL = c <= seg[:L].min() if tie == "tv" else c < seg[:L].min()
+            if okL and c < seg[L + 1:].min():
                 out[i] = c
     return pd.Series(out, index=values.index)
 
@@ -80,6 +84,7 @@ def pivots(values, left, right, kind):
 class P:
     struct_lb_fix: int = 5; struct_adaptive: bool = False   # adaptive OFF = exact reconcile baseline
     struct_tol_pct: float = 0.10
+    pivot_tie: str = "strict"          # 'strict' (both sides) or 'tv' = TradingView ta.pivothigh (tie OK on left)
     momo_en: bool = True; momo_thresh: float = 0.3
     trend_ema_f: int = 21; trend_ema_s: int = 50; trendfilter_en: bool = True
     livebreak_en: bool = True
@@ -128,8 +133,8 @@ def compute_state(df, p: P = P()):
     d = _ensure_externals(d, hlc3, h, l, c)
 
     # --- pivots ---
-    ph = pivots(h, struct_lb, struct_lb, "high")
-    pl = pivots(l, struct_lb, struct_lb, "low")
+    ph = pivots(h, struct_lb, struct_lb, "high", p.pivot_tie)
+    pl = pivots(l, struct_lb, struct_lb, "low", p.pivot_tie)
 
     # --- structure state machine (bar loop = exact Pine sequential semantics) ---
     n = len(d)
@@ -183,6 +188,7 @@ def compute_state(df, p: P = P()):
         state_arr[i] = st_state
         sph_arr[i] = st_ph_last; spl_arr[i] = st_pl_last
     d["st_state"] = state_arr
+    d["sph"] = sph_arr; d["spl"] = spl_arr     # running last swing high / low levels (for structure-anchored stops)
     for k, a in [("is_hh", is_hh), ("is_lh", is_lh), ("is_hl", is_hl), ("is_ll", is_ll),
                  ("bos_bull", bos_bull), ("bos_bear", bos_bear),
                  ("choch_bull", choch_bull), ("choch_bear", choch_bear)]:

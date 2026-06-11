@@ -45,8 +45,14 @@ mtf_min  = input.int(2, "Min higher-TFs that must agree (0-3)", group="MTF Confi
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk plan", step=0.1)
 min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
 sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+stop_mode = input.string("OR edge", "Stop placement", group="Risk plan", options=["OR edge", "Structure swing (HH/HL)"],
+            tooltip="Default 'OR edge' = validated production. 'Structure swing' rests the stop at the last HH/HL swing (research F25b: ~half the risk, higher R, walk-forward-validated on the structure stack) — opt-in.")
+struct_lb = input.int(5, "Structure swing lookback (L=R)", group="Risk plan", minval=2)
 tp1_rr      = input.float(1.0, "TP1 R", group="Risk plan", step=0.25)
 tp2_rr      = input.float(4.0, "TP2 R", group="Risk plan", step=0.25)
+exit_mode = input.string("Scale to TP", "Exit", group="Risk plan", options=["Scale to TP", "Trail (ATR chandelier)"],
+            tooltip="Default 'Scale to TP' = validated production. 'Trail' rides the runner with an ATR chandelier (research F27b: beats scale on the structure stack) — opt-in.")
+trail_atr = input.float(2.0, "Trail x ATR (trail mode)", group="Risk plan", step=0.5, minval=0.5)
 show_plan   = input.bool(true, "Show SL / TP1 / TP2 lines", group="Risk plan")
 show_line_labels = input.bool(true, "Write ENTRY / SL / TP1 / TP2 on the chart lines", group="Risk plan")
 show_panel  = input.bool(true, "Show position-tool panel (boxes + labels)", group="Risk plan",
@@ -138,6 +144,15 @@ if not in_or and not na(or_high)
     or_set := true
 // resting-stop entry levels + full trade plan frozen at OR close; FILL = price TOUCHES the level
 float brk_buf = atr14 * eff_brk
+// last confirmed HH/HL swing — for the optional structure-anchored stop (F25b)
+float _ph = ta.pivothigh(high, struct_lb, struct_lb)
+float _pl = ta.pivotlow(low,  struct_lb, struct_lb)
+var float sw_hi = na
+var float sw_lo = na
+if not na(_ph)
+    sw_hi := _ph
+if not na(_pl)
+    sw_lo := _pl
 var float Le = na
 var float Ls = na
 var float Se = na
@@ -158,10 +173,12 @@ if new_day
     armed_s := true
     day_n := 0
 if or_set and na(Le) and not na(or_high) and not na(or_low)
+    float aL = (stop_mode == "Structure swing (HH/HL)" and not na(sw_lo)) ? sw_lo : or_low
+    float aS = (stop_mode == "Structure swing (HH/HL)" and not na(sw_hi)) ? sw_hi : or_high
     Le := or_high + brk_buf
-    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
     Se := or_low  - brk_buf
-    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
 float Lt1 = Le + (Le - Ls) * tp1_rr
 float Lt2 = Le + (Le - Ls) * tp2_rr
 float St1 = Se - (Ss - Se) * tp1_rr
@@ -186,20 +203,35 @@ if short_fire
     traded_s := true
     armed_s := false
     day_n := day_n + 1
-// keep the plan on screen AFTER the fill too (until SL / TP2 / session end) — for managing the live trade
+// keep the plan on screen AFTER the fill too (until stop / TP2 / session end) — for managing the live trade
+bool is_trail = exit_mode == "Trail (ATR chandelier)"
 var bool in_long  = false
 var bool in_short = false
+var float lstop = na
+var float sstop = na
 if new_day
     in_long  := false
     in_short := false
+    lstop := na
+    sstop := na
 if long_fire
     in_long  := true
+    lstop := Ls
 if short_fire
     in_short := true
-if in_long and (low <= Ls or high >= Lt2)
-    in_long  := false
-if in_short and (high >= Ss or low <= St2)
-    in_short := false
+    sstop := Ss
+if in_long
+    if is_trail
+        lstop := math.max(lstop, close - trail_atr * atr14)
+    if (is_trail ? low <= lstop : (low <= Ls or high >= Lt2))
+        in_long  := false
+if in_short
+    if is_trail
+        sstop := math.min(sstop, close + trail_atr * atr14)
+    if (is_trail ? high >= sstop : (high >= Ss or low <= St2))
+        in_short := false
+float l_stop_now = (is_trail and in_long) ? lstop : Ls
+float s_stop_now = (is_trail and in_short) ? sstop : Ss
 bool l_live = (window and not traded_l) or in_long
 bool s_live = (window and not traded_s) or in_short
 
@@ -212,12 +244,12 @@ plot(s_live ? Se : na, "Short entry (sell-stop)", color=color.new(color.yellow, 
 // FULL TRADE PLAN — stop-loss + TP1 + TP2 for the live setup
 bool lplan = show_plan and l_live
 bool splan = show_plan and s_live
-plot(lplan ? Ls  : na, "Long SL",   color=color.new(color.red,   25), style=plot.style_linebr)
-plot(lplan ? Lt1 : na, "Long TP1",  color=color.new(color.teal,  20), style=plot.style_linebr)
-plot(lplan ? Lt2 : na, "Long TP2",  color=color.new(color.green, 10), style=plot.style_linebr)
-plot(splan ? Ss  : na, "Short SL",  color=color.new(color.red,   25), style=plot.style_linebr)
-plot(splan ? St1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
-plot(splan ? St2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(lplan ? l_stop_now : na, "Long SL",   color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(lplan and not is_trail ? Lt1 : na, "Long TP1",  color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(lplan and not is_trail ? Lt2 : na, "Long TP2",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(splan ? s_stop_now : na, "Short SL",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(splan and not is_trail ? St1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(splan and not is_trail ? St2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
 // WRITE ENTRY / SL / TP on the chart lines (floating labels at the right edge; one reused label per level)
 f_setlbl(lbl, cond, price, txt, col) =>
     label out = lbl
@@ -243,13 +275,14 @@ if barstate.islast and show_line_labels
     string r1 = str.tostring(tp1_rr, "#.#")
     string r2 = str.tostring(tp2_rr, "#.#")
     lbl_Le  := f_setlbl(lbl_Le,  l_live, Le,  "▲ ENTRY " + str.tostring(Le,  format.mintick),                 color.new(color.yellow, 0))
-    lbl_Ls  := f_setlbl(lbl_Ls,  lplan,  Ls,  "SL "  + str.tostring(Ls,  format.mintick) + "  -1R",            color.new(color.red, 0))
-    lbl_Lt1 := f_setlbl(lbl_Lt1, lplan,  Lt1, "TP1 " + str.tostring(Lt1, format.mintick) + "  +" + r1 + "R",   color.new(color.teal, 0))
-    lbl_Lt2 := f_setlbl(lbl_Lt2, lplan,  Lt2, "TP2 " + str.tostring(Lt2, format.mintick) + "  +" + r2 + "R",   color.new(color.green, 0))
+    string lst = is_trail ? "TRAIL STOP " : "SL "
+    lbl_Ls  := f_setlbl(lbl_Ls,  lplan,  l_stop_now,  lst + str.tostring(l_stop_now,  format.mintick),         color.new(color.red, 0))
+    lbl_Lt1 := f_setlbl(lbl_Lt1, lplan and not is_trail, Lt1, "TP1 " + str.tostring(Lt1, format.mintick) + "  +" + r1 + "R",   color.new(color.teal, 0))
+    lbl_Lt2 := f_setlbl(lbl_Lt2, lplan and not is_trail, Lt2, "TP2 " + str.tostring(Lt2, format.mintick) + "  +" + r2 + "R",   color.new(color.green, 0))
     lbl_Se  := f_setlbl(lbl_Se,  s_live, Se,  "▼ ENTRY " + str.tostring(Se,  format.mintick),                 color.new(color.yellow, 0))
-    lbl_Ss  := f_setlbl(lbl_Ss,  splan,  Ss,  "SL "  + str.tostring(Ss,  format.mintick) + "  -1R",            color.new(color.red, 0))
-    lbl_St1 := f_setlbl(lbl_St1, splan,  St1, "TP1 " + str.tostring(St1, format.mintick) + "  +" + r1 + "R",   color.new(color.teal, 0))
-    lbl_St2 := f_setlbl(lbl_St2, splan,  St2, "TP2 " + str.tostring(St2, format.mintick) + "  +" + r2 + "R",   color.new(color.green, 0))
+    lbl_Ss  := f_setlbl(lbl_Ss,  splan,  s_stop_now,  lst + str.tostring(s_stop_now,  format.mintick),         color.new(color.red, 0))
+    lbl_St1 := f_setlbl(lbl_St1, splan and not is_trail, St1, "TP1 " + str.tostring(St1, format.mintick) + "  +" + r1 + "R",   color.new(color.teal, 0))
+    lbl_St2 := f_setlbl(lbl_St2, splan and not is_trail, St2, "TP2 " + str.tostring(St2, format.mintick) + "  +" + r2 + "R",   color.new(color.green, 0))
 plot(emaS, "EMA slow", color=trend_up ? color.new(color.lime,50) : trend_down ? color.new(color.red,50) : color.new(color.gray,60))
 plotshape(long_fire,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
 plotshape(short_fire, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)

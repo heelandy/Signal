@@ -1,35 +1,39 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © heelandy
 // ═══════════════════════════════════════════════════════════════════
-// HIGHSTRIKE ORB — STRUCTURE STACK  (RESEARCH / CANDIDATE — not the frozen production set)
-// The walk-forward-validated 5m upgrade (research Findings 20 + 21), built on the V1 ORB core:
-//   • TREND GATE is TF-ADAPTIVE — on <=5m it uses the HH/HL swing-STRUCTURE state (st_state) instead of
-//     the EMA-21/50 stack (F20: structure beats EMA on 5m, NEUTRAL on 15m); on >=15m it falls back to EMA.
-//   • VWAP-EXTENSION CAP (F16, k=2.0) — skips breakouts firing > k*ATR beyond session VWAP, on ALL TFs.
-//   • Stacked on 5m (F21) the two are ADDITIVE + walk-forward-confirmed: exp ~2x production, DD cut 2-6x,
-//     positive every year on NQ+QQQ+SPY, OOS holds. PF 3.6-5.3 is EARNED (not curve-fit).
-// ⚠️ The st_state machine below is PORTED from the Python harness (hs_harness.py). It MUST be reconciled
-//    bar-for-bar against the harness (Phase-1 toolchain) before live use — a drift means live != backtest.
+// HIGHSTRIKE ORB — ASIA  (NQ / MNQ futures · RESEARCH / CANDIDATE — not the frozen production set)
+// The Asia-session sibling of the STRUCTURE STACK (research Finding 22). Same validated 5m engine —
+// HH/HL swing-STRUCTURE trend gate (st_state) + VWAP-extension cap (k=2.0) — applied to the TOKYO-OPEN
+// opening range (default 19:00-20:00 ET) instead of the US RTH open.
+//   • Walk-forward result on NQ 5m, 19:00-20:00 ET window: exp ~+0.50R, PF ~2.8, POSITIVE EVERY YEAR (17/17),
+//     OOS holds, survives 2x slippage. The production EMA breakout and a fade/mean-reversion both LOSE here —
+//     only the structure stack works. ES corroborates the direction but is weaker + dies under 2x slippage.
+// ⚠️ FUTURES ONLY. Asia equities don't trade. Run on NQ1!/MNQ1! (CME): `time("D")` then rolls at 18:00 ET,
+//    so the day / OR / once-per-day lock reset at the Globex reopen — the trade-day this script is built around.
+// ⚠️ Asia liquidity is THINNER than RTH -> real stop-fills can slip more than the backtest assumes. The edge
+//    is large but slippage-sensitive: FORWARD-PAPER-TEST fills before sizing up.
+// ⚠️ st_state is PORTED from hs_harness.py and must be reconciled bar-for-bar (Phase-1 toolchain) before live.
 // ═══════════════════════════════════════════════════════════════════
 //@version=6
-indicator("HIGHSTRIKE ORB — STRUCTURE STACK", overlay=true, max_labels_count=300, max_lines_count=300)
+indicator("HIGHSTRIKE ORB — ASIA (NQ/MNQ)", overlay=true, max_labels_count=300, max_lines_count=300)
 
 // ───────────────────────── INPUTS ─────────────────────────
 long_on  = input.bool(true, "LONG signals",  group="Direction", inline="d")
 short_on = input.bool(true, "SHORT signals", group="Direction", inline="d")
-or_start = input.session("0930-1000", "Opening Range window (ET)", group="ORB")
+or_start = input.session("1900-2000", "Opening Range window (ET, Tokyo open)", group="ORB")
 sess_tz  = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="ORB")
-trade_end_hhmm = input.int(1500, "Stop new signals after HHMM (ET)", group="ORB", minval=0, maxval=2359)
+trade_end_hhmm = input.int(300, "Stop new signals after HHMM (ET)", group="ORB", minval=0, maxval=2359,
+            tooltip="Asia session end. 0300 ET ~ Tokyo close. Interpreted on the trade-day clock (18:00 ET = start).")
 brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
 auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
-            tooltip="Breakout buffer <=5m -> 0.0, else 0.25 ATR. Cutoff 15:00. OFF = manual.")
+            tooltip="Breakout buffer <=5m -> 0.0, else 0.25 ATR. Asia cutoff 03:00 ET. OFF = manual.")
 allow_reentry = input.bool(false, "Allow re-entry (re-arm after price returns inside OR)", group="ORB",
             tooltip="OFF = one breakout per side per day (the validated default). ON = re-arm a side when price falls back inside the OR; capped by Max entries.")
 max_entries  = input.int(2, "Max entries per side / day (re-entry)", group="ORB", minval=1)
 // STRUCTURE GATE (the F20 upgrade)
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
              options=["Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
-             tooltip="F20: the HH/HL swing-structure state beats EMA-21/50 on 5m, neutral on 15m. Auto uses structure on <=5m, EMA on >=15m.")
+             tooltip="F20/F22: the HH/HL swing-structure state is the ONLY trend gate with an Asia edge. Auto uses structure on <=5m.")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2,
              tooltip="Harness reconcile baseline = 5. A swing pivot is confirmed this many bars after it forms.")
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05,
@@ -38,7 +42,7 @@ trend_ema_f = input.int(21, "Trend EMA fast (>=15m / EMA mode)", group="Structur
 trend_ema_s = input.int(50, "Trend EMA slow (>=15m / EMA mode)", group="Structure gate", minval=5)
 // VWAP-EXTENSION CAP (the F16 upgrade)
 cap_on = input.bool(true, "VWAP-extension cap (skip extended breakouts)", group="VWAP cap",
-         tooltip="F16: skip a breakout firing > k*ATR beyond session VWAP (those underperform). Helps both TFs.")
+         tooltip="F16: skip a breakout firing > k*ATR beyond session VWAP (those underperform). Part of the validated stack.")
 cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
 // REGIME
 local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
@@ -74,13 +78,17 @@ emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
 float vwap_c = ta.vwap
-int o_now = hour(time, sess_tz) * 60 + minute(time, sess_tz)
-bool new_day = ta.change(time("D")) != 0
-bool rth = (dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday)
+// TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so the Asia session crossing midnight stays contiguous.
+int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+int o_now  = (et_min - 1080 + 1440) % 1440
+bool new_day = ta.change(time("D")) != 0                       // CME futures: rolls at 18:00 ET = trade-day start
+int td_dow = dayofweek(time + 6 * 60 * 60 * 1000, sess_tz)      // weekday of the TRADE-day (Sun-eve start = Mon)
+bool rth = (td_dow != dayofweek.saturday and td_dow != dayofweek.sunday)
 int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
-int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
-int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+int   eff_cut_hhmm = auto_tf ? 300 : trade_end_hhmm
+int cut_et = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+int trade_end = (cut_et - 1080 + 1440) % 1440                  // cutoff on the trade-day clock
 
 // ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py) ─────────────────────────
 // Pivots (confirmed L=R=struct_lb bars after the swing), last/prev swing levels with a tolerance, then
@@ -123,6 +131,7 @@ bool eff_up   = use_struct ? (st_state == 1) : trend_up
 bool eff_down = use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
+// During Asia hours SPY/VIX daily = the PRIOR US close (causal) — the day-bias you carry into the session.
 spy_b() =>
     [_a,_b,sadx] = ta.dmi(14,14)
     [close, ta.ema(close,20), ta.ema(close,50), sadx]
@@ -265,8 +274,8 @@ plotshape(long_skip,  "Long capped",  shape.xcross, location.belowbar, color.new
 plotshape(short_skip, "Short capped", shape.xcross, location.abovebar, color.new(color.gray, 0), text="EXT", textcolor=color.gray, size=size.tiny)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
-alertcondition(long_fire,  "STRUCT Long",  "HIGHSTRIKE STRUCTURE: LONG breakout (gated + near-VWAP)")
-alertcondition(short_fire, "STRUCT Short", "HIGHSTRIKE STRUCTURE: SHORT breakout (gated + near-VWAP)")
+alertcondition(long_fire,  "ASIA Long",  "HIGHSTRIKE ASIA: LONG breakout (gated + near-VWAP)")
+alertcondition(short_fire, "ASIA Short", "HIGHSTRIKE ASIA: SHORT breakout (gated + near-VWAP)")
 
 // floating ENTRY/SL/TP labels (same scheme as the production indicator)
 f_setlbl(lbl, cond, price, txt, col) =>
@@ -305,7 +314,7 @@ if barstate.islast and show_line_labels
 f_q(x) => na(x) ? "—" : x <= cap_k ? "NEAR ✓" : "EXT ⚠"
 f_qc(x) => na(x) ? color.gray : x <= cap_k ? color.lime : color.orange
 f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
-var table dash = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+var table dash = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     int dirn = l_live ? 1 : s_live ? -1 : 0
     float e_ = dirn == 1 ? Le : dirn == -1 ? Se : na
@@ -316,47 +325,27 @@ if barstate.islast and show_dash
     color  statc  = filled ? color.lime : armed ? color.aqua : color.gray
     string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE (flat)" : (dirn == 1 and not macro_long_ok) ? "SPY↓ vs long" : (dirn == -1 and not macro_short_ok) ? "SPY↑ vs short" : "clear ✓"
     color  gcol    = greason == "clear ✓" ? color.lime : color.orange
+    string sess_txt = or_start + " → " + str.tostring(eff_cut_hhmm / 100, "00") + ":" + str.tostring(eff_cut_hhmm % 100, "00") + " ET"
     string plan = dirn == 1 ? ("SL " + str.tostring(Ls, "#.#") + "  T1 " + str.tostring(Lt1, "#.#") + "  T2 " + str.tostring(Lt2, "#.#")) : dirn == -1 ? ("SL " + str.tostring(Ss, "#.#") + "  T1 " + str.tostring(St1, "#.#") + "  T2 " + str.tostring(St2, "#.#")) : "—"
-    table.cell(dash,0,0,"HIGHSTRIKE STRUCT", text_color=color.yellow, text_size=size.small)
+    table.cell(dash,0,0,"HIGHSTRIKE ASIA", text_color=color.yellow, text_size=size.small)
     table.cell(dash,1,0, str.tostring(syminfo.ticker)+"  "+timeframe.period, text_color=color.silver, text_size=size.small)
-    table.cell(dash,0,1,"Regime", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,1, regime+(spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=regime=="A"?color.lime:regime=="D"?color.red:color.aqua, text_size=size.tiny)
-    table.cell(dash,0,2,"Trend gate", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,2, (use_struct?"STRUCT: "+f_st(st_state):"EMA: "+(trend_up?"UP":trend_down?"DOWN":"flat")), text_color=(eff_up?color.lime:eff_down?color.red:color.gray), text_size=size.tiny)
-    table.cell(dash,0,3,"Setup", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,3, dirn==1?("LONG "+str.tostring(e_,format.mintick)):dirn==-1?("SHORT "+str.tostring(e_,format.mintick)):"—", text_color=dirn==1?color.lime:dirn==-1?color.red:color.gray, text_size=size.tiny)
-    table.cell(dash,0,4,"Status", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,4, stat + (allow_reentry ? ("  (" + str.tostring(dirn==1?n_l:dirn==-1?n_s:0) + "/" + str.tostring(max_entries) + ")") : ""), text_color=statc, text_size=size.tiny)
-    table.cell(dash,0,5,"Gated", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,5, greason, text_color=gcol, text_size=size.tiny)
-    table.cell(dash,0,6,"VWAP cap", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,6, f_q(x_)+(na(x_)?"":"  "+str.tostring(x_,"#.#")+"x  k="+str.tostring(cap_k,"#.#")), text_color=f_qc(x_), text_size=size.tiny)
-    table.cell(dash,0,7,"Plan", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,7, plan, text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,0,8,"OR / VWAP", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,8, (or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming")+"  ·  "+str.tostring(vwap_c,"#.#"), text_color=color.aqua, text_size=size.tiny)
-    table.cell(dash,0,9,"NEAR/EXT", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash,1,9, "= dist from VWAP (xATR)", text_color=color.gray, text_size=size.tiny)
-
-// ───────────────────────── RECONCILE EXPORT (Phase-1 diff; data-window only, draws nothing) ─────────────────────────
-// Toggle ON, then TradingView → right-click chart → "Export chart data" → CSV → `python qa/hs_reconcile.py <csv>`.
-// The harness recomputes st_state from the SAME OHLCV and diffs vs these x_* columns. The VERDICT rows are
-// x_st_state + x_is_hh/hl/lh/ll (the structure port). x_regime/x_spy_*/x_vix_sma5/x_vwap_sess are informational
-// (partial externals → regime may differ, not a port bug). The IDENTICAL machine is in HIGHSTRIKE_ORB_ASIA.pine,
-// so this one export validates both. Run on the SAME symbol/TF + a 24/7 (extended-hours) session as the harness.
-exp_on = input.bool(false, "Reconcile export (data-window columns)", group="Dev",
-         tooltip="Exposes x_* columns in 'Export chart data' to diff this st_state port vs hs_harness.py. Draws nothing on the chart.")
-plot(exp_on ? st_state : na,             "x_st_state",   display=display.data_window)
-plot(exp_on ? (s_hh ? 1 : 0) : na,       "x_is_hh",      display=display.data_window)
-plot(exp_on ? (s_hl ? 1 : 0) : na,       "x_is_hl",      display=display.data_window)
-plot(exp_on ? (s_lh ? 1 : 0) : na,       "x_is_lh",      display=display.data_window)
-plot(exp_on ? (s_ll ? 1 : 0) : na,       "x_is_ll",      display=display.data_window)
-plot(exp_on ? (regime=="A"?1:regime=="B"?2:regime=="C"?3:regime=="D"?4:0) : na, "x_regime", display=display.data_window)
-plot(exp_on ? spc : na,                  "x_spy_close",  display=display.data_window)
-plot(exp_on ? se20 : na,                 "x_spy_e20",    display=display.data_window)
-plot(exp_on ? se50 : na,                 "x_spy_e50",    display=display.data_window)
-plot(exp_on ? sadx : na,                 "x_spy_adx",    display=display.data_window)
-plot(exp_on ? vix5 : na,                 "x_vix_sma5",   display=display.data_window)
-plot(exp_on ? vwap_c : na,               "x_vwap_sess",  display=display.data_window)
-plot(exp_on ? (long_fire ? 1 : 0) : na,  "x_long_fire",  display=display.data_window)
-plot(exp_on ? (short_fire ? 1 : 0) : na, "x_short_fire", display=display.data_window)
+    table.cell(dash,0,1,"Session", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,1, sess_txt, text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,0,2,"Regime", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,2, regime+(spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=regime=="A"?color.lime:regime=="D"?color.red:color.aqua, text_size=size.tiny)
+    table.cell(dash,0,3,"Trend gate", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,3, (use_struct?"STRUCT: "+f_st(st_state):"EMA: "+(trend_up?"UP":trend_down?"DOWN":"flat")), text_color=(eff_up?color.lime:eff_down?color.red:color.gray), text_size=size.tiny)
+    table.cell(dash,0,4,"Setup", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,4, dirn==1?("LONG "+str.tostring(e_,format.mintick)):dirn==-1?("SHORT "+str.tostring(e_,format.mintick)):"—", text_color=dirn==1?color.lime:dirn==-1?color.red:color.gray, text_size=size.tiny)
+    table.cell(dash,0,5,"Status", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,5, stat + (allow_reentry ? ("  (" + str.tostring(dirn==1?n_l:dirn==-1?n_s:0) + "/" + str.tostring(max_entries) + ")") : ""), text_color=statc, text_size=size.tiny)
+    table.cell(dash,0,6,"Gated", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,6, greason, text_color=gcol, text_size=size.tiny)
+    table.cell(dash,0,7,"VWAP cap", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,7, f_q(x_)+(na(x_)?"":"  "+str.tostring(x_,"#.#")+"x  k="+str.tostring(cap_k,"#.#")), text_color=f_qc(x_), text_size=size.tiny)
+    table.cell(dash,0,8,"Plan", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,8, plan, text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,0,9,"OR / VWAP", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,9, (or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming")+"  ·  "+str.tostring(vwap_c,"#.#"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,0,10,"NEAR/EXT", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,1,10, "= dist from VWAP (xATR)", text_color=color.gray, text_size=size.tiny)

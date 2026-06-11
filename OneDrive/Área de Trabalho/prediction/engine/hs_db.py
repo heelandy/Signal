@@ -24,7 +24,9 @@ DB    = os.path.join("data", "hs.duckdb")
 BARS  = os.path.join("data", "bars", "**", "*.parquet").replace("\\", "/")
 
 
-def connect(db=DB):
+def connect(db=":memory:"):
+    # in-memory by default: the views are rebuilt from parquet on every connect (the on-disk DB stores
+    # only view defs), so reads are identical AND lock-free — many processes can read concurrently.
     con = duckdb.connect(db)
     # one continuous-1m view per symbol found on disk
     for path in sorted(glob.glob(os.path.join("data", "*_continuous_1m.parquet"))):

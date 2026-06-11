@@ -366,6 +366,92 @@ CI +0.58..+0.71 → the PF 3.6-5.3 is EARNED quality concentration, not curve-fi
 barrier to adoption is engineering — the Pine st_state PORT + all-scripts propagation F20 requires. Frequency
 cost: keeps 42-63% (~20-25 trades/yr on NQ).
 
+## Finding 22 — the validated STACK extends to the ASIA session on NQ/MNQ 5m (Tokyo-open OR) — `research/orb_asia.py` + `orb_asia_walkforward.py`
+Re-opens the old "Asia is not the edge" result (orb_sessions.py) now that the F20+F21 stack exists. Tested 5 Asia
+opening-range windows (trade-day coords, 18:00 ET = 0; the engine's EOD-flat was made trade-day-aware so a session
+crossing midnight isn't chopped) × {production EMA breakout, the STRUCTURE STACK, a fade/mean-reversion} on NQ 5m
++ 15m, with US RTH as the benchmark.
+- **Production breakout DEAD in Asia** (confirms the prior finding): nearly every window fails the gate (CI < 0).
+- **Fade/mean-reversion CATASTROPHIC** (PF 0.26-0.55, −0.3..−0.7R every window) — Asia breakouts follow through
+  enough that fading them is the wrong side. Kills the "Asia is range-y, so fade it" hypothesis.
+- **STRUCTURE STACK PASSES on 5m, every window** — exp +0.42..+0.52R, PF 2.4-2.8, both sides +, positive 14-17/17
+  years. Strongest = **19:00-20:00 ET (Tokyo-open hour): +0.50R, PF 2.78, 17/17 years +**. (15m weaker — only the
+  18:00-18:30 and 20:00-21:00 windows pass.)
+- **WALK-FORWARD (orb_asia_walkforward.py)**: NQ 5m 19:00-20:00 — 70/30 OOS HOLDS (in +0.455 → out +0.603), survives
+  2× slippage (+0.33R/PF 1.9) and 3× (+0.15R/PF 1.3). 19:00-19:30 + 18:00-18:30 also pass (one neg year: 2013).
+- **Cross-instrument (ES — the only Asia futures cross-check; equities don't trade Asia)**: corroborates the
+  DIRECTION (19:00-20:00 best, both sides +, OOS holds) but is WEAKER and **dies under 2× slippage** (early years
+  2010-14 negative). The edge is NQ-strong, ES-marginal.
+⚠️ Two caveats keep it a CANDIDATE: (1) **slippage** — Asia liquidity is thinner than RTH; the NQ edge absorbs 2×
+but thins at 3×, and ES already fails 2×, so real fill quality is the live risk → forward-paper-test fills first.
+(2) it carries the SAME unreconciled **st_state** dependency as F20/F21. VERDICT: **validated CANDIDATE on NQ/MNQ
+5m, Tokyo-open window** → new Pine file `validatedResearch/HIGHSTRIKE_ORB_ASIA.pine` (trade-day 18:00-ET reset on a
+CME futures chart; futures only). Adoption gate = st_state reconcile + forward-test, same as the RTH stack.
+
+## Finding 23 — the structure stack is ROBUST to its pivot params (lb5/tol0.10 is a plateau, not a spike) — `research/orb_struct_robust.py`
+Before adopting the F20/F21 stack, swept its only free knobs — pivot lookback `struct_lb` + tolerance — on NQ 5m (+QQQ), stack config
+(st_state gate + VWAP-cap k2, RTH). EVERY point clears the full gate (both sides+, CI>0, positive every year):
+- **lb sweep (tol 0.10):** lb3 +0.574/PF3.28, lb4 +0.700, **lb5 +0.736 (adopted)**, lb6 +0.709, lb8 +0.686, lb10 +0.697 — all PASS, 12-16/yrs+.
+- **tol sweep (lb5):** 0.05 +0.771, 0.10 +0.736, 0.15 +0.744, 0.20 +0.718 — all PASS.
+- **QQQ** holds the plateau (lb5 +0.801, lb8 +0.716, 9/9).
+lb5/tol0.10 sits NEAR THE TOP of a broad plateau (lb4-6 ≈ identical) — not a fitted peak → the edge does not depend on a lucky param.
+**ADAPTIVE lookback is STRICTLY WORSE** (+0.459/PF2.39, n 406→228) → confirms the adopted fixed-lb / adaptive-OFF choice. De-risks adoption.
+
+## Finding 24 — the stack is INDEX-GENERAL (ES confirms) and RTH⊕Asia are uncorrelated (diversify) — `research/orb_xinstrument.py`
+(a) **ES 5m RTH stack:** +0.536R, PF 2.92, CI +0.45, both sides+, 15/16 yrs+ → the 5m stack holds on the 4th index future too
+(NQ+QQQ+SPY+ES all validated). Not an NQ artifact.
+(b) **NQ RTH vs Asia** stack daily-PnL correlation = **−0.09** (≈0); only 8% of active days overlap; combined maxDD **−6R** vs −4R(RTH)+−7R(Asia)
+summed −11R → trading BOTH sessions diversifies (smoother curve), consistent with F26's higher both-sessions pass-rate.
+
+## Finding 25 — the stop is TOO WIDE for the 5m stack (structure / tighter stop = strong LEAD); vol-scaled reward is dead — `research/orb_exit_levers.py`
+On the NQ 5m stack: (a) **STOP placement** — production OR-edge+2.5ATR cap risks 48pts/trade; a STRUCTURE-anchored stop (last HH/HL swing,
+new off-by-default engine `stop_mode="struct"` + harness `sph`/`spl`) risks 29pts and lifts exp **+0.736→+1.003R** (PF 4.53→5.55, CI +0.65→+0.90,
+both sides+); a plain 1.5-ATR cap captures most (+0.934/risk29). With FIXED-R (prop) sizing this is a clear win — same $ risked, more R,
+smaller DD. In raw points the wider stop banks slightly more absolute (35 vs 29 pt-equiv) → the gain is risk-normalised / variance reduction.
+**WALK-FORWARD (F25b, `research/orb_stop_walkforward.py`): GRADUATED.** The structure-anchored (and 1.5-ATR) stop clears the full gate on
+NQ+QQQ+SPY — both sides+, CI+, positive EVERY year (15/15 · 9/9 · 9/9), 70/30 OOS holds (NQ +1.01→+0.99, QQQ +1.22→+0.90, SPY +1.04→+0.95),
+survives 2× slip — exp +0.74→+1.00 / +1.12 / +1.01R, risk roughly halved. **ES is the marginal exception** (13-14/16 yrs, thins to +0.23 at
+2× slip — same ES weakness as F22/F24). VERDICT: adopt the tighter (structure / 1.5-ATR) stop WITH the stack (ES caveat = size down / forward-
+test). PF 5-6 is earned — each half already validated.
+(b) **VOL-scaled reward** — TP2 3→6R barely moves exp on high-vol days (+0.711→+0.742, flat) and the stack almost never fires on low-vol
+days (<30 trades) → 4R stays right; reward is insensitive to vol regime within the stack. DEAD.
+
+## Finding 26 — the stack PASSES a funded-account eval with near-zero blow-up (best trading both sessions) — `research/orb_prop_eval.py`
+Rolling-start Monte-Carlo of the chronological trade path vs funded rules in R (1R = your per-trade $ risk; fixed-R sizing): profit
+target / trailing-DD / daily-loss. NQ 5m:
+- **RTH:** 93-98% PASS, 0% blow-up across profiles (+9/−6/−4 .. +30/−12/−8 R); median 12-39 trades to pass.
+- **Asia:** 89-100% PASS; **11% BLOW-UP only on the TIGHTEST** (−6 trail / −4 daily) profile → Asia's bigger adverse swings want a slightly
+looser daily/trailing limit (rhymes with the F22 slippage caution).
+- **BOTH sessions:** 98-99% PASS, ≤2% blow-up, fastest (more, diversified trades). Read: the stack survives a typical eval easily; trade
+both sessions and don't set the daily stop too tight for Asia.
+
+## Finding 27 — the stack wants a MOMENTUM-CAPTURE exit (trail / run-more beats scale-50%@1R/BE/4R) — `research/orb_exit_mgmt.py`
+The production exit (bank 50% at TP1=1R → BE → runner to 4R) under-monetises the stack's trades, which trend hard (they're the
+filtered, in-structure, near-VWAP breakouts). On NQ 5m stack (QQQ confirms), every "let it run" lever beats prod, both sides+ & CI+:
+- **MODE:** TRAIL (ATR chandelier) > scale_be. trail 2ATR +0.851/PF6.02/DD−3, trail **3ATR +0.980**/PF5.73 (vs prod +0.736/4.53/−4);
+  QQQ trail 2ATR +0.931/PF6.96 (vs +0.801). tp2_full 3R also strong (+0.925). [NB: REVERSES F14's "trail is worse" — that was the
+  BARE ORB; on the filtered stack, trend-continuation rewards trailing. Regime-specific, not a contradiction.]
+- **scale fraction:** bank LESS at TP1 — take 33% +0.815 > 50% +0.736 > 67% +0.656 (make the runner bigger).
+- **TP1 later:** 1.5R +0.821 > 1.0R +0.736 > 0.5R +0.593 (0.5R = best win 87% / DD −2 but lowest exp — the scalp end of the frontier).
+- **TP2 further:** 4→6R monotonic +0.736→+0.748 (flat; the runner reward is NOT a tail-trap here, unlike F7's full-position case).
+Common thread with F25's stop: CUT LOSSES SHORT (tighter/structure stop) + LET WINNERS RUN (trail / run-more) — the stack's trade
+quality supports both. **WALK-FORWARD (F27b, `research/orb_exit_walkforward.py`): GRADUATED.** trail 2ATR, trail 3ATR, and run-more
+(33%/1.5R/6R) ALL clear the full gate on NQ+QQQ+SPY+ES — both sides+, CI+, positive every year, 70/30 OOS holds, survive 2× slip.
+trail 3ATR strongest (NQ +0.980, QQQ +1.057, SPY +0.876, ES +0.740); trail 2ATR most slip-robust (gives back least). VERDICT: adopt a
+momentum exit with the stack — trail 2ATR for futures (slip-robust), trail 3ATR for equities (max exp), or run-more to keep hard TP/BE
+targets. New off-by-default engine `scale_frac`. (ES carries its usual lone 2017 soft year across ALL exits incl. prod — not exit-specific.)
+
+## Finding 28 — the st_state RECONCILE, resolved (mostly) OFFLINE: the edge is INVARIANT to the pivot tie-rule — `qa/pivot_check.py` + `research/orb_pivot_impact.py`
+The Pine st_state port's only un-verified piece was the pivot TIE-rule: the harness pivots() used strict > on both sides; TradingView's
+ta.pivothigh allows a tie on the LEFT (strict right). `qa/pivot_check.py`: the two rules differ on **~16% of pivots** on NQ 5m (22k bars).
+BUT the st_state machine (tolerance + swing-sequence) absorbs almost all of it — re-running the 5m stack walk-forward with the harness set
+to the Pine rule (`pivot_tie='tv'`, new off-by-default H.P field) is WITHIN NOISE of strict and still PASSES on NQ+QQQ+SPY (NQ +0.736→+0.748,
+QQQ +0.801→+0.805, SPY +0.680→+0.684; all 15/15·9/9·9/9, OOS holds). So the edge is ROBUST to the pivot convention → **live==backtest is
+secured for what matters**, even before a formal bar-for-bar TradingView diff. The state-machine logic was already verified line-by-line;
+the only residual is confirming ta.pivothigh's exact tie-rule (a free 2-min Data-Window glance — now low-stakes, since the edge is
+rule-invariant). Engine: `pivots(tie=…)` + `H.P.pivot_tie` + `qa/pivot_check.py`. A formal `qa/hs_reconcile.py` diff on a saved export is
+the optional 100% confirmation.
+
 ## Lever scorecard (cumulative) — adopt only if it clears the gate on QQQ AND NQ, then propagate to ALL scripts
 | lever | verdict |
 |---|---|
@@ -381,7 +467,13 @@ cost: keeps 42-63% (~20-25 trades/yr on NQ).
 | **HH/HL structure gate** (F17→F20) | ✅ GRADUATED on 5m — walk-forward holds on NQ+QQQ+SPY (every yr +, OOS holds, exp +60-90%, DD halved, PF earned not curve-fit); NEUTRAL on 15m. TF-adaptive adopt (st_state ≤5m, EMA ≥15m); needs Pine st_state PORT + all-scripts propagation + user go-ahead |
 | **HH/HL + VWAP-cap stacked, 5m** (F21) | ✅ ADDITIVE + WALK-FORWARD CONFIRMED (NQ+QQQ+SPY) — exp ~2× prod (+0.68..+0.80), DD cut 2-6×, positive every yr (15/15·9/9·9/9), OOS holds, CI +0.58..+0.71; PF 3.6-5.3 is earned not curve-fit. FULLY VALIDATED — only barrier = Pine st_state port + propagation. Recommended 5m adoption |
 | stricter trend (50/200) / range (ADX25-30) (F17) | 🟡 TF-dependent quality↑/DD↓; not robust across all 4 cells |
-| stop-placement variants (structure vs OR-opposite); per-regime reward | ⬜ untested |
+| **Asia-session stack, NQ/MNQ 5m** (F22) | ✅ validated CANDIDATE — STRUCTURE stack on the Tokyo-open OR (19:00-20:00 ET): +0.50R, PF 2.78, 17/17 yrs +, OOS holds, survives 2× slip. Prod breakout + fade both DEAD in Asia. ES corroborates direction but dies at 2× slip → slippage is the live risk. Futures-only (`HIGHSTRIKE_ORB_ASIA.pine`). Pending st_state reconcile + forward-test |
+| **structure / tighter STOP, 5m stack** (F25→F25b) | ✅ GRADUATED via walk-forward — structure-anchored (last HH/HL swing) or 1.5-ATR stop lifts exp +0.74→+1.00R (PF 4.5→5.5), risk 48→29pt, both sides+, CI+, positive every year + OOS holds on NQ/QQQ/SPY (15/15·9/9·9/9), survives 2× slip; ES weaker (13-14/16 yrs, +0.23 at 2× slip). Adopt the tighter stop with the stack. Engine `stop_mode="struct"` + harness `sph/spl` |
+| **momentum EXIT for the stack: TRAIL / run-more** (F27→F27b) | ✅ GRADUATED via walk-forward — trail 2-3ATR & run-more(33%/1.5R/6R) all clear the gate on NQ+QQQ+SPY+ES (both sides+, CI+, every yr+, OOS holds, survive 2× slip). trail 3ATR strongest (NQ +0.98, QQQ +1.06), trail 2ATR most slip-robust. Adopt with the tighter stop = cut-short/run-long. Reverses F14 (bare ORB). Engine `scale_frac` |
+| vol-scaled reward (F25) | ❌ dead — TP2 insensitive to vol regime in the stack (3→6R flat); 4R stays right |
+| structure-param robustness (F23) | ✅ stack is a PLATEAU not a spike — lb3-10 + tol0.05-0.20 all PASS on NQ+QQQ (every yr+); adaptive-lb strictly worse → fixed lb5/tol0.10 confirmed. De-risks adoption |
+| index-generality + session diversification (F24) | ✅ ES RTH stack +0.54R/15-16yr (NQ+QQQ+SPY+ES all hold); RTH⊕Asia corr −0.09, combined DD < summed → trade both |
+| prop-eval survivability (F26) | ✅ stack passes funded rules 93-100%, ~0% blow-up (RTH); Asia wants looser daily/trail limit (11% blow-up tightest); both-sessions best |
 
 Discipline: every screen here is post-hoc (filters taken trades) — a screen says "does this separate good
 from bad", NOT the final number. Graduation = signal-level reimplementation + full re-validation (both

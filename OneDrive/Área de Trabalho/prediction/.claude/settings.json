@@ -5,7 +5,25 @@
       "Bash(python hs_resample.py)",
       "Bash(python hs_db.py)",
       "Bash(python hs_qa.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Read(//c/Users/heela/.claude/projects/c--Users-heela/memory/**)",
+      "Bash(python qa/hs_reconcile.py)",
+      "Bash(python engine/hs_db.py \"SELECT sym, tf, count\\(*\\) n FROM bars WHERE session='full' GROUP BY 1,2 ORDER BY 1,2\")",
+      "Bash(python research/orb_exit_levers.py)",
+      "Bash(python research/orb_struct_robust.py)",
+      "Bash(python research/orb_prop_eval.py)",
+      "Bash(python research/orb_xinstrument.py)",
+      "Bash(python research/orb_exit_mgmt.py)",
+      "Bash(python research/orb_stop_walkforward.py)",
+      "Bash(python research/orb_exit_walkforward.py)",
+      "Bash(python qa/pivot_check.py NQ 5m 5)",
+      "Bash(python research/orb_pivot_impact.py)",
+      "Read(//c/Users/heela/Downloads/**)",
+      "Read(//c/Users/heela/**)",
+      "Read(//c/Users/heela/OneDrive/Área de Trabalho/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\heela\\.claude\\projects\\c--Users-heela\\memory"
     ]
   }
 }

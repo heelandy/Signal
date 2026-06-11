@@ -165,7 +165,7 @@ def _nearest(close, levels, below):
 def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema", mtf_min=0,
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
              tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
-             time_stop=0, vwap_cap=0.0, skip_mask=None):
+             time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -177,20 +177,28 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     vs_prev = np.concatenate([[np.nan], vs[:-1]])     # prior-bar session VWAP (causal: known before the fill)
     e9, e20, e50 = d["ema9"].to_numpy(), d["ema20"].to_numpy(), d["ema50"].to_numpy()
     ts = d["ts"].to_numpy(); reg = d["macro_regime"].to_numpy()
+    spl_arr = d["spl"].to_numpy() if "spl" in d.columns else None    # structure-anchored stop (stop_mode="struct")
+    sph_arr = d["sph"].to_numpy() if "sph" in d.columns else None
     # asset-aware economics: equities/ETFs trade in $0.01 ticks, commission-free; futures use MNQ costs
     sym_ = str(d.attrs.get("sym", "NQ")).upper()
     EQ = sym_ in ("SPY", "QQQ", "NVDA", "TSLA", "AVGO", "ORCL", "AAPL", "MSFT", "AMZN", "META",
                   "GOOGL", "DIA", "IWM", "AMD", "NFLX")
     pt_val_, tick_, comm_, slip_ = (1.0, 0.01, 0.0, 1) if EQ else (PT_VALUE, TICK, COMM, SLIP_TICKS)
     _et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")        # for EOD-flat (match Pine)
-    daykey = (_et.dt.year * 10000 + _et.dt.month * 100 + _et.dt.day).to_numpy()
-    tod_ = (_et.dt.hour * 60 + _et.dt.minute).to_numpy()
+    if tradeday:        # sessions crossing midnight (Asia/London): trade-day coords, 18:00 ET = day start
+        _sd = _et + pd.Timedelta(hours=6)
+        daykey = (_sd.dt.year * 10000 + _sd.dt.month * 100 + _sd.dt.day).to_numpy()
+        tod_ = (((_et.dt.hour - 18) % 24) * 60 + _et.dt.minute).to_numpy()
+    else:
+        daykey = (_et.dt.year * 10000 + _et.dt.month * 100 + _et.dt.day).to_numpy()
+        tod_ = (_et.dt.hour * 60 + _et.dt.minute).to_numpy()
     # V44 firing: grade floor (encodes struct+bias+zone/sweep/pattern) AND trigger AND macro/regime gates
     or_low = or_high = lvl_l = lvl_s = None
     gate_l = (d["macro_allow_trades"] & d["macro_long_ok"] & (d["local_regime"] != 2)).to_numpy()
     gate_s = (d["macro_allow_trades"] & d["macro_short_ok"] & (d["local_regime"] != 2)).to_numpy()
     t1 = TP1_RR if tp1_rr is None else tp1_rr
     t2 = TP2_RR if tp2_rr is None else tp2_rr
+    sf = scale_frac                               # fraction of the position banked at TP1 (rest runs to TP2/BE)
     if entry_type == "orb":                       # Opening-Range Breakout entry
         lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult)
         long_ok = lo & gate_l; short_ok = so & gate_s
@@ -230,7 +238,11 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                 if ext > vwap_cap:                 # breakout already extended beyond prior-bar VWAP -> skip (stay flat)
                     i += 1; continue
             if entry_type == "orb":
-                anc = (or_low[i] if sig == 1 else or_high[i])
+                if stop_mode == "struct" and spl_arr is not None:        # anchor at the last HH/HL swing, not the OR edge
+                    sa = spl_arr[i] if sig == 1 else sph_arr[i]
+                    anc = sa if not np.isnan(sa) else (or_low[i] if sig == 1 else or_high[i])
+                else:
+                    anc = (or_low[i] if sig == 1 else or_high[i])
             else:
                 anc = _nearest(entry, [vs[i], vw[i], e9[i], e20[i], e50[i]], below=(sig == 1))
             if sig == 1:
@@ -269,16 +281,16 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                     if hit_tp1:
                         tp1_done = True; cur_stop = entry          # BE on runner
                         if hit_tp2:
-                            gross_R = 0.5 * t1 + 0.5 * t2; orders = 3; exitpx = tp2; break
+                            gross_R = sf * t1 + (1 - sf) * t2; orders = 3; exitpx = tp2; break
                 else:
                     if hit_tp2:
-                        gross_R = 0.5 * t1 + 0.5 * t2; orders = 3; exitpx = tp2; break
+                        gross_R = sf * t1 + (1 - sf) * t2; orders = 3; exitpx = tp2; break
                     if hit_stop:                                   # runner stopped at BE
-                        gross_R = 0.5 * t1 + 0.0; orders = 3; exitpx = cur_stop; break
+                        gross_R = sf * t1; orders = 3; exitpx = cur_stop; break
                 if (daykey[i] != entry_day or tod_[i] >= eod_min or
                         (time_stop and (i - entry_i) >= time_stop)):   # EOD flat (~15:58) or time-stop (research)
                     rem = sig * (c[i] - entry) / risk
-                    gross_R = (0.5 * t1 + 0.5 * rem) if tp1_done else rem
+                    gross_R = (sf * t1 + (1 - sf) * rem) if tp1_done else rem
                     orders = 3 if tp1_done else 2; exitpx = c[i]; break
                 i += 1
             else:

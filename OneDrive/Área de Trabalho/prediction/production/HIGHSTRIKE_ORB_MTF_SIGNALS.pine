@@ -17,6 +17,9 @@ sess_tz      = input.string("America/New_York", "Timezone", options=["America/Ne
 show5    = input.bool(true, "Show 5m signals",  group="Display", inline="s")
 show15   = input.bool(true, "Show 15m signals", group="Display", inline="s")
 show_conf= input.bool(true, "Mark 5m + 15m confluence", group="Display")
+reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
+            tooltip="OFF = one breakout per side per TF per day (default). ON = re-arm a side when price falls back inside the OR; capped by Max entries.")
+max_entries = input.int(2, "Max entries per side / day (re-entry on)", group="ORB", minval=1, maxval=5)
 
 // self-contained ORB breakout for a given TF (no nested security inside)
 orb_break() =>
@@ -27,6 +30,9 @@ orb_break() =>
     var float lvl_s = na
     var bool  ldone = false
     var bool  sdone = false
+    var bool  larm = true
+    var bool  sarm = true
+    var int   dn = 0
     nd = ta.change(time("D")) != 0
     if nd
         orh := na
@@ -36,6 +42,9 @@ orb_break() =>
         lvl_s := na
         ldone := false
         sdone := false
+        larm := true
+        sarm := true
+        dn := 0
     inor = not na(time(timeframe.period, or_start, sess_tz))
     if inor
         orh := na(orh) ? high : math.max(orh, high)
@@ -55,13 +64,26 @@ orb_break() =>
         lvl_l := orh + buf
         lvl_s := orl - buf
     aft = orset and onow < tod and not na(lvl_l)
-    lsig = aft and not ldone and high >= lvl_l and tup   // FILL = price TOUCHES the resting level
-    ssig = aft and not sdone and low  <= lvl_s and tdn
+    // re-entry (default off): re-arm a side once price falls back inside the OR, capped by max_entries
+    if reentry and not na(orh) and close < orh
+        larm := true
+    if reentry and not na(orl) and close > orl
+        sarm := true
+    okl = reentry ? (larm and dn < max_entries) : not ldone
+    oks = reentry ? (sarm and dn < max_entries) : not sdone
+    lsig = aft and okl and high >= lvl_l and tup   // FILL = price TOUCHES the resting level
+    ssig = aft and oks and low  <= lvl_s and tdn
     if lsig
         ldone := true
+        larm := false
+        dn := dn + 1
     if ssig
         sdone := true
-    [lsig ? 1 : 0, ssig ? 1 : 0, (aft and not ldone ? lvl_l : na), (aft and not sdone ? lvl_s : na)]
+        sarm := false
+        dn := dn + 1
+    show_l = reentry ? (larm and dn < max_entries) : not ldone
+    show_s = reentry ? (sarm and dn < max_entries) : not sdone
+    [lsig ? 1 : 0, ssig ? 1 : 0, (aft and show_l ? lvl_l : na), (aft and show_s ? lvl_s : na)]
 
 [l5,  s5,  l5L,  s5L]  = request.security(syminfo.tickerid, "5",  orb_break(), lookahead=barmerge.lookahead_off)
 [l15, s15, l15L, s15L] = request.security(syminfo.tickerid, "15", orb_break(), lookahead=barmerge.lookahead_off)
