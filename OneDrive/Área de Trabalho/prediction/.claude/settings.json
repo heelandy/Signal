@@ -20,7 +20,10 @@
       "Bash(python research/orb_pivot_impact.py)",
       "Read(//c/Users/heela/Downloads/**)",
       "Read(//c/Users/heela/**)",
-      "Read(//c/Users/heela/OneDrive/Área de Trabalho/**)"
+      "Read(//c/Users/heela/OneDrive/Área de Trabalho/**)",
+      "Bash(python research/orb_london.py 5m 15m)",
+      "Bash(python research/orb_london_walkforward.py)",
+      "PowerShell(Move-Item \"validatedResearch\\\\HIGHSTRIKE_ORB_STACK.pine\" \"production\\\\HIGHSTRIKE_ORB_STACK.pine\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\heela\\.claude\\projects\\c--Users-heela\\memory"

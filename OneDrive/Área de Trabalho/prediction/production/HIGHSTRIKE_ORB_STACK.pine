@@ -1,9 +1,10 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © heelandy
 // ═══════════════════════════════════════════════════════════════════
-// HIGHSTRIKE ORB — STACK  (the unified validated 5m system · NQ/MNQ futures · RESEARCH / CANDIDATE)
-// Merges STRUCTURE (US RTH) + ASIA (Tokyo open) into ONE file with a SESSION switch, plus the two
-// graduated upgrades from the exit/risk research:
+// HIGHSTRIKE ORB — STACK  (PRIMARY production indicator · the unified validated 5m system · NQ/MNQ futures)
+// Merges STRUCTURE (US RTH) + ASIA (Tokyo) + LONDON into ONE file with a SESSION switch (incl. an Auto mode
+// that runs all three OR cycles per trade-day by the clock), plus the two graduated exit/risk upgrades.
+// All three sessions validate on NQ/MNQ 5m: RTH (flagship), Asia (F22), London (F29). Engine upgrades:
 //   • TREND GATE   — TF-adaptive HH/HL swing-STRUCTURE state (st_state) ≤5m, EMA ≥15m   (F20)
 //   • VWAP CAP     — skip breakouts > k·ATR beyond session VWAP (k=2.0)                  (F16)
 //   • STOP         — STRUCTURE-anchored: rest the stop at the last HH/HL swing, not the OR edge.
@@ -21,7 +22,8 @@ indicator("HIGHSTRIKE ORB — STACK", overlay=true, max_labels_count=300, max_li
 
 // ───────────────────────── SESSION ─────────────────────────
 sess_preset = input.string("Asia / Tokyo (1900-2000 ET)", "Session", group="Session",
-              options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "Custom"])
+              options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
+              tooltip="Auto runs all THREE cycles per trade-day by the clock: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). One chart covers all sessions.")
 or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
 cut_custom  = input.int(300, "Custom: stop new signals after HHMM (ET)", group="Session", minval=0, maxval=2359)
 sess_tz     = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="Session")
@@ -84,11 +86,14 @@ emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
 float vwap_c = ta.vwap
-string or_start = sess_preset == "US RTH (0930-1000 ET)" ? "0930-1000" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "1900-2000" : or_custom
-int    cut_hhmm = sess_preset == "US RTH (0930-1000 ET)" ? 1500 : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? 300 : cut_custom
 // TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so a session crossing midnight stays contiguous.
 int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
 int o_now  = (et_min - 1080 + 1440) % 1440
+bool is_auto = sess_preset == "Auto (Asia + London + RTH by clock)"
+bool phase_rth    = is_auto and o_now >= 930 and o_now < 1260   // 09:30-15:00 ET = RTH cycle
+bool phase_london = is_auto and o_now >= 540 and o_now < 930    // 03:00-09:30 ET = London cycle (open OR at 03:00)
+string or_start = is_auto ? (phase_rth ? "0930-1000" : phase_london ? "0300-0330" : "1900-2000") : sess_preset == "US RTH (0930-1000 ET)" ? "0930-1000" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "1900-2000" : or_custom
+int    cut_hhmm = is_auto ? (phase_rth ? 1500 : phase_london ? 800 : 300) : sess_preset == "US RTH (0930-1000 ET)" ? 1500 : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? 300 : cut_custom
 int cut_et = (cut_hhmm / 100) * 60 + (cut_hhmm % 100)
 int trade_end = (cut_et - 1080 + 1440) % 1440
 bool new_day = ta.change(time("D")) != 0                        // CME futures: rolls at 18:00 ET = trade-day start
@@ -173,10 +178,11 @@ bool local_ok = not block_range or local_regime != 2
 
 // ───────────────────────── OPENING RANGE ─────────────────────────
 bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+bool reset_now = is_auto ? (in_or and not in_or[1]) : new_day   // auto: reset at each session's OR start (2 cycles/day)
 var float or_high = na
 var float or_low  = na
 var bool  or_set  = false
-if new_day
+if reset_now
     or_high := na
     or_low  := na
     or_set  := false
@@ -194,7 +200,7 @@ var bool  traded_l = false
 var bool  traded_s = false
 var int   n_l = 0
 var int   n_s = 0
-if new_day
+if reset_now
     Le := na
     Se := na
     traded_l := false
@@ -253,7 +259,7 @@ var float lstop = na          // long working stop (initial -> trails / -> BE)
 var float sstop = na
 var bool  l_tp1 = false
 var bool  s_tp1 = false
-if new_day
+if reset_now
     in_long := false
     in_short := false
     lstop := na
@@ -286,6 +292,9 @@ if in_short
             sstop := Se
     if high >= sstop or (not is_trail and low <= St2)
         in_short := false
+if is_auto and o_now >= trade_end                              // auto: flatten the displayed trade at the session cutoff
+    in_long := false
+    in_short := false
 bool l_live = (window and not traded_l and gate_long) or in_long
 bool s_live = (window and not traded_s and gate_short) or in_short
 float l_stop_now = in_long ? lstop : Ls                                // the stop to SHOW (planned while armed, working once live)
@@ -364,7 +373,7 @@ if barstate.islast and show_dash
     color  statc  = filled ? color.lime : armed ? color.aqua : color.gray
     string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE (flat)" : (dirn == 1 and not macro_long_ok) ? "SPY↓ vs long" : (dirn == -1 and not macro_short_ok) ? "SPY↑ vs short" : "clear ✓"
     color  gcol    = greason == "clear ✓" ? color.lime : color.orange
-    string sess_lbl = sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
+    string sess_lbl = is_auto ? ("Auto: " + (phase_rth ? "RTH" : phase_london ? "London" : "Asia")) : sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
     string tgt = is_trail ? ("trail " + str.tostring(trail_atr, "#.#") + "ATR (ride)") : (dirn == 1 ? str.tostring(Lt2, "#.#") : dirn == -1 ? str.tostring(St2, "#.#") : "—")
     table.cell(dash,0,0,"HIGHSTRIKE STACK", text_color=color.yellow, text_size=size.small)
     table.cell(dash,1,0, str.tostring(syminfo.ticker)+"  "+timeframe.period, text_color=color.silver, text_size=size.small)

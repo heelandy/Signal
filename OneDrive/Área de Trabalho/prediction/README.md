@@ -34,11 +34,12 @@ and no overnight gap risk give roughly a quarter of the drawdown. **QQQ 15m is t
 
 | File | What it is |
 |---|---|
-| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | **The strategy.** ORB resting stop-entry, per-TF auto-config, macro/regime/trend gates, scale-50%@TP1→BE→TP2 exit, prop-eval guardrails, EOD-flat, SL/TP lines + position-tool panel. Multi-asset (futures + equities/ETFs). |
-| `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine` | **The main indicator.** Mirrors the strategy's gated signal + SL/TP + resting entry + position-tool panel, plus a folded-in 5m/15m MTF overlay. Use this on your chart. |
+| `production/HIGHSTRIKE_ORB_STACK.pine` ⭐ | **PRIMARY indicator (NQ/MNQ futures).** The unified validated 5m system: TF-adaptive HH/HL structure gate + VWAP-cap + the graduated **structure-anchored stop** (F25b) and **trail exit** (F27b), with a **Session switch** — RTH / Asia / London / **Auto (Asia → London → RTH by clock)** / Custom. All three sessions validate on NQ/MNQ 5m (Asia F22, London F29, RTH). MTF dashboard with Entry/Stop-loss rows. *Run on NQ1!/MNQ1!. Forward-paper-test off-hours fills before sizing.* |
+| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | **The strategy.** ORB resting stop-entry, per-TF auto-config, macro/regime/trend gates, scale-50%@TP1→BE→TP2 exit, prop-eval guardrails, EOD-flat, SL/TP lines + position-tool panel. Multi-asset (futures + equities/ETFs). Structure-stop + trail are propagating in (off-by-default). |
+| `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine` | **The legacy main indicator.** Mirrors the strategy's gated signal + SL/TP + resting entry + position-tool panel, plus a folded-in 5m/15m MTF overlay. Structure-stop + trail added as off-by-default toggles. |
 | `production/HIGHSTRIKE_ORB_OPTIONS.pine` | **Options-friendly indicator (SPY/QQQ).** Translates the ORB signal into option structures — buy call/put, debit spread, credit spread — with strikes derived from the ORB levels, in a clean dashboard. Strikes/structure only (no chain/IV access in Pine). |
 | `production/HIGHSTRIKE_ORB_MTF_SIGNALS.pine` | Standalone 5m/15m signal display. Now redundant (its feature lives in the V1 indicator) — kept for reference. |
-| `validatedResearch/HIGHSTRIKE_ORB_STRUCTURE.pine` | **Candidate (not yet adopted).** The walk-forward-validated 5m stack — TF-adaptive HH/HL structure gate + VWAP-extension cap (Findings 20-21). Pending a TradingView compile + harness reconcile of `st_state`. |
+| `validatedResearch/HIGHSTRIKE_ORB_STRUCTURE.pine`, `…_ASIA.pine` | Reference only — **superseded by `production/HIGHSTRIKE_ORB_STACK.pine`**, which merges both (RTH + Asia + London) and adds the graduated stop/exit. |
 | `research/HIGHSTRIKE_V44_STRATEGY.pine`, `research/hs_recon_export.pine` | Legacy V44 + reconcile export (its VWAP/EMA entry had no edge; kept for the reconcile only). |
 
 In TradingView set the per-instrument cost inputs: **futures** commission ≈ 0.52, slippage 2 ticks;

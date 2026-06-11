@@ -452,6 +452,17 @@ the only residual is confirming ta.pivothigh's exact tie-rule (a free 2-min Data
 rule-invariant). Engine: `pivots(tie=…)` + `H.P.pivot_tie` + `qa/pivot_check.py`. A formal `qa/hs_reconcile.py` diff on a saved export is
 the optional 100% confirmation.
 
+## Finding 29 — the stack ALSO works in the LONDON session (NQ/MNQ 5m, London-open OR) — `research/orb_london.py` + `orb_london_walkforward.py`
+Mirror of F22 (Asia). London opens ~03:00 ET. On NQ 5m the structure stack on the London-open OR clears the full gate on every
+window; the production breakout is DEAD and a fade CATASTROPHIC (same off-hours pattern as Asia).
+- Best = **03:00-03:30 ET (London open): +0.574R, PF 3.45, win 75%, 17/17 years +**. Walk-forward: OOS holds (+0.56→+0.61), and it
+  survives 2× (+0.461) AND **3× slippage (+0.348)** — MORE slip-robust than Asia (European-open liquidity is deeper than Tokyo's).
+  03:00-04:00 (+0.591) and 02:00-02:30 (+0.528) also pass + survive 3× slip.
+- ES corroborates the direction (both sides+, OOS holds) but is the marginal instrument again — 11-12/17 yrs, dies under 2× slip.
+  Same NQ-strong / ES-weak split as F22/F24. 15m is weak (same as Asia) → 5m is the TF.
+VERDICT: validated NQ/MNQ candidate → added as the LONDON phase of the STACK auto-session (**Asia → London → RTH**, by the clock).
+The three sessions trade on different clocks (near-independent) → the auto-session diversifies across all three.
+
 ## Lever scorecard (cumulative) — adopt only if it clears the gate on QQQ AND NQ, then propagate to ALL scripts
 | lever | verdict |
 |---|---|
@@ -467,7 +478,8 @@ the optional 100% confirmation.
 | **HH/HL structure gate** (F17→F20) | ✅ GRADUATED on 5m — walk-forward holds on NQ+QQQ+SPY (every yr +, OOS holds, exp +60-90%, DD halved, PF earned not curve-fit); NEUTRAL on 15m. TF-adaptive adopt (st_state ≤5m, EMA ≥15m); needs Pine st_state PORT + all-scripts propagation + user go-ahead |
 | **HH/HL + VWAP-cap stacked, 5m** (F21) | ✅ ADDITIVE + WALK-FORWARD CONFIRMED (NQ+QQQ+SPY) — exp ~2× prod (+0.68..+0.80), DD cut 2-6×, positive every yr (15/15·9/9·9/9), OOS holds, CI +0.58..+0.71; PF 3.6-5.3 is earned not curve-fit. FULLY VALIDATED — only barrier = Pine st_state port + propagation. Recommended 5m adoption |
 | stricter trend (50/200) / range (ADX25-30) (F17) | 🟡 TF-dependent quality↑/DD↓; not robust across all 4 cells |
-| **Asia-session stack, NQ/MNQ 5m** (F22) | ✅ validated CANDIDATE — STRUCTURE stack on the Tokyo-open OR (19:00-20:00 ET): +0.50R, PF 2.78, 17/17 yrs +, OOS holds, survives 2× slip. Prod breakout + fade both DEAD in Asia. ES corroborates direction but dies at 2× slip → slippage is the live risk. Futures-only (`HIGHSTRIKE_ORB_ASIA.pine`). Pending st_state reconcile + forward-test |
+| **Asia-session stack, NQ/MNQ 5m** (F22) | ✅ validated CANDIDATE — STRUCTURE stack on the Tokyo-open OR (19:00-20:00 ET): +0.50R, PF 2.78, 17/17 yrs +, OOS holds, survives 2× slip. Prod breakout + fade both DEAD in Asia. ES corroborates direction but dies at 2× slip → slippage is the live risk. Futures-only. Pending forward-test |
+| **London-session stack, NQ/MNQ 5m** (F29) | ✅ validated CANDIDATE — stack on the London-open OR (03:00-03:30 ET): +0.574R, PF 3.45, 17/17 yrs +, OOS holds, survives 2× AND 3× slip (more slip-robust than Asia — deeper EU-open liquidity). Prod breakout + fade dead. ES marginal. Futures-only. Now the London phase of the STACK auto-session (Asia→London→RTH) |
 | **structure / tighter STOP, 5m stack** (F25→F25b) | ✅ GRADUATED via walk-forward — structure-anchored (last HH/HL swing) or 1.5-ATR stop lifts exp +0.74→+1.00R (PF 4.5→5.5), risk 48→29pt, both sides+, CI+, positive every year + OOS holds on NQ/QQQ/SPY (15/15·9/9·9/9), survives 2× slip; ES weaker (13-14/16 yrs, +0.23 at 2× slip). Adopt the tighter stop with the stack. Engine `stop_mode="struct"` + harness `sph/spl` |
 | **momentum EXIT for the stack: TRAIL / run-more** (F27→F27b) | ✅ GRADUATED via walk-forward — trail 2-3ATR & run-more(33%/1.5R/6R) all clear the gate on NQ+QQQ+SPY+ES (both sides+, CI+, every yr+, OOS holds, survive 2× slip). trail 3ATR strongest (NQ +0.98, QQQ +1.06), trail 2ATR most slip-robust. Adopt with the tighter stop = cut-short/run-long. Reverses F14 (bare ORB). Engine `scale_frac` |
 | vol-scaled reward (F25) | ❌ dead — TP2 insensitive to vol regime in the stack (3→6R flat); 4R stays right |
