@@ -4,7 +4,7 @@ HIGHSTRIKE F26 — prop-eval / path simulation of the stack (the practical go-li
 Walk the stack's CHRONOLOGICAL trade path against a funded-account ruleset, expressed in R (sizing-
 agnostic; 1R = your fixed per-trade $ risk): a profit TARGET, a TRAILING max drawdown, and a DAILY-loss
 limit. Rolling-start Monte-Carlo over the real sequence → pass-rate, blow-up-rate, median trades-to-pass.
-Streams: NQ 5m RTH stack, Asia stack, and BOTH combined (one account trading both sessions).
+Streams: NQ 5m RTH / Asia / London stacks, each pair, and ALL THREE on one account (F29 added London).
 
     python research/orb_prop_eval.py
 """
@@ -19,11 +19,14 @@ def _gate(d):
     st = d["st_state"].to_numpy(); d["trend_up"] = st == 1; d["trend_down"] = st == 2
 
 
-def stack(d, asia=False):
+def stack(d, session="rth"):
     _gate(d)
-    if asia:
+    if session == "asia":    # Tokyo-open OR 19:00-20:00 ET, flat 03:00 (trade-day mins, 18:00 ET = 0)
         return B.backtest(d, "scale_be", "both", False, "orb", 0, 1.0, 4.0, 60, 120, 0.0, 540, "stop",
                           tradeday=True, eod_min=540, vwap_cap=2.0)
+    if session == "london":  # London-open OR 03:00-03:30 ET, flat 08:00 (F29 validated window)
+        return B.backtest(d, "scale_be", "both", False, "orb", 0, 1.0, 4.0, 540, 570, 0.0, 840, "stop",
+                          tradeday=True, eod_min=840, vwap_cap=2.0)
     return B.backtest(d, "scale_be", "both", False, "orb", 0, 1.0, 4.0, 570, 600, 0.0, 900, "stop",
                       eod_min=958, vwap_cap=2.0)
 
@@ -61,9 +64,10 @@ def simulate(name, tr, profiles, max_trades=200):
 
 def main():
     d = state("NQ", "5m")
-    rth = stack(d, asia=False)
-    asia = stack(d, asia=True)
-    both = pd.concat([rth, asia]).sort_values("entry_time").reset_index(drop=True)
+    rth = stack(d, "rth")
+    asia = stack(d, "asia")
+    lond = stack(d, "london")
+    cat = lambda *xs: pd.concat(xs).sort_values("entry_time").reset_index(drop=True)
     # eval profiles in R: (target, trailing-DD, daily-loss). 1R ≈ your per-trade $ risk.
     profiles = [(9, 6, 4), (15, 10, 6), (30, 12, 8)]
     print("F26 prop-eval sim — NQ 5m stack, rolling-start over the real sequence (fixed-R sizing)\n")
@@ -71,7 +75,15 @@ def main():
     print()
     simulate("Asia stream", asia, profiles)
     print()
-    simulate("BOTH sessions", both, profiles)
+    simulate("London stream", lond, profiles)
+    print()
+    simulate("RTH + Asia", cat(rth, asia), profiles)
+    print()
+    simulate("RTH + London", cat(rth, lond), profiles)
+    print()
+    simulate("Asia + London", cat(asia, lond), profiles)
+    print()
+    simulate("ALL THREE sessions", cat(rth, asia, lond), profiles)
     print("\n  note: profiles are in R. Map to your account by 1R = the $ you risk per trade")
     print("  (e.g. MNQ risking $150/trade -> target +15R ~ $2,250, trail -10R ~ $1,500, daily -6R ~ $900).")
 

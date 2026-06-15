@@ -10,6 +10,9 @@
 //           survives +2-tick slippage; holds on 5m too (not TF-fragile).
 // Keeps V44's hardened machinery: real costs, macro stand-down, regime gates,
 // prop-eval guardrails, session/EOD-flat, scale-runner exit.
+// STACK upgrades propagated (all-scripts consistency rule) as OFF-BY-DEFAULT toggles:
+// structure trend gate (F20), VWAP cap (F16), structure stop (F25b), trail exit (F27b).
+// Defaults preserve V1 legacy behavior; the STACK/AUTO files run the upgrades ON.
 // Reconcile target: data/bt_nq_15m.csv from `python hs_backtest.py NQ 15m full scale_be both orb`.
 // ═══════════════════════════════════════════════════════════════════
 //@version=6
@@ -49,6 +52,14 @@ max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", min
 
 trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
+// STACK upgrades (validated; OFF by default here to preserve V1 legacy behavior — the STACK/AUTO files run them ON)
+trend_mode = input.string("EMA trend (legacy)", "Trend gate", group="Trend",
+             options=["EMA trend (legacy)", "Structure (HH/HL)", "Auto (structure <=5m / EMA >=15m)"],
+             tooltip="F20/F21: the HH/HL swing-structure gate (st_state) is the graduated 5m upgrade — exp ~2x with the VWAP cap. Legacy EMA kept as this script's default.")
+struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Trend", minval=2)
+struct_tol = input.float(0.10, "Structure tolerance %", group="Trend", step=0.05)
+cap_on = input.bool(false, "VWAP-extension cap (F16; stack runs ON, k=2)", group="Trend")
+cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="Trend", step=0.25, minval=0.5)
 
 local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
 local_atr_hi  = input.float(2.5,  "Volatile ATR%",         group="Local Regime", step=0.25)
@@ -71,20 +82,30 @@ mtf_on   = input.bool(false, "Higher-TF trend confirmation", group="MTF Confirm"
             tooltip="Require N of {1h,4h,D} to agree (EMA50/200 stack). RESEARCH: this REDUCES expectancy/PF/win on the ORB (research/orb_mtf_research.py) — default OFF; available to experiment.")
 mtf_min  = input.int(2, "Min higher-TFs that must agree (0-3)", group="MTF Confirm", minval=0, maxval=3)
 
+stop_mode = input.string("OR edge (legacy)", "Stop placement", group="Risk",
+            options=["OR edge (legacy)", "Structure swing (HH/HL)"],
+            tooltip="F25b graduated: resting the stop at the last HH/HL swing ~halves risk and lifts exp +0.74->+1.00R. Legacy OR-edge kept as this script's default.")
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk", step=0.1)
 min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk", step=0.1)
 sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk", step=0.25)
 tp1_rr      = input.float(1.0, "TP1 R", group="Risk", step=0.25)
 tp2_rr      = input.float(4.0, "TP2 R", group="Risk", step=0.25,
               tooltip="RESEARCH: 4R target -> exp +0.24R, PF 1.55, win 59%, maxDD -20R (beats the 3R/PF-1.48 record). Peak PF 1.63 if you also set the entry cutoff to 1130. Runner captures the trend leg; TP1 win-rate unchanged.")
-exit_style  = input.string("Scale 50% @TP1 -> BE -> TP2", "Exit", options=["Scale 50% @TP1 -> BE -> TP2","Full to TP2 (2R/-1R)"], group="Risk")
+exit_style  = input.string("Scale 50% @TP1 -> BE -> TP2", "Exit", options=["Scale 50% @TP1 -> BE -> TP2","Full to TP2 (2R/-1R)","Trail (ATR chandelier)"], group="Risk",
+              tooltip="F27b: a 2-3 ATR chandelier TRAIL beats scale-out on AVERAGE (cut short / run long). F34b GRADUATED the 'Full to TP2' mode: with TP2 R = 4 (the default above) it is the validated cap-4R = full position to the 4R cap on the structure stop, ~2× the trail's MEDIAN $/trade and honest PF, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip — best for steady eval accumulation. (The '2R/-1R' note is legacy; the cap follows TP2 R.) Legacy scale-out kept as this script's default.")
+trail_atr   = input.float(2.0, "Trail x ATR (trail mode)", group="Risk", step=0.5, minval=0.5)
 
 eval_on        = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
+eval_target    = input.float(3000.0, "EVAL: profit target $ (0 = off)", group="Prop Eval", step=100,
+                  tooltip="When cumulative profit since the strategy started reaches this, stop entering + flatten — pass secured. 0 disables.")
 eval_min_ct    = input.int(2, "EVAL: min contracts (runner floor)", group="Prop Eval", minval=1)
 risk_dlr       = input.float(150.0, "EVAL: risk $ per trade", group="Prop Eval", step=25)
-daily_loss     = input.float(600.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
+daily_loss     = input.float(700.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
 trail_dd       = input.float(1500.0,"EVAL: trailing DD $", group="Prop Eval", step=100)
-trail_buf      = input.float(300.0, "EVAL: trailing halt buffer $", group="Prop Eval", step=50)
+eval_buf       = input.float(200.0, "EVAL: halt buffer $", group="Prop Eval", step=50,
+                  tooltip="Halt EARLY by this much: daily halt at -(daily-buffer), trailing halt at peak-(trail-buffer). Same semantics as AUTO/STACK.")
+eval_anchor    = input.time(timestamp("12 Jun 2026 00:00 -0400"), "EVAL: ledger start", group="Prop Eval",
+                  tooltip="Equity BEFORE this moment is ignored by the guardrails. Set it to your eval's first day — otherwise the whole backtest history counts and the profit target / trailing DD trip the instant you enable EVAL.")
 fixed_qty      = input.int(2, "Fixed qty: contracts/shares (0 = risk-based)", group="Prop Eval", minval=0,
                   tooltip="Futures: contracts (2 default). EQUITIES/ETFs: this is SHARES, so 2 is tiny -> set 0 for risk-based sizing (shares = EVAL risk $ / per-share risk) or enter a real share count.")
 eod_flat       = input.bool(true, "EOD: flatten at HHMM", group="Session")
@@ -103,6 +124,38 @@ emaF = ta.ema(close, trend_ema_f)
 emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
+float vwap_c = ta.vwap
+// HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) — used when the Trend gate input selects it
+float ph = ta.pivothigh(high, struct_lb, struct_lb)
+float pl = ta.pivotlow(low,  struct_lb, struct_lb)
+var float ph_last = na
+var float ph_prev = na
+var float pl_last = na
+var float pl_prev = na
+var int   st_state = 0
+int st_prev = st_state
+if not na(ph)
+    if na(ph_last) or math.abs(ph - ph_last) / ph_last * 100.0 >= struct_tol
+        ph_prev := ph_last
+        ph_last := ph
+if not na(pl)
+    if na(pl_last) or math.abs(pl - pl_last) / pl_last * 100.0 >= struct_tol
+        pl_prev := pl_last
+        pl_last := pl
+bool s_hh = not na(ph_last) and not na(ph_prev) and ph_last > ph_prev
+bool s_lh = not na(ph_last) and not na(ph_prev) and ph_last < ph_prev
+bool s_hl = not na(pl_last) and not na(pl_prev) and pl_last > pl_prev
+bool s_ll = not na(pl_last) and not na(pl_prev) and pl_last < pl_prev
+if s_hh and s_hl
+    st_state := 1
+else if s_ll and s_lh
+    st_state := 2
+else if (s_hh and s_ll) or (s_hl and s_lh)
+    st_state := 3
+if st_prev == 2 and not na(ph_last) and close > ph_last and close[1] <= ph_last
+    st_state := 0
+if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
+    st_state := 0
 pt_val = syminfo.pointvalue
 string asset_class = syminfo.type == "futures" ? "FUTURE" : syminfo.type == "fund" ? "ETF" : syminfo.type == "stock" ? "EQUITY" : str.upper(syminfo.type)
 bool is_equity = asset_class == "EQUITY" or asset_class == "ETF"
@@ -117,6 +170,10 @@ int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
 int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+// TF-adaptive trend gate (legacy EMA unless the input opts into the structure state)
+bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
+bool eff_up   = use_struct ? (st_state == 1) : trend_up
+bool eff_down = use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME (ported from V44) ─────────────────────────
 spy_b() =>
@@ -210,13 +267,24 @@ if or_set and na(Le) and not na(or_high) and not na(or_low)       // freeze leve
     Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
     Se := or_low  - brk_buf
     Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+// structure stop mode (F25b): re-anchor the resting stop to the last HH/HL swing while ARMED (frozen at fill)
+if stop_mode == "Structure swing (HH/HL)"
+    if not na(Le) and strategy.position_size <= 0
+        float aL = not na(pl_last) ? pl_last : or_low
+        Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    if not na(Se) and strategy.position_size >= 0
+        float aS = not na(ph_last) ? ph_last : or_high
+        Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
 float Lt1 = Le + (Le - Ls) * tp1_rr
 float Lt2 = Le + (Le - Ls) * tp2_rr
 float St1 = Se - (Ss - Se) * tp1_rr
 float St2 = Se - (Ss - Se) * tp2_rr
+// VWAP-extension cap (F16): with cap ON, the entry only rests while the level is <= k*ATR beyond VWAP
+bool cap_long_ok  = not cap_on or na(Le) or (Le - vwap_c) / atr14 <= cap_k
+bool cap_short_ok = not cap_on or na(Se) or (vwap_c - Se) / atr14 <= cap_k
 bool window = or_set and rth and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
-bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok and cap_long_ok
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok and cap_short_ok
 // re-entry: re-arm once price falls back INSIDE the OR; cap entries/day. OFF => one entry per side.
 if reentry and not na(or_high) and close < or_high
     armed_l := true
@@ -234,14 +302,19 @@ if arm_s and not arm_s[1]
     alert("HIGHSTRIKE ORB " + syminfo.ticker + " — SHORT ARMED. Sell-stop " + str.tostring(Se, format.mintick) + " | SL " + str.tostring(Ss, format.mintick) + " | TP " + str.tostring(St2, format.mintick), alert.freq_once_per_bar)
 
 // ───────────────────────── EVAL guardrails (equity-based) ─────────────────────────
+bool ev_live = time >= eval_anchor
 var float day_eq = na
 if new_day or na(day_eq)
     day_eq := strategy.equity
 var float peak_eq = na
-peak_eq := na(peak_eq) ? strategy.equity : math.max(peak_eq, strategy.equity)
-bool day_breaker = eval_on and (strategy.equity - day_eq) <= -daily_loss
-bool dd_halt     = eval_on and strategy.equity <= (peak_eq - trail_dd) + trail_buf
-bool eval_block  = day_breaker or dd_halt
+peak_eq := na(peak_eq) or not ev_live ? strategy.equity : math.max(peak_eq, strategy.equity)
+var float start_eq = na
+if na(start_eq) or (ev_live and not ev_live[1])     // re-baseline at the ledger start
+    start_eq := strategy.equity
+bool day_breaker = eval_on and ev_live and (strategy.equity - day_eq) <= -math.max(daily_loss - eval_buf, 0)
+bool dd_halt     = eval_on and ev_live and strategy.equity <= peak_eq - math.max(trail_dd - eval_buf, 0)
+bool eval_passed = eval_on and ev_live and eval_target > 0 and (strategy.equity - start_eq) >= eval_target
+bool eval_block  = day_breaker or dd_halt or eval_passed
 
 // ───────────────────────── EXECUTION ─────────────────────────
 var float t_sl  = na
@@ -251,6 +324,7 @@ var float t_ep  = na
 var bool  tp1_filled = false
 bool flat = strategy.position_size == 0
 bool full2 = exit_style == "Full to TP2 (2R/-1R)"
+bool is_trail = exit_style == "Trail (ATR chandelier)"
 
 f_units(entry, stop) =>
     rk = math.abs(entry - stop)
@@ -290,7 +364,11 @@ if just_short
 
 // manage LONG
 if strategy.position_size > 0
-    if full2
+    if is_trail
+        if not just_long
+            t_sl := math.max(t_sl, close - trail_atr * atr14)    // chandelier ratchet (F27b)
+        strategy.exit("Lx", from_entry="L", stop=t_sl)
+    else if full2
         strategy.exit("Lx", from_entry="L", stop=t_sl, limit=t_tp2)
     else
         if high >= t_tp1
@@ -300,7 +378,11 @@ if strategy.position_size > 0
         strategy.exit("Lx2", from_entry="L", stop=st, limit=t_tp2)
 // manage SHORT
 if strategy.position_size < 0
-    if full2
+    if is_trail
+        if not just_short
+            t_sl := math.min(t_sl, close + trail_atr * atr14)
+        strategy.exit("Sx", from_entry="S", stop=t_sl)
+    else if full2
         strategy.exit("Sx", from_entry="S", stop=t_sl, limit=t_tp2)
     else
         if low <= t_tp1
@@ -309,6 +391,9 @@ if strategy.position_size < 0
         strategy.exit("Sx1", from_entry="S", qty_percent=50, stop=t_sl, limit=t_tp1)
         strategy.exit("Sx2", from_entry="S", stop=st, limit=t_tp2)
 
+// EVAL target reached: flatten + stand down (don't give the pass back)
+if eval_passed and strategy.position_size != 0
+    strategy.close_all(comment="EVAL TARGET")
 // EOD flat
 var bool eod_done = false
 if new_day
@@ -335,11 +420,11 @@ float ssl = strategy.position_size < 0 ? t_sl : Ss
 float ss1 = strategy.position_size < 0 ? t_tp1 : St1
 float ss2 = strategy.position_size < 0 ? t_tp2 : St2
 plot(lplan ? lsl : na, "Long SL",  color=color.new(color.red,   25), style=plot.style_linebr)
-plot(lplan ? ls1 : na, "Long TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
-plot(lplan ? ls2 : na, "Long TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(lplan and not is_trail ? ls1 : na, "Long TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(lplan and not is_trail ? ls2 : na, "Long TP2", color=color.new(color.green, 10), style=plot.style_linebr)
 plot(splan ? ssl : na, "Short SL",  color=color.new(color.red,   25), style=plot.style_linebr)
-plot(splan ? ss1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
-plot(splan ? ss2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(splan and not is_trail ? ss1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(splan and not is_trail ? ss2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
 // WRITE ENTRY / SL / TP on the chart lines — armed AND while in the trade (uses the frozen in-trade levels)
 f_setlbl(lbl, cond, price, txt, col) =>
     label out = lbl
@@ -369,13 +454,13 @@ if barstate.islast and show_line_labels
     string r1 = str.tostring(tp1_rr, "#.#")
     string r2 = str.tostring(tp2_rr, "#.#")
     lbl_Le  := f_setlbl(lbl_Le,  l_live, lep, "▲ ENTRY " + str.tostring(lep, format.mintick),               color.new(color.yellow, 0))
-    lbl_Ls  := f_setlbl(lbl_Ls,  l_live, lsl, "SL "  + str.tostring(lsl, format.mintick) + "  -1R",          color.new(color.red, 0))
-    lbl_Lt1 := f_setlbl(lbl_Lt1, l_live, ls1, "TP1 " + str.tostring(ls1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
-    lbl_Lt2 := f_setlbl(lbl_Lt2, l_live, ls2, "TP2 " + str.tostring(ls2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
+    lbl_Ls  := f_setlbl(lbl_Ls,  l_live, lsl, (is_trail and strategy.position_size > 0 ? "TRAIL " : "SL ") + str.tostring(lsl, format.mintick), color.new(color.red, 0))
+    lbl_Lt1 := f_setlbl(lbl_Lt1, l_live and not is_trail, ls1, "TP1 " + str.tostring(ls1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_Lt2 := f_setlbl(lbl_Lt2, l_live and not is_trail, ls2, "TP2 " + str.tostring(ls2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
     lbl_Se  := f_setlbl(lbl_Se,  s_live, sep, "▼ ENTRY " + str.tostring(sep, format.mintick),               color.new(color.yellow, 0))
-    lbl_Ss  := f_setlbl(lbl_Ss,  s_live, ssl, "SL "  + str.tostring(ssl, format.mintick) + "  -1R",          color.new(color.red, 0))
-    lbl_St1 := f_setlbl(lbl_St1, s_live, ss1, "TP1 " + str.tostring(ss1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
-    lbl_St2 := f_setlbl(lbl_St2, s_live, ss2, "TP2 " + str.tostring(ss2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
+    lbl_Ss  := f_setlbl(lbl_Ss,  s_live, ssl, (is_trail and strategy.position_size < 0 ? "TRAIL " : "SL ") + str.tostring(ssl, format.mintick), color.new(color.red, 0))
+    lbl_St1 := f_setlbl(lbl_St1, s_live and not is_trail, ss1, "TP1 " + str.tostring(ss1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_St2 := f_setlbl(lbl_St2, s_live and not is_trail, ss2, "TP2 " + str.tostring(ss2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
 plot(trend_ema_s > 0 ? emaS : na, "EMA slow", color=color.new(color.gray, 50))
 plotshape(just_long,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
 plotshape(just_short, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
@@ -389,19 +474,19 @@ if barstate.islast and show_dash
     table.cell(dash,0,1,"Regime", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,1, regime + (spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=regime=="A"?color.lime:regime=="D"?color.red:color.aqua, text_size=size.tiny)
     table.cell(dash,0,2,"Trend", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,2, trend_up?"UP":trend_down?"DOWN":"flat", text_color=trend_up?color.lime:trend_down?color.red:color.gray, text_size=size.tiny)
+    table.cell(dash,1,2, use_struct ? ("STRUCT: " + (st_state==1?"UP":st_state==2?"DOWN":st_state==3?"RANGE":"—")) : (trend_up?"UP":trend_down?"DOWN":"flat"), text_color=eff_up?color.lime:eff_down?color.red:color.gray, text_size=size.tiny)
     table.cell(dash,0,3,"Local", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,3, local_regime==1?"TREND":local_regime==2?"RANGE":"VOL", text_color=local_ok?color.lime:color.orange, text_size=size.tiny)
     table.cell(dash,0,4,"OR", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,4, or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming", text_color=color.aqua, text_size=size.tiny)
     table.cell(dash,0,5,"Eval", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,5, eval_block?"HALTED":"ok", text_color=eval_block?color.red:color.lime, text_size=size.tiny)
+    table.cell(dash,1,5, not eval_on ? "off" : eval_passed ? "TARGET ✓" : eval_block ? "HALTED" : "ok" + (eval_target > 0 ? "  " + str.tostring(strategy.equity - start_eq, "#") + "/" + str.tostring(eval_target, "#") : ""), text_color=eval_passed?color.lime:eval_block?color.red:not eval_on?color.gray:color.lime, text_size=size.tiny)
 
 // ───────────────────────── POSITION-TOOL PANEL (labeled SL/TP boxes, like the TV long/short tool) ─────────────────────────
 bool inL = strategy.position_size > 0
 bool inS = strategy.position_size < 0
-bool panel_long  = show_panel and show_plan and (inL or (window and not traded_l and gate_long))
-bool panel_short = show_panel and show_plan and (inS or (window and not traded_s and gate_short))
+bool panel_long  = show_panel and show_plan and not is_trail and (inL or (window and not traded_l and gate_long))
+bool panel_short = show_panel and show_plan and not is_trail and (inS or (window and not traded_s and gate_short))
 var box   pbx_g = na
 var box   pbx_r = na
 var label plb_e  = na

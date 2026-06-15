@@ -23,10 +23,30 @@
       "Read(//c/Users/heela/OneDrive/Área de Trabalho/**)",
       "Bash(python research/orb_london.py 5m 15m)",
       "Bash(python research/orb_london_walkforward.py)",
-      "PowerShell(Move-Item \"validatedResearch\\\\HIGHSTRIKE_ORB_STACK.pine\" \"production\\\\HIGHSTRIKE_ORB_STACK.pine\")"
+      "PowerShell(Move-Item \"validatedResearch\\\\HIGHSTRIKE_ORB_STACK.pine\" \"production\\\\HIGHSTRIKE_ORB_STACK.pine\")",
+      "Bash(python research/orb_regimeb_entries.py)",
+      "Bash(python research/orb_regimeb_oos.py)",
+      "Bash(python research/orb_confirm_entry.py)",
+      "Bash(cat >> *)",
+      "Bash(python research/orb_prop_eval_b.py)",
+      "Bash(python research/orb_1m.py)",
+      "Bash(python research/orb_prop_eval_throttle.py)",
+      "Bash(python research/orb_1m_robust.py)",
+      "Bash(python research/orb_prop_eval_mixed.py)",
+      "Bash(xargs grep -l \"def stack\\\\|def simulate\")",
+      "Bash(awk '/^def _orb_signals|^def _signals/,/^    return lsig, ssig/' orb_regimeb_entries.py orb_confirm_entry.py)",
+      "Bash(python research/orb_range_block.py)",
+      "Bash(python research/orb_f33_debug.py)",
+      "Bash(python research/orb_range_eval.py)",
+      "Bash(python research/orb_config_validate.py)",
+      "Bash(cd \"/c/Users/heela/OneDrive/Área de Trabalho/prediction\" && grep -n \"f_units\\\\|risk_dlr\\\\|fixed_qty\\\\|max_qty\\\\|pt_val\\\\|syminfo.point\\\\|syminfo.mintick\\\\|min_tick\\\\|pointvalue\" production/HIGHSTRIKE_ORB_AUTO.pine)",
+      "Read(//c/c/Users/heela/OneDrive/Área de Trabalho/prediction/production/**)",
+      "Bash(PYTHONIOENCODING=utf-8 python research/orb_config_validate.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python research/orb_projection_test.py NQ QQQ)"
     ],
     "additionalDirectories": [
-      "c:\\Users\\heela\\.claude\\projects\\c--Users-heela\\memory"
+      "c:\\Users\\heela\\.claude\\projects\\c--Users-heela\\memory",
+      "C:\\Users\\heela\\.claude\\projects\\c--Users-heela\\memory"
     ]
   }
 }

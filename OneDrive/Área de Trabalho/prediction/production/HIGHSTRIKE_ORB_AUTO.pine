@@ -82,7 +82,9 @@ vix_ext  = input.float(35.0, "VIX extreme",  group="Regime", step=1)
 spy_adx_min = input.float(25.0, "Macro ADX min", group="Regime", step=1)
 persist_n   = input.int(3, "Regime persistence bars", group="Regime", minval=1)
 block_d     = input.bool(true, "Block REGIME D", group="Regime")
-block_b     = input.bool(true, "Block trend in REGIME B", group="Regime")
+block_b_ses = input.string("London only", "Block REGIME B trend", group="Regime",
+              options=["Off", "London only", "All sessions"],
+              tooltip="F31/F31f (2026-06-12): regime B carries a validated edge in ALL 3 sessions (~2.4x trades, OOS stronger than IS) — but London gets riskier unblocked at tight daily limits (blow-up 0→13% on the tight eval profile). Default keeps the B-block during LONDON HOURS (03:00-09:30 ET) only; RTH + Asia trade regime B. 'All sessions' = the old fully-blocked behavior. D stays blocked regardless. Matches STACK.")
 // ───────────────────────── RISK PLAN (the two graduated upgrades) ─────────────────────────
 stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Risk plan",
             options=["Structure swing (HH/HL)", "OR edge"],
@@ -92,21 +94,29 @@ min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
 sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
 exit_mode = input.string("Trail (ATR chandelier)", "Exit", group="Risk plan",
             options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)"],
-            tooltip="F27b: trail 2ATR beats fixed-TP on the stack (most slip-robust). Bracket mode = broker holds SL+TP, survives a dead webhook pipe — use it if the bridge can't process exit webhooks reliably.")
+            tooltip="F27b: trail 2ATR beats fixed-TP on AVERAGE (catches tail trends, most slip-robust) — default. F34b GRADUATED the bracket: full position to a fixed-R cap on the structure stop = ~2× the trail's MEDIAN $/trade and honest, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip — best for steady eval accumulation (set Take-profit R = 4 below). Bracket also survives a dead webhook pipe (broker holds SL+TP). Toggle freely.")
 trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
-tp_rr       = input.float(2.0, "Take-profit R (bracket mode)", group="Risk plan", step=0.5)
+tp_rr       = input.float(4.0, "Take-profit R (bracket mode)", group="Risk plan", step=0.5,
+            tooltip="F34b: 4R is the graduated cap (only level surviving 2× slip on all 5 instruments; 2R/3R die on ES/GC). The structure stop puts this ~4× the typical stop distance in points.")
 // ───────────────────────── SIZING ─────────────────────────
 fixed_qty   = input.int(1, "Fixed qty: contracts/shares (0 = risk-based)", group="Sizing", minval=0,
               tooltip="Futures: contracts. EQUITIES: SHARES. 0 = size from Risk $ per trade (structure stop ~halves risk, so risk-based sizes larger — capped below).")
 risk_dlr    = input.float(150.0, "Risk $ per trade (qty=0)", group="Sizing", step=25)
 max_qty     = input.int(10, "Max qty safety cap", group="Sizing", minval=1)
-// ───────────────────────── PROP EVAL GUARDRAILS (F26) ─────────────────────────
-eval_on   = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
-daily_loss= input.float(600.0, "EVAL: daily loss halt $", group="Prop Eval", step=50)
+// ───────────────────────── PROP EVAL GUARDRAILS (F26/F26c — full funded ruleset) ─────────────────────────
+eval_on    = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
+eval_target= input.float(3000.0, "EVAL: profit target $ (0 = off)", group="Prop Eval", step=100,
+             tooltip="When cumulative profit since the strategy started reaches this, the script flattens and STOPS entering — pass secured, don't give it back. 0 disables.")
+daily_loss = input.float(700.0, "EVAL: daily loss limit $", group="Prop Eval", step=50)
+trail_dd   = input.float(1500.0, "EVAL: trailing max loss $", group="Prop Eval", step=100)
+eval_buf   = input.float(200.0, "EVAL: halt buffer $", group="Prop Eval", step=50,
+             tooltip="Halt EARLY by this much: daily halt at -(daily-buffer), trailing halt at peak-(trail-buffer). F26c sizing for $3000/$1500/$700-800: risk $250-300/trade across all sessions. ⚠ TV equity tracks fills since the alert went live — the BROKER is the source of truth; reconcile daily.")
+eval_anchor= input.time(timestamp("12 Jun 2026 00:00 -0400"), "EVAL: ledger start", group="Prop Eval",
+             tooltip="Equity BEFORE this moment is ignored by the guardrails. Set it to your eval's first day — otherwise the whole backtest history counts and the profit target / trailing DD trip the instant you enable EVAL.")
 // ───────────────────────── WEBHOOK ─────────────────────────
 wh_provider = input.string("TradersPost", "Webhook format", group="Webhook",
               options=["TradersPost", "PickMyTrade / Tradovate", "Generic JSON (relay / multi-account)", "Custom template"],
-              tooltip="Generic JSON carries the FULL trade plan + accountIds[] — point it at a relay (n8n / Cloudflare worker / TradersPost multi-broker) to fan out to several accounts/providers. Custom template: build any schema with %TICKER% %ACTION% %QTY% %ENTRY% %STOP% %TP% %EVENT%.")
+              tooltip="Generic JSON carries the FULL trade plan + accountIds[] — point it at a relay (n8n / Cloudflare worker / TradersPost multi-broker) to fan out to several accounts/providers. Custom template: build any schema with %TICKER% %ACTION% %QTY% %ENTRY% %STOP% %TP% %EVENT% %TOKEN% %ACCOUNT%.")
 wh_ticker_ov= input.string("", "Ticker override (blank = chart symbol)", group="Webhook",
               tooltip="e.g. send MNQ (root) or MNQZ2026 (front month) while charting NQ1!. Leave blank to send the chart ticker.")
 wh_qty_ph   = input.string("{{strategy.order.contracts}}", "Qty field", group="Webhook",
@@ -126,6 +136,8 @@ tmpl_entry  = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","quantit
 tmpl_exit   = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","event":"%EVENT%"}', "Custom EXIT template", group="Webhook")
 // ───────────────────────── DISPLAY ─────────────────────────
 show_plan        = input.bool(true, "Show stop / target lines", group="Display")
+show_gated       = input.bool(true, "Show entry levels while the gate is BLOCKED (dimmed)", group="Display",
+                   tooltip="Bright yellow = the order is RESTING (would fire on a touch). Dim gray = the level exists but a gate (trend/regime/VWAP-cap/eval) blocks it, so NO order is working there.")
 show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
 show_dash        = input.bool(true, "Show dashboard", group="Display")
 
@@ -233,7 +245,9 @@ else
     reg_pend := reg_raw
     reg_cnt := 1
 string regime = reg_conf != "-" ? reg_conf : reg_raw
-bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and block_b))
+// F31f: B-block can be session-scoped — London hours = 03:00-09:30 ET (o_now 540-930 on the trade-day clock), matches STACK
+bool b_block_now = block_b_ses == "All sessions" or (block_b_ses == "London only" and o_now >= 540 and o_now < 930)
+bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and b_block_now))
 bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
 bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
 int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
@@ -303,11 +317,22 @@ if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < 
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
     traded_s := false
 
-// ───────────────────────── EVAL guardrails ─────────────────────────
+// ───────────────────────── EVAL guardrails (daily loss + trailing DD + profit target) ─────────────────────────
+bool ev_live = time >= eval_anchor
 var float day_eq = na
 if new_day or na(day_eq)
     day_eq := strategy.equity
-bool eval_block = eval_on and (strategy.equity - day_eq) <= -daily_loss
+var float start_eq = na
+if na(start_eq) or (ev_live and not ev_live[1])     // re-baseline at the ledger start
+    start_eq := strategy.equity
+var float peak_eq = na
+peak_eq := na(peak_eq) or not ev_live ? strategy.equity : math.max(peak_eq, strategy.equity)
+bool eval_day_halt = eval_on and ev_live and (strategy.equity - day_eq) <= -math.max(daily_loss - eval_buf, 0)
+bool eval_dd_halt  = eval_on and ev_live and strategy.equity <= peak_eq - math.max(trail_dd - eval_buf, 0)
+bool eval_passed   = eval_on and ev_live and eval_target > 0 and (strategy.equity - start_eq) >= eval_target
+bool eval_block    = eval_day_halt or eval_dd_halt or eval_passed
+if eval_block and not eval_block[1]
+    alert("HIGHSTRIKE AUTO " + syminfo.ticker + (eval_passed ? " — EVAL TARGET REACHED ✓ standing down" : eval_day_halt ? " — EVAL DAILY-LOSS HALT" : " — EVAL TRAILING-DD HALT"), alert.freq_once_per_bar)
 bool flat = strategy.position_size == 0
 
 f_units(entry, stop) =>
@@ -317,7 +342,7 @@ f_units(entry, stop) =>
 
 // ───────────────────────── WEBHOOK JSON BUILDERS (provider switch) ─────────────────────────
 string wh_ticker = wh_ticker_ov == "" ? syminfo.ticker : wh_ticker_ov
-f_px(p) => str.tostring(p, format.mintick)
+f_px(float p) => str.tostring(p, format.mintick)
 f_extra() => wh_extra == "" ? "" : "," + wh_extra
 f_accounts() =>
     string out = ""
@@ -326,7 +351,7 @@ f_accounts() =>
         for i = 0 to array.size(arr) - 1
             out := out + (i > 0 ? "," : "") + '"' + array.get(arr, i) + '"'
     out == "" ? (wh_account == "" ? "" : '"' + wh_account + '"') : out
-f_tmpl(t, act, e, sl, tp, ev) =>
+f_tmpl(string t, string act, float e, float sl, float tp, string ev) =>
     string s = str.replace_all(t, "%TICKER%", wh_ticker)
     s := str.replace_all(s, "%ACTION%", act)
     s := str.replace_all(s, "%QTY%", wh_qty_ph)
@@ -334,9 +359,11 @@ f_tmpl(t, act, e, sl, tp, ev) =>
     s := str.replace_all(s, "%STOP%", na(sl) ? "0" : f_px(sl))
     s := str.replace_all(s, "%TP%", na(tp) ? "0" : f_px(tp))
     s := str.replace_all(s, "%EVENT%", ev)
+    s := str.replace_all(s, "%TOKEN%", wh_token)
+    s := str.replace_all(s, "%ACCOUNT%", wh_account)
     s
 // ENTRY payload: act = buy|sell. Trail mode sends NO take-profit (broker holds only the structure SL).
-f_entry_json(act, e, sl, tp) =>
+f_entry_json(string act, float e, float sl, float tp) =>
     string j = ""
     if wh_provider == "TradersPost"
         j := '{"ticker":"' + wh_ticker + '","action":"' + act + '","quantity":' + wh_qty_ph +
@@ -359,7 +386,7 @@ f_entry_json(act, e, sl, tp) =>
         j := f_tmpl(tmpl_entry, act, e, sl, tp, "entry")
     j
 // EXIT / flatten payload: ev = exit (stop/trail/tp fill) | session_end | eval_halt
-f_exit_json(ev) =>
+f_exit_json(string ev) =>
     string j = ""
     if wh_provider == "TradersPost"
         j := '{"ticker":"' + wh_ticker + '","action":"exit"' + f_extra() + '}'
@@ -373,11 +400,11 @@ f_exit_json(ev) =>
     else
         j := f_tmpl(tmpl_exit, "exit", na, na, na, ev)
     j
-f_stop_update_json(sl) =>
+f_stop_update_json(float sl) =>
     '{"event":"stop_update","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","stopLoss":' + f_px(sl) +
      ',"session":"' + sess_lbl + '"' + (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
      (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
-f_armed_json(side, e, sl, tp) =>
+f_armed_json(string side, float e, float sl, float tp) =>
     '{"event":"armed","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","side":"' + side +
      '","entryLevel":' + f_px(e) + ',"stopLoss":' + f_px(sl) +
      ',"takeProfit":' + (is_trail or na(tp) ? "null" : f_px(tp)) + ',"session":"' + sess_lbl + '","sentAt":"{{timenow}}"' + f_extra() + '}'
@@ -440,8 +467,8 @@ if just_long or just_short
 if (past_flat or reset_now) and strategy.position_size != 0 and not flat_sent
     strategy.close_all(comment="SESSION END", alert_message=f_exit_json("session_end"))
     flat_sent := true
-if eval_block and strategy.position_size != 0 and not flat_sent                  // eval halt: flatten + stop for the day
-    strategy.close_all(comment="EVAL HALT", alert_message=f_exit_json("eval_halt"))
+if eval_block and strategy.position_size != 0 and not flat_sent                  // eval halt/target: flatten + stand down
+    strategy.close_all(comment=eval_passed ? "EVAL TARGET" : "EVAL HALT", alert_message=f_exit_json(eval_passed ? "eval_target" : "eval_halt"))
     flat_sent := true
 
 // ───────────────────────── VISUALS ─────────────────────────
@@ -453,6 +480,9 @@ plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
 plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+// dimmed entry levels while a gate BLOCKS the side (no order resting there)
+plot(show_gated and window and flat and not traded_l and not arm_l ? Le : na, "Long entry (gated)",  color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_gated and window and flat and not traded_s and not arm_s ? Se : na, "Short entry (gated)", color=color.new(color.gray, 45), style=plot.style_linebr)
 plot(show_plan and l_live ? l_stop_now : na, "Long stop",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
 plot(show_plan and s_live ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
 plot(show_plan and l_live and not is_trail ? (strategy.position_size > 0 ? t_tp : Ltp) : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
@@ -460,6 +490,8 @@ plot(show_plan and s_live and not is_trail ? (strategy.position_size < 0 ? t_tp 
 plotshape(just_long,  "Long entry",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="BUY",  textcolor=color.white, size=size.tiny)
 plotshape(just_short, "Short entry", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.tiny)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
+bgcolor(eval_block and not eval_passed ? color.new(color.red, 82) : na)
+bgcolor(eval_passed ? color.new(color.green, 88) : na)
 f_setlbl(lbl, cond, price, txt, col) =>
     label out = lbl
     if cond and not na(price)
@@ -489,10 +521,10 @@ if barstate.islast and show_line_labels
 
 // ───────────────────────── DASHBOARD ─────────────────────────
 f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
-var table t = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
+var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
-    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : "waiting (no gated setup)"
-    color stc = strategy.position_size != 0 ? color.lime : (arm_l or arm_s) ? color.aqua : eval_block ? color.red : color.orange
+    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_passed ? "TARGET ✓ — done" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : "waiting (no gated setup)"
+    color stc = strategy.position_size != 0 ? color.lime : eval_passed ? color.lime : (arm_l or arm_s) ? color.aqua : eval_block ? color.red : color.orange
     string prov = wh_provider == "TradersPost" ? "TradersPost" : wh_provider == "PickMyTrade / Tradovate" ? "PickMyTrade" : wh_provider == "Generic JSON (relay / multi-account)" ? "Generic→relay" : "Custom"
     table.cell(t,0,0,"ORB AUTO", text_color=color.yellow, text_size=size.small)
     table.cell(t,1,0, wh_ticker + "  " + timeframe.period, text_color=color.silver, text_size=size.small)
@@ -512,3 +544,10 @@ if barstate.islast and show_dash
     table.cell(t,1,7, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=color.aqua, text_size=size.tiny)
     table.cell(t,0,8,"Webhook", text_color=color.silver, text_size=size.tiny)
     table.cell(t,1,8, prov + (wh_account != "" ? " · acct set" : "") + (wh_accounts != "" ? " · multi" : ""), text_color=color.silver, text_size=size.tiny)
+    table.cell(t,0,9,"Eval", text_color=color.silver, text_size=size.tiny)
+    string evtxt = not eval_on ? "off" : eval_passed ? "TARGET ✓ +" + str.tostring(strategy.equity - start_eq, "#") :
+         (eval_day_halt ? "DAY HALT" : eval_dd_halt ? "DD HALT" : "ok") +
+         "  day " + str.tostring(strategy.equity - day_eq, "#") + "/" + str.tostring(-daily_loss, "#") +
+         " · dd " + str.tostring(strategy.equity - peak_eq, "#") + "/" + str.tostring(-trail_dd, "#") +
+         (eval_target > 0 ? " · tgt " + str.tostring(strategy.equity - start_eq, "#") + "/" + str.tostring(eval_target, "#") : "")
+    table.cell(t,1,9, evtxt, text_color=not eval_on ? color.gray : eval_passed ? color.lime : eval_block ? color.red : color.silver, text_size=size.tiny)

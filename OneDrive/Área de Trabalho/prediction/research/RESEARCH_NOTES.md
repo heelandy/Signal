@@ -424,6 +424,29 @@ target / trailing-DD / daily-loss. NQ 5m:
 looser daily/trailing limit (rhymes with the F22 slippage caution).
 - **BOTH sessions:** 98-99% PASS, ≤2% blow-up, fastest (more, diversified trades). Read: the stack survives a typical eval easily; trade
 both sessions and don't set the daily stop too tight for Asia.
+**F26b (2026-06-11) — re-run with LONDON (F29) included, all sessions + combos:**
+- **London standalone:** 92-100% PASS, **0% blow-up on every profile** — the best single-session eval profile (tightest +9/−6/−4: London
+  100% vs RTH 98% vs Asia 89%); median 15-50 trades to pass. Confirms F29's "more robust than Asia" from the eval-survival angle too.
+- **Pairs:** RTH+London is the cleanest pair (100/99/96% PASS, 0% blow-up); RTH+Asia 98/99/98% (2% blow-up tightest); Asia+London
+  97/99/98% (3% blow-up tightest — Asia is always the blow-up contributor on tight rails).
+- **ALL THREE on one account:** **99/99/98% PASS, ≤1% blow-up, median 14-46 trades to pass** — diversification dilutes Asia's
+  tight-profile risk (11% → 1%) and is the fastest/safest overall. Read: trade all three sessions on one eval account; if the firm's
+  daily/trailing limits are tight (≤−4R daily), Asia is the session to skip or size down.
+**F26d (2026-06-11) — GC added to the user's eval ($3,000 tgt / $1,500 trail / $700-800 daily).** GC US-morning stream
+(F30) vs NQ all-three: daily-PnL corr **+0.12** (real instrument diversification) BUT GC and NQ-RTH both fire at the 09:30
+open → same-DAY clustering against one daily limit. Net effect: median pass ~15% faster (71→61d @$200, 55→45d @$250,
+41→34d @$300) at slightly higher blow-up on tight rails ($700 daily @$250: 4→9%). Best combos: **$200/trade + GC + $800
+daily = 98% pass / 1% blow-up / median 61d**; **$250 + GC + $800 = 95% / 5% / 45d** (the speed pick). At $700 daily,
+adding GC is only worth it at $200. GC is still pending its forward paper-test — don't add it to a live eval before that.
+**F26c (2026-06-11) — the USER'S actual eval rules: target $3,000 / trailing max loss $1,500 / daily loss $700.** Swept the
+per-trade risk (1R $) that maps those $ rules into R. Result = a clean risk-sizing frontier (ALL-THREE stream):
+- **1R = $150/trade → +20R / −10R / −4.7R: PASS 99%, BLOW-UP 0%, median 32 trades (~4 months at ~7 trades/mo). THE SWEET SPOT.**
+- 1R = $100: 98% pass, 0% blow-up but slow (median 46 trades); 1R = $200: 98% but 2% blow-up creeps in (Asia); **1R = $250: Asia
+  standalone BLOWS UP 18%** (daily $700 = only −2.8R) and all-three drops to 96%/4%.
+- RTH+London is 0% blow-up at EVERY size tested (96-99% pass) — the no-Asia fallback if sizing up.
+Verdict: on this ruleset risk **$150/trade** (≈2-3 MNQ with the ~29-pt structure stop), trade all three sessions, don't size past
+$200/trade while Asia is in the mix. NB: simulated with the F26 config (scale_be exit, OR-edge stop) — the adopted structure-stop
++ trail (~+1.0R/trade vs +0.74) should only improve pass speed; not re-simulated.
 
 ## Finding 27 — the stack wants a MOMENTUM-CAPTURE exit (trail / run-more beats scale-50%@1R/BE/4R) — `research/orb_exit_mgmt.py`
 The production exit (bank 50% at TP1=1R → BE → runner to 4R) under-monetises the stack's trades, which trend hard (they're the
@@ -485,11 +508,195 @@ The three sessions trade on different clocks (near-independent) → the auto-ses
 | vol-scaled reward (F25) | ❌ dead — TP2 insensitive to vol regime in the stack (3→6R flat); 4R stays right |
 | structure-param robustness (F23) | ✅ stack is a PLATEAU not a spike — lb3-10 + tol0.05-0.20 all PASS on NQ+QQQ (every yr+); adaptive-lb strictly worse → fixed lb5/tol0.10 confirmed. De-risks adoption |
 | index-generality + session diversification (F24) | ✅ ES RTH stack +0.54R/15-16yr (NQ+QQQ+SPY+ES all hold); RTH⊕Asia corr −0.09, combined DD < summed → trade both |
-| prop-eval survivability (F26) | ✅ stack passes funded rules 93-100%, ~0% blow-up (RTH); Asia wants looser daily/trail limit (11% blow-up tightest); both-sessions best |
+| **GOLD GC stack, 5m US-morning** (F30) | ✅ validated CANDIDATE — stack on the 09:30-10:00 OR: +0.438R, PF 2.68, 15/15 yrs, OOS holds, survives 2× slip (dies 3×); COMEX-open window passes too but corr +0.61 = same edge → take 09:30 only; ALL overnight windows + 15m + prod + fade DEAD on gold; macro gate still SPY/VIX (gold-native variant untested) |
+| prop-eval survivability (F26→F26b all 3 sessions) | ✅ stack passes funded rules 93-100%, ~0% blow-up (RTH); Asia wants looser daily/trail limit (11% blow-up tightest); London BEST single session (92-100%, 0% blow-up all profiles); ALL THREE on one account = 98-99% pass, ≤1% blow-up, fastest — trade all three, skip/size-down Asia on tight rails |
 
 Discipline: every screen here is post-hoc (filters taken trades) — a screen says "does this separate good
 from bad", NOT the final number. Graduation = signal-level reimplementation + full re-validation (both
 signals >0, lower CI >0) on QQQ AND NQ, THEN propagate to ALL Pine scripts + engine (the consistency rule).
+
+## Finding 30 — GOLD (GC): the stack validates in US-MORNING liquidity only; one session, not three — `research/orb_gold.py` + `orb_gold_walkforward.py`
+Fresh campaign on user-supplied Databento GC 1m (2010-06→2026-06; pipeline: 83 fronts, 82 rolls ≈5/yr
+G/J/M/Q/Z cadence, QA clean, missing days = the known feed-wide 2014 gaps). Tested 6 gold-native session
+opens × {prod, stack, fade} × {5m, 15m}:
+- **DEAD:** prod EMA breakout negative in EVERY window (worst overnight); fade catastrophic everywhere
+  (PF 0.06-0.32) — same off-hours pattern as NQ. ALL overnight windows dead even for the stack: Asia/Tokyo
+  −0.013 (stack lifts prod's −0.46 to breakeven, still no edge), Shanghai −0.08, London open +0.080
+  (PF 1.18, CI −0.03, 9/16 — closest miss), London AM fix −0.30. All of 15m dead. **Gold does NOT give
+  three sessions — the NQ session map does not transfer.**
+- **PASS (5m stack only): the US morning.** COMEX open 08:20-08:50 (+0.451R, PF 2.87, CI +0.36, 12/16 yrs,
+  NEG 2013/14/17/18) and US equity open 09:30-10:00 (+0.438R, PF 2.68, CI +0.335, **15/15 yrs**, OOS
+  +0.433→+0.450). Both survive 2× slip (+0.21/+0.17), both DIE at 3× — slippage tier = NQ-Asia.
+- **The two windows are ONE edge:** daily-PnL corr +0.61 on shared days (they overlap 09:30-13:30).
+  → adopt the **09:30-10:00 window only** (every-year-positive, OOS-stable); drop COMEX-open as a stream.
+VERDICT: **validated candidate** — GC/MGC 5m, US equity-open OR, stack gates, trade to 15:00, flat EOD.
+Adds an INSTRUMENT-diversified 4th stream to the NQ Asia→London→RTH rotation (not a 4th time slot).
+⚠️ provisional bits: macro gate is SPY/VIX (equity-native) — a gold-macro (DXY/real-yield) variant is
+untested; slippage-sensitive (paper-test GC fills, MGC spread is wider); same forward-test gate as the rest.
+
+## F34 (option A) — production-config validation in DOLLARS, cross-instrument (2026-06-15)
+`orb_config_validate.py` — NQ/QQQ/SPY/ES/GC 5m RTH, fixed $250 risk/trade, per-year + OOS + STOP-rate.
+Resolves F33-CONFIG: is the production struct+trail config real or just optically hot?
+- **The +3.6R/PF17 is tail-inflated but NOT broken.** struct+trail $/trade: AVG ~$700-860 vs **MEDIAN
+  ~$170-270** — the gap is a few huge trail winners; every instrument is +17/+9/+15 yrs and OOS holds,
+  so the tail dollars are real but unreliable in a small eval window. It also scratches 10-15% of trades
+  to breakeven (BE%), the trail giving profit back.
+- **Best CENTRAL-TENDENCY config = struct stop + 2R cap ("struct+trail capped", tp2_full):** highest
+  MEDIAN $ on EVERY instrument (NQ +527, QQQ +423, SPY +377, ES +356, GC +289), avg≈median (stable, not
+  tail-driven), believable PF 3.2-6.5, PASS all 5 incl GC. struct+scale (F25b) is good on equities/NQ
+  but WEAK on ES/GC (GC fails). or+scale (the eval-sim baseline) is the lowest median everywhere → the
+  F31d/e/f eval pass-rates were computed on the MOST CONSERVATIVE config (so they're safe/under-stated).
+- **STOP-out rate (the user's screenshot whipsaw) = 20-35% on ALL configs — normal, not pathological.**
+  Tighter struct stop trades MORE stop-outs (capped 29-35%) for BIGGER, cleaner wins; wider OR-edge stop
+  fewer stop-outs (or+scale 18-26%) but lower median. Genuine tradeoff, not a bug.
+RECOMMENDATION: for EVAL-passing (high stable median, low variance) the capped config dominates; keep
+the unlimited trail only for funded/personal accounts chasing tail trend-months. Until adopted production
+stays struct+trail; trust median-$ not the PF-17.
+
+### F34b — capped-target WALK-FORWARD: cap-4R GRADUATES (2026-06-15)
+`orb_cap_walkforward.py` — struct stop + fixed-R target cap (full position, mode tp2_full), caps 2R/3R/4R,
+full gate (both>0, CI>0, ≥70% yrs, OOS-out>0, 2× slip) on NQ+QQQ+SPY+ES+GC.
+- **cap-4R PASSES all five incl 2× slip**: NQ +1.69R PF6.3 (15/15, 2×slip +1.54), QQQ +1.71R (9/9, +1.71),
+  SPY +1.59R (9/9, +1.59), ES +1.19R (14/16, +0.82), GC +0.98R (15/15, +0.26).
+- cap-3R FAILS (GC dies at 2× slip −0.13); cap-2R FAILS (ES and GC die at 2× slip). 4R is the only level
+  surviving 2× slip on all five AND the highest expectancy → robust pick, not tuned.
+- The TRAIL also passes the gate (it always did) — both are valid; the choice is preference (stable median
+  vs tail capture), not validity.
+
+### F34c — eval path on cap-4R (2026-06-15)
+`orb_eval_cap.py` — combined NQ, adopted F31f frame, F26 profiles.
+- cap-4R: **median $402/trade (≈2× trail's $221)**, PASS 97/99/100%, blow-up 3/1/0%. Trail: med $221,
+  99/100/100%, 1/0/0%. Old scale_be baseline: med $218, 97/98/95%, 3/1/4% (the eval sims used the WORST
+  config → prior pass-rates were conservative).
+- cap-4R accumulates ~2× faster (median $) and is 99-100%/0-1% on the realistic profiles; the only knock
+  is 3% blow-up at the TIGHTEST daily limit (−4R) vs trail's 1% (cap's −1R/+4R distribution is harsher on
+  a 4R daily cap than trail's −0.77R avg loss). The day-throttle + "size daily ≥6R away" guidance covers it.
+VERDICT: **cap-4R is a graduated config** — best for eval accumulation. ADOPTED 2026-06-15 as a user-toggle
+(NOT the default — trail stays default): STACK new exit mode "Full → cap @ TP2 (struct stop)"; AUTO "Fixed
+TP bracket" default bumped 2R→4R; V1_STRATEGY "Full to TP2" already had TP2 R=4 (=cap-4R), tooltip clarified.
+Activate/deactivate freely. All need the pending TV compile check.
+
+## F35 — Structure Projection Engine: NOT viable as a predictive/tradeable engine (2026-06-15)
+`orb_projection_test.py` — feasibility of the user's spec (predict next HH/HL/LL/LH + projection band)
+BEFORE building the indicator. Tested its two load-bearing claims on NQ+QQQ 5m using the harness swing
+sequence (sph/spl, st_state).
+- CLAIM 1 (predictive) FAILS hard: linear projection (proj = 2·last − prev) has MAE **38-44% WORSE**
+  than the naive "next swing ≈ last swing"; directional hit ~48-50% (coin flip); corr(Δproj, Δactual)
+  ≈ 0 (−0.01 to −0.03). Swings do NOT extrapolate linearly — there is zero forecasting skill.
+- CLAIM 2 (tradeable continuation) FAILS: target = projected HH, stop = last HL → NQ −0.083R PF 0.94,
+  QQQ +0.076R PF 1.05 (sub-edge). The spec's "confidence" proxy doesn't separate: the high-win-rate
+  tight bucket (84-88% win) is ~0R (target so close it always hits for nothing); the bulk wide bucket
+  is negative.
+VERDICT: **do NOT build the projection engine as specced.** It forecasts no better than a coin flip and
+the implied trade has no edge. SALVAGEABLE only as a *visual of CURRENT confirmed structure* (the st_state
+HH/HL gate is validated) — but it must not project FUTURE levels or be traded off projected targets.
+Useful corollary: since naive "next ≈ last" beats linear extrapolation, the most accurate forward
+reference is the current swing level (horizontal) — which the stack already uses as the structure-stop
+anchor. Nothing new to add there.
+
+## F33 — local RANGE block: KEEP IT (the opposite of regime B) (2026-06-15)
+`orb_range_block.py` (raw slice) + `orb_range_eval.py` (trustworthy read). Question: is there edge in
+the trades the LOCAL range gate (local_regime==2, ADX<20 chop) discards? Same F31 protocol: gate forced
+open, trades sliced by TRUE local_regime at entry, baseline = adopted F31f macro frame.
+- Read on the EVAL-CANONICAL config (scale_be + OR stop — see F33-CONFIG note; the raw struct-stop+trail
+  slice is R-inflated and unreadable). lr=2 RANGE slice: RTH +0.189R (IS CI −0.04 FAIL, OOS +0.48 only),
+  Asia +0.076R (CI −0.01, **NEGATIVE −0.13R at 2× slip**), London +0.142R (IS CI −0.12 FAIL).
+- This is the MIRROR IMAGE of regime B: B passed in-sample AND OOS-stronger AND survived 2× slip; RANGE
+  is flat in-sample (every session IS-CI ≤ 0 — the marginal "pass" is carried entirely by 2022+) and
+  DIES at 2× slip (Asia goes negative). Physically sensible: range = no momentum, ORB = momentum bet.
+- Eval path (combined): unblocking RANGE makes it WORSE — blow-up 0%→4% at the tight profile, pass
+  100%→96%. It dilutes quality and adds tail risk.
+VERDICT: **the RANGE block stays ON, all sessions — no change.** (It is engine-hardwired and part of every
+validated result; the live STACK already does this.) Also useful: lr=2 trades being only ~⅓ the trend-slice
+expectancy shows the block is NOT redundant with the HH/HL gate — it earns its keep.
+
+## F33-CONFIG — the production struct-stop+trail config is R-INFLATED; eval sims used a different config (2026-06-15)
+`orb_f33_debug.py` — 2×2×2 gate×exit×stop matrix on NQ 5m RTH (unblock-B), with median per-trade risk.
+- The production STACK Pine default (struct gate + **struct stop + trail**) prints **+3.611R, PF 16.85,
+  avg-win +5.46R** — NOT tradeable; it is a measurement artifact. The struct stop halves median risk
+  (19.8→9.7 pts, the real F25b effect), and pairing that sub-ATR denominator with an uncapped trail
+  explodes the R-MULTIPLE while the dollar moves stay normal. PF 17 is the tell.
+- The combination was **never walk-forwarded together**: F25b graduated struct-stop with **scale_be**
+  (+1.025R), F27b graduated trail with **OR stop** (+0.879R) — separately. The eval sims (F26/F31d/e/f)
+  used `stack()` = **scale_be + OR stop** (+0.744R) → trustworthy + dollar-meaningful, but that is a
+  MORE CONSERVATIVE system than the live Pine trades.
+- Also caught: `orb_regimeb_entries/oos.py` (F31 magnitude tables) silently ran on the **EMA gate** (never
+  set trend_up/down from st_state) → their +0.39R numbers are off-gate. F31's DIRECTION holds (reproduced
+  on both gates; eval sims used the correct gate) but those two scripts' magnitude tables are void.
+OPEN DECISION: either (a) re-run the eval sims on the ACTUAL production config (struct+trail) with realistic
+costs to learn its true dollar pass-rate, or (b) reconsider the production default toward the validated
+scale_be+OR / struct+scale_be. Until resolved, trust the scale_be+OR eval numbers, not the PF-17 headline.
+
+## F31 — macro regime B: the block is discarding a validated edge (2026-06-12)
+`orb_regimeb_entries.py` + `orb_regimeb_oos.py` — NQ 5m, adopted stack (struct gate + VWAP cap +
+struct stop + 2ATR trail), macro_allow gate disabled, trades sliced by entry regime.
+- **Regime B passes the full gate in ALL THREE sessions** on both exit configs (trail+struct AND
+  scale_be baseline): RTH +0.395R PF 2.55 (n=530, 14/14 yrs), Asia +0.435R PF 2.37 (13/16),
+  London +0.281R PF 1.83 (12/15). Regime A is the *weakest* passing slice everywhere; C also strong;
+  D = too few trades / CI<0 → keep blocking D.
+- **OOS (2022+) is STRONGER than IS in all 3 sessions** (RTH +0.72R PF 4.9, Asia +0.51R PF 3.2,
+  London +0.74R PF 4.5) — not a decayed artifact.
+- **Unblock B (keep D blocked)**: ~2.4× the trades at same/better expectancy — RTH n=895 +0.390R
+  CI +0.32 (survives 2× slip at +0.32R), Asia n=913 +0.416R (2× slip thins to +0.16R, CI +0.07),
+  London n=938 +0.304R (2× slip +0.14R, CI +0.06).
+- Why: the ORB stack's edge doesn't need a trending SPY — the structure gate + VWAP cap do the real
+  filtering. block_b was inherited from the V43/V44 macro design and never re-tested for the stack.
+VERDICT: **validated candidate — flip "Block trend in REGIME B" OFF** (settings-only; the input already
+exists in every script). RTH = adoption-worthy outright; Asia/London = real but slippage-thin at 2×
+(their existing caveat, now with 2× the fills). ⚠️ Before trading it on a funded eval, re-run the
+F26d daily-limit sim with the ~2.4× trade frequency.
+
+## F31d — eval sim at unblock-B frequency: safe-to-better, one caution (2026-06-12)
+`orb_prop_eval_b.py` — F26 profiles, production vs unblock-B streams. Median trades-to-pass is
+unchanged (~12-24) but arrives ~2.4× faster in CALENDAR time. RTH: 98→100% / 93→97% pass, 0% blow-up.
+Asia: the old 11% blow-up at (+9/−6/−4) DISAPPEARS (100%/0%). ALL THREE: 99-100% pass, ≤1% blow-up.
+⚠️ London standalone at the tight (+9/−6/−4) profile: blow-up 0→13% — size London down, use a looser
+profile, or run the combined account. VERDICT: unblock-B is eval-safe everywhere except London-only
+on a tight daily limit. **ADOPTED 2026-06-12: STACK default block_b=false** (other 4 scripts pending
+propagation per the consistency rule; engine default left as the research baseline).
+
+## F31f — MIXED B-block (London only) = the ADOPTED final form (2026-06-12)
+`orb_prop_eval_mixed.py` — user's proposal: unblock B for RTH+Asia, keep B blocked in London.
+ALL-THREE account: **100/100/99% pass, 0% blow-up at every profile, fastest medians (13/22/44)** —
+strictly dominates both full-unblock (99%/1% at tight) and old production. RTH+London two-session
+variant equally clean (100/99/98%, 0%). The London-B trades added tail risk without adding speed.
+**ADOPTED: STACK "Block REGIME B trend" selector = Off / London only (DEFAULT) / All sessions**,
+applied during London hours 03:00-09:30 ET on the trade-day clock (works in Auto + standalone).
+Propagation to AUTO (same selector) + OPTIONS/V1 (RTH-only → plain unblock) pending.
+
+## F31e — day throttle (max 5 signals/day, lock after 2 losers): FREE (2026-06-12)
+`orb_prop_eval_throttle.py` — identical pass/blow-up/median in every stream × profile × ruleset cell.
+Per-session streams never reach the caps (≤2 trades/day); on ALL THREE the skipped trades are too rare
+to move anything. Diagnostic: with the 2-loss lock a day can't lose >~2R, yet London-unblock-B still
+blows up 13% at the tight profile → that risk is TRAILING-DD bleed across days, not single-day
+clustering — a day throttle cannot fix it. VERDICT: free discipline insurance — added to STACK as
+EVAL inputs (cap 5 / lock 2, active only with EVAL on, suppresses signals like ev_halt).
+
+## F31c — confirmation entries: DEAD (user spec, exact side-by-side) (2026-06-12)
+`orb_confirm_entry.py` — body-CLOSE breakout candle (wick-only excluded) → stop entry above the
+breakout candle's high (below low for shorts) → invalidate if price closes back inside the range;
+variants: multi-bar pending, strict next-candle-only, +volume(1.2×20bar), +retest-and-hold.
+- **Every variant fails in every session.** Best case RTH plain confirm +0.086R CI −0.08 (vs prod
+  touch +0.383R CI +0.28 PASS); Asia/London all deeply negative (−0.20…−0.39R, PF 0.33-0.54).
+  Volume and retest options make it WORSE everywhere. Confirms F19 (false-break/retest dead) and the
+  generic confirm sweep (close-confirm / next-bar-open / next-bar-high all ≤0 in `orb_regimeb_entries.py`).
+- Why: the ORB edge is captured AT the level — confirmation enters 1+ bars later at a worse price
+  with the same structure-stop anchor, so risk widens, R shrinks, and the trail math collapses.
+VERDICT: **production touch entry (resting stop at the OR level) stands. No Pine change.**
+
+## F32 — the stack on the 1-MINUTE chart: DEAD (2026-06-12)
+`orb_1m.py` + `orb_1m_robust.py` — NQ 1m (5.4M bars, continuous parquet via direct loader; 1m is not
+in the hive bars dataset), adopted stack, all 3 sessions, std + shorter OR windows.
+- Std windows on 1m: RTH +0.00R (dead), Asia −0.66R (catastrophic), London −0.37R (dead). Cause:
+  the structure gate on 1m pivots is noise, and 1m structure stops are so tight that fixed costs eat
+  the R — same edge, smaller denominator, negative net. Everything dies at 2× slip.
+- Only the ultra-short ORs pass full-sample: RTH 09:30-09:35 (+0.145R CI +0.06) and London
+  03:00-03:05 (+0.159R CI +0.02), both 13/17 yrs. Robustness kills both: IS CI < 0 (the pass is
+  carried entirely by 2022+), and **both DIE at 2× slip** (RTH +0.03 CI −0.06; London −0.30) — the
+  graduation gate requires 2× survival. The OOS-only strength is real but unsupported by the
+  in-sample years → not adoptable.
+VERDICT: **1m is for WATCHING, not signal generation.** Trade the 5m stack; keep 5m-validated levels
+on the 1m chart for execution visuals. No further 1m testing warranted (user gate: failed step 1).
 
 ## Propagation log (all-scripts consistency rule)
 | Script | Stack status (structure gate + VWAP cap + structure stop + trail + sessions) |
@@ -498,7 +705,7 @@ signals >0, lower CI >0) on QQQ AND NQ, THEN propagate to ALL Pine scripts + eng
 | `production/HIGHSTRIKE_ORB_AUTO.pine` | ✅ REBUILT as the STACK's automation twin — same engine as a strategy; trail via broker-held initial structure SL + EXIT webhook (bracket mode = fallback); provider-agnostic webhooks (TradersPost / PickMyTrade / Generic relay multi-account / custom template), token + account-id inputs ready for keys |
 | `production/HIGHSTRIKE_ORB_OPTIONS.pine` | ✅ REBUILT on the stack engine (was V1/EMA + OR-edge stop, reported not working) — SPY/QQQ, RTH only, 0DTE entry / max 4-DTE hold, naked BUY-only call/put at 1-2 ITM/OTM (selector + ladder), debit spread capped @TP1, credit vertical short @structure stop, trail-break = EXIT alert. Multi-day hold ≤4 DTE is an options-layer allowance, NOT separately backtested (underlying edge is intraday) |
 | `production/HIGHSTRIKE_ORB_V1_INDICATOR.pine` | ✅ structure-stop + trail available, off by default |
-| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | ⚠ PENDING — still scale_be/OR-edge V1 logic |
+| `production/HIGHSTRIKE_ORB_V1_STRATEGY.pine` | ✅ stack upgrades propagated as OFF-BY-DEFAULT toggles (structure gate F20 + VWAP cap F16 + structure stop F25b + trail exit F27b); defaults = V1 legacy. PROPAGATION COMPLETE across all 5 Pine + engine |
 | `engine/hs_*.py` | ✅ logic-of-record (stop_mode="struct", scale_frac, sessions) |
 
 Remaining adoption gate: **forward paper-test of fills** (≥2 weeks clean reconciliation, RTH first, then
