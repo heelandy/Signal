@@ -90,6 +90,7 @@ class P:
     livebreak_en: bool = True
     local_adx_min: float = 20.0; local_atr_hi: float = 2.5
     sweep_en: bool = True; sweep_depth_atr: float = 0.3
+    ob_body_atr: float = 0.3; ob_vol_mult: float = 0.7; ob_keep: int = 5; ob_dist_atr: float = 3.0  # order-block params (F41 robustness; defaults = V44, unchanged)
     w_htf: int = 2; w_trend: int = 2; w_dmi: int = 1; bias_thresh: int = 2; bias_confirm_bars: int = 2
     use_vwap2: bool = True; use_ema3: bool = True
     trig_confluence: str = "VWAP+EMA (both)"
@@ -312,13 +313,13 @@ def _zones_sweep_patterns(d, p, sph, spl, slo, sso):
     for i in range(n):
         ai = atr[i] if not np.isnan(atr[i]) else 0.0
         vm = vma[i] if not np.isnan(vma[i]) else 0.0
-        ob_strong = cbody[i] >= ai * 0.3 and vol[i] >= vm * 0.7
+        ob_strong = cbody[i] >= ai * p.ob_body_atr and vol[i] >= vm * p.ob_vol_mult
         if i >= 1 and c[i] > h[i-1] and c[i-1] < o[i-1] and ob_strong:
-            bull_obs.append((o[i-1], l[i-1]));  bull_obs[:] = bull_obs[-5:]
+            bull_obs.append((o[i-1], l[i-1]));  bull_obs[:] = bull_obs[-p.ob_keep:]
         if i >= 1 and c[i] < l[i-1] and c[i-1] > o[i-1] and ob_strong:
-            bear_obs.append((h[i-1], o[i-1]));  bear_obs[:] = bear_obs[-5:]
-        bull_obs[:] = [b for b in bull_obs if not (c[i] < b[1] or abs(c[i] - b[0]) > ai * 3.0)]
-        bear_obs[:] = [b for b in bear_obs if not (c[i] > b[0] or abs(c[i] - b[1]) > ai * 3.0)]
+            bear_obs.append((h[i-1], o[i-1]));  bear_obs[:] = bear_obs[-p.ob_keep:]
+        bull_obs[:] = [b for b in bull_obs if not (c[i] < b[1] or abs(c[i] - b[0]) > ai * p.ob_dist_atr)]
+        bear_obs[:] = [b for b in bear_obs if not (c[i] > b[0] or abs(c[i] - b[1]) > ai * p.ob_dist_atr)]
         in_bull_ob[i] = any(l[i] <= t and h[i] >= bt for t, bt in bull_obs)
         in_bear_ob[i] = any(l[i] <= t and h[i] >= bt for t, bt in bear_obs)
         if i >= 2 and l[i] > h[i-2]: bull_fvg.append((l[i], h[i-2])); bull_fvg[:] = bull_fvg[-8:]

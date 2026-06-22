@@ -80,7 +80,7 @@ def attach_mtf(con, sym, d):
 
 
 def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False,
-                 reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20):
+                 reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20, entry_delay=0, ob_l=None, ob_s=None):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
@@ -113,7 +113,7 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
     for i in range(n):
         if date[i] != cur:
             cur = date[i]; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False
-        if not rth[i] or mins[i] < or_e or np.isnan(orh[i]):
+        if not rth[i] or mins[i] < or_e + entry_delay or np.isnan(orh[i]):   # entry_delay = F38 skip-opening-hour
             continue
         buf = (atr[i] * brk_buf_atr) if not np.isnan(atr[i]) else 0.0
         lh, ll = orh[i] + buf, orl[i] - buf
@@ -143,9 +143,9 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         ok_l = armed_l if reentry else (not done_l)
         ok_s = armed_s if reentry else (not done_s)
         vok = (not vol_conf) or (not np.isnan(vavg[i]) and vavg[i] > 0 and vol[i] >= vol_mult * vavg[i])
-        if ok_l and l_cross and tup[i] and vok:
+        if ok_l and l_cross and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
             lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False
-        if ok_s and s_cross and tdn[i] and vok:
+        if ok_s and s_cross and tdn[i] and (ob_s is None or ob_s[i]) and vok:
             ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
@@ -165,7 +165,8 @@ def _nearest(close, levels, below):
 def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema", mtf_min=0,
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
              tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
-             time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5):
+             time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5,
+             entry_delay=0, ob_confluence=False):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -200,7 +201,9 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     t2 = TP2_RR if tp2_rr is None else tp2_rr
     sf = scale_frac                               # fraction of the position banked at TP1 (rest runs to TP2/BE)
     if entry_type == "orb":                       # Opening-Range Breakout entry
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult)
+        _obl = d["in_bull_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bull_ob" in d) else None
+        _obs = d["in_bear_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bear_ob" in d) else None
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)

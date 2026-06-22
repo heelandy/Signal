@@ -494,6 +494,16 @@ The three sessions trade on different clocks (near-independent) → the auto-ses
 | stop-entry · all-day · 4R/scale · per-TF buffer · EOD-flat | ✅ ADOPTED (production) |
 | **against-gap (equity)** (F13) | 🟡 real tilt, thin + PF-warning + equity-only → confidence signal, not a filter |
 | **VWAP-extension cap** (F16) | ✅ PASSED honest signal-level test (k≈2.0, all 3 assets × both TFs, NQ DD ~halves) — promotion = user decision; costs ~25-60% of trades |
+| **"Neural Kernel Bands" filter** (F36) | ❌ REDUNDANT with VWAP-cap — kernel state/slope/side/cap all improve the stack (NQ+QQQ+SPY+ES, every yr+, OOS holds, 2× slip ok) BUT tightening the existing vwap-cap k to matched trade-count matches/beats it → no orthogonal axis; the all-variants-improve pattern = the F1/F11 cull trap. Don't adopt; fine as a discretionary visual |
+| **RSI + Accel/Decel filter** (F37) | ❌ REDUNDANT with VWAP-cap — all 6 RSI/AC variants pass the gate (NQ+QQQ+SPY+ES, every yr+, OOS, 2× slip); ac_agree (Bill Williams) even sat slightly ABOVE the frontier at the default point, but the ADDITIVITY sweep (lift across the vwap-cap k grid) oscillates around 0 (negative mid-range) → no frontier lift. Don't embed; cheap-to-port doesn't rescue zero orthogonal edge |
+| Statistical: DoW / seasonality / day-context (F44) | ❌ DEAD — DoW best/worst day FLIPS across NQ/QQQ/SPY (curve-fit, confirms F15); against-prior-day + prior-range are sign-consistent but thin tilts (≈ F13 against-gap) that cull ~60% for ~flat exp = below the frontier. No tradable edge. `orb_stack_stat.py` |
+| Liquidity confluence (F43) | ❌ DEAD — sweep-confluence too rare (<30 trades); prior-day-level take-out (pdsweep) culls 60-70% for flat-to-worse exp (NQ +0.75/QQQ +0.80/SPY +0.54) = below the frontier. Level take-out ≈ extension (vwap-cap handles it). `orb_stack_liquidity.py` |
+| Auction Market Theory value-area (F42) | ❌ DEAD — prior-day value-area / POC confluence culls 35-50% of trades for flat-to-LOWER exp (NQ +0.74→+0.69, QQQ +0.80→+0.73, SPY +0.68→+0.62) = below the vwap-cap frontier; "outside value" conflicts with the adopted VWAP-cap (both about extension). Built a real volume profile (`orb_stack_amt.py`). Other AMT angles redundant (IB≈ORB, VA-migration≈trend) or exit-side (POC magnet) |
+| Order Flow: CVD proxy (F48) | 🟡 WEAK lead — CVD (close-location-signed volume, session-cumulative) lifts the frontier CONSISTENTLY +0.02..+0.07 at every k (NQ+QQQ) AND adds ~+0.07 on top of F45 — NOT redundant (unlike kernel/RSI/AC), but small (~+0.05R, within noise) + a crude proxy. Significance: order flow is the one family with life via proxy → real tick/delta data is the most promising NEW-data direction. `orb_stack_orderflow.py` |
+| **SMC order-block param-robustness** (F47) | ✅ DE-RISKED — +ob is a broad PLATEAU over body{0.2-0.5}/keep{3-8}/dist{2-5}/vol{0.5-1.0}: NQ exp +0.92..+1.06, QQQ +1.09..+1.17, all PASS, every yr+, V44 default mid-plateau not a spike. F41/F45 not param-fitted. `orb_ob_robust.py` (harness OB params now off-by-default P fields) |
+| **SMC order-block confluence** (F41) | ✅ GRADUATED — strongest orthogonal filter found. Require the breakout to fire at a bull OB (long)/bear OB (short): NQ +0.74→+0.97, QQQ +0.80→+1.11, SPY +0.68→+0.91, every yr+, OOS, 2× slip, keeps ~94% of trades. Lifts the vwap-cap frontier +0.11..+0.20 (NQ)/+0.23..+0.28 (QQQ) at every k AND adds on top of F38 time gate (NQ +0.98→+1.14, QQQ +1.14→+1.37) → orthogonal to both. +zone (OB+FVG) marginal (FVG dilutes). Uses V44 OB params (untuned=good); de-risk = OB-param robustness sweep before propagation |
+| squeeze (compress) / ADX strength (F40) | ❌ not adopted — ADX is REDUNDANT with vwap-cap (frontier-lift delta NEGATIVE at the operating point on NQ+QQQ; trend-family, rhymes w/ F17); squeeze additive on NQ only, NEGATIVE on QQQ at operating point + adds ~nothing on top of the F38 time gate (it's a midday shadow) + culls to ~5 trades/yr. The other F38 feature-study "leads" were shadows of time-of-day or the cap |
+| **TIME-OF-DAY: skip the opening hour** (F38→F39) | ✅ GRADUATED + UNIVERSAL — the first ORTHOGONAL edge that LIFTS the vwap-cap frontier (delta +ve at every k) not rides it. Skip stack entries for the first ~60min after EACH session's OR close (RTH ≥11:00 / Asia ≥21:00 / London ≥04:30 ET). RTH (F38): exp +33-50% (NQ +0.74→+0.98, QQQ +0.80→+1.14, SPY +0.68→+0.98), DD ~halved, win 86-91%. F39: transfers to Asia (NQ +0.50→+0.63) + London (NQ +0.57→+0.87) AND RESCUES ES off-hours (Asia ES 2× slip −0.17→+0.13; London ES FAIL→PASS) — fixes the F22/F29 ES-slippage caveat. Every yr+, OOS holds, 2× slip ok, additivity +ve all streams (stronger off-hours). Near-free (clock gate, no port). Adopt all 3 sessions; propagation + forward-test pending. Secondary leads compress(−0.29)/adx(+0.20) testing next |
 | false-breakout fade (F18) | ❌ dead — 0/24 configs pass, loses to the breakout (wrong side of the momentum edge); trend-off catastrophic |
 | false-breakout entries: fade reversion-exit · sweep-then-go · re-break (F19) | ❌ no entry edge — fade dead even w/ reversion exit; sweep-then-go dominated by the plain breakout; re-break ≈ baseline |
 | clean-vs-messy-day breakout filter (F19) | ❌ LOOKAHEAD ARTIFACT — post-hoc 2× gap was same-bar close lookahead; strict-causal (`orb_cleanday.py`, NQ/QQQ/SPY×5m/15m) it vanishes/inverts (beats prod only 3/6 by <0.03R, loses on all 5m; messy often better). Dead (same trap as F13) |
@@ -533,6 +543,284 @@ VERDICT: **validated candidate** — GC/MGC 5m, US equity-open OR, stack gates, 
 Adds an INSTRUMENT-diversified 4th stream to the NQ Asia→London→RTH rotation (not a 4th time slot).
 ⚠️ provisional bits: macro gate is SPY/VIX (equity-native) — a gold-macro (DXY/real-yield) variant is
 untested; slippage-sensitive (paper-test GC fills, MGC spread is wider); same forward-test gate as the rest.
+
+## F48 — Order Flow (CVD proxy): a WEAK but CONSISTENT additive lead → real tick data is the one live direction (2026-06-17)
+`research/orb_stack_orderflow.py`. True order flow needs TICK / bid-ask / trade-delta data we DON'T have; the
+honest OHLCV proxy = CUMULATIVE VOLUME DELTA (CVD: each bar's volume signed by close-location-value clv =
+((c−l)−(h−c))/(h−l), session-cumulative). Tested cvd_agree (CVD slope direction) + cvd_lvl (session CVD sign)
+as causal stack filters, full gauntlet.
+- **Gate:** both PASS on NQ+QQQ+SPY (modest lift, ~93-95% retention, every year+, 2× slip+).
+- **ADDITIVITY — the key difference from the dead momentum filters:** kernel (F36) and RSI+AC (F37) OSCILLATED
+  around 0 (redundant); CVD's frontier-lift is CONSISTENTLY POSITIVE at every k on BOTH NQ (+0.03..+0.07) and
+  QQQ (+0.02..+0.07), AND it adds on top of F45 (NQ +1.144→+1.218, QQQ +1.372→+1.451, ~+0.07). So CVD is NOT
+  redundant — a real (if small) orthogonal signal.
+- BUT magnitude is SMALL (~+0.03..+0.05R, within ~1 SE) and it's a CRUDE proxy → too marginal to headline /
+  not a strong graduate like F38/F41.
+VERDICT: order-flow CVD = a **weak-but-real additive lead**. Its significance: even a coarse OHLCV proxy carries
+a small orthogonal signal the dead momentum filters lacked → **REAL tick/bid-ask/delta data is the single most
+promising direction for NEW edge** (the one untested family shows life). Recommended next DATA step = source tick
+data and re-test order flow properly; the proxy itself is too marginal to adopt into F45.
+
+## F47 — F41/F45 DE-RISKED: the order-block edge is a broad PLATEAU over its params (2026-06-17)
+`research/orb_ob_robust.py` (+ harness OB params parametrized as off-by-default `P.ob_body_atr/ob_vol_mult/
+ob_keep/ob_dist_atr`; defaults = V44, all prior results unchanged). Swept each OB param around its default and
+re-ran +ob on the stack (NQ+QQQ), like F23 did for the pivot params.
+- **PLATEAU, not a spike.** Every param value clears the gate, every year+, exp in a TIGHT band: NQ +0.92..+1.06
+  across body {0.2-0.5}, keep {3-8}, dist {2-5}, vol {0.5-1.0}; QQQ +1.09..+1.17. The untuned V44 default sits
+  MID-plateau, not at a peak. keep-count barely matters (few active OBs sit near price); body/dist/vol all flat.
+VERDICT: **the F41 order-block edge does NOT depend on the (untuned) V44 OB params → DE-RISKED** (mirrors F23 for
+pivots). F45 (the combined config) is robust to its order-block parameterization. Adoption de-risk done.
+
+## F46 — 3rd-axis hunt on the F38+F41-filtered residual: CONVERGED, no new orthogonal axis (2026-06-16)
+`research/orb_stack_features2.py`. Re-ran the F38 feature-separation study on the residual trades AFTER both new
+edges applied (stack + skip<11:00 + order-block) on NQ+QQQ+SPY — anything still separating winners would be a 3rd
+independent axis. The only sign-consistent separators left are ALL already accounted for:
+- **vwap_ext** (−0.31/−0.39/−0.42) = the adopted VWAP-cap axis (tightening it = the known frontier, not new).
+- **adx** (+0.30/+0.26/+0.27) = F40 REDUNDANT (trend-strength rides the frontier; corr persists but additivity
+  already killed it — the session's core lesson: correlation ≠ additivity).
+- **compress** (−0.10/−0.19) = F40 dead, and now WEAKER post-F38 (confirms it was a time-of-day shadow).
+- **tod_min** collapsed +0.34→+0.07/+0.15 (F38 captured it); **gap_dir** = the F13 thin against-gap tilt.
+VERDICT: **the systematic feature-based hunt has CONVERGED.** After structure + VWAP-cap + time-of-day (F38/F39)
++ order-block (F41), the measurable orthogonal edge in this feature space is exhausted. To go further needs
+genuinely NEW data (Order Flow / tick — the one untested agenda family) or new feature families, not more
+indicators on OHLCV. The 2-day push's harvest = F38/F39 + F41 (+ the F45 combined config). Open de-risk before
+any propagation = F41 OB-param robustness sweep (untuned V44 params, like F23 for pivots).
+
+## F45-PROP — F45 adopted: live-semantics re-validated + PROPAGATION started (engine done, STACK done) (2026-06-17)
+User called the hunt done → propagate (freeze lifted). Two important pieces:
+- **LIVE-SEMANTICS re-validation.** The research applied F38 via `skip_mask` (a morning break CONSUMES the day's
+  signal); the natural live/Pine form is a WINDOW GATE (no entries until OR-close+delay → the first AFTERNOON
+  break fires, latch not consumed in the morning). They differ slightly. Re-validated F45 in the LIVE form
+  (engine `entry_delay=60` + `ob_confluence`): NQ +1.053/PF10.7/17-of-17 yr, ES +0.942/PF8.8/16-of-16, QQQ
+  +1.268/PF16.5/9-of-9, SPY +1.084/PF9.2/9-of-9 — every year+, OOS holds/improves, 2× slip ok, and MORE trades
+  than the skip_mask version (it's slightly more robust). So backtest==live; these are the official F45 numbers.
+- **ENGINE (`hs_backtest.py`) — DONE + verified.** Added off-by-default `entry_delay` (F38; skip N min after OR
+  close) + `ob_confluence` (F41; AND the prior-bar order-block into the firing gate). ⚠️ caught + fixed a LATCH
+  bug: applying ob AFTER `_orb_signals` let the once-per-day latch fire on the structure-only signal then filter
+  it out (n 406→79); fix = AND the ob mask INSIDE `_orb_signals` at the firing check (with the latch). Defaults
+  off → all prior results unchanged.
+- **STACK.pine — DONE (primary).** entry_delay input + OR-close capture + `past_delay` in `window` (F38); OB
+  inputs + a ported order-block array machine (`obBull/BearT/B`, mirrors `_zones_sweep_patterns`) + `in_bull_ob`/
+  `in_bear_ob` ANDed into `gate_long/short` as `[1]` (prior bar, causal) (F41). ⚠️ NEEDS the user's TV COMPILE
+  check + an OB RECONCILE vs the harness (like st_state F28) — I can't compile Pine.
+- **REMAINING:** propagate to AUTO / OPTIONS / V1_INDICATOR / V1_STRATEGY (all-scripts rule) — staged AFTER the
+  STACK compiles clean (so a Pine error in the OB port isn't replicated ×4); then forward paper-test.
+
+## F45 — CONSOLIDATION: F38 (time) + F41 (order-block) STACK into a ~2× expectancy config → validated (2026-06-16)
+`research/orb_stack_combined.py` (+ `--additive`). The session's two new orthogonal edges combined on the stack
+(structure gate + VWAP-cap + **skip<11:00** + **order-block confluence**), NQ+QQQ+SPY+ES:
+- **BOTH > each single on all four:** NQ +0.736→**+1.144** (PF 14.7, win 92%, DD −3), ES +0.536→**+0.961**
+  (PF 10.5, win 90%), QQQ +0.801→**+1.372** (PF 26.8, win 95%), SPY +0.680→**+1.070** (PF 9.4, win 87%).
+  ~DOUBLES stack expectancy (+55%/+79%/+71%/+57%), every year+ (16/16·13/13·9/9·9/9), OOS holds/IMPROVES on all
+  four, survives 2× slip (NQ +1.089, ES +0.826), keeps 65-76% of trades.
+- **Frontier-lift PRESERVED combined:** delta vs the vwap-cap frontier is +0.15..+0.24 (NQ) / +0.26..+0.35 (QQQ)
+  at every k ≈ F38-lift + F41-lift (they ADD) → the combo stays strongly orthogonal to extension.
+- High PF (15-27) is earned (per-year + OOS hold — the F21 intersection-of-validated-filters pattern); thin-
+  sample = the usual forward-test caveat.
+VERDICT: **new best stack config = structure gate + VWAP-cap + skip<11:00 (F38) + order-block confluence (F41).**
+~2× expectancy, DD ~halved, win 87-95%, on all four index futures/ETFs. Two new orthogonal axes found +
+validated this push (+ F39 extends F38 to Asia/London). Still NO propagation ([[highstrike-defer-propagation]])
+— banked for the eventual batch. Open de-risk: F41 OB-param robustness sweep (untuned V44 params, like F23).
+
+## F44 — Statistical (day-of-week / seasonality / day-context): no tradable edge → DEAD (2026-06-16)
+`research/orb_stack_stat.py`. Honest screen on the stack's residual trades with the cross-asset-consistency bar.
+- **Day-of-week / seasonality = CURVE-FIT.** The stack is positive EVERY day on every asset (+0.6..+0.9R) but the
+  best day FLIPS across assets (Fri/Mon/Wed) and the worst flips (Thu/Thu/Tue) → no consistent calendar edge.
+  Confirms F15 (Friday was curve-fit).
+- **Day-context = thin tilts that don't beat the frontier.** Breakouts AGAINST the prior RTH day's direction are
+  mildly better than WITH on all 3 (NQ +0.77 vs +0.71, QQQ +0.89 vs +0.72, SPY +0.88 vs +0.55) — sign-consistent
+  but ≈ the known F13 against-gap theme, and as a GATE it culls ~60% of trades for ~flat exp (NQ against-day
+  +0.774 at n=168 << the vwap-cap frontier's ~+1.1 at that n) → BELOW the frontier, not a tradable filter.
+  Prior-day RANGE corr weakly negative (−0.06..−0.12; big prior range → slightly worse) — same thin-tilt status.
+VERDICT: **Statistical yields no tradable orthogonal edge — DEAD.** Calendar = curve-fit; day-context = thin
+quality tilts (echo F13) that don't beat tightening the VWAP-cap. Closes the queued research agenda.
+
+## F43 — Liquidity confluence (sweep / prior-day-level take-out): DEAD (2026-06-16)
+`research/orb_stack_liquidity.py`. Two liquidity-CONFLUENCE reads as stack filters (sweep-as-ENTRY already dead
+F18/19): require a recent liquidity sweep before the break, or require the breakout to take out the prior-day
+RTH high/low (the external stop pool).
+- **+swept** (harness bull/bear_sweep_active, prior bar): n=21/12/24 on NQ/QQQ/SPY — TOO RARE (<30) to be a
+  usable filter; a recent sweep + a stack breakout rarely co-occur.
+- **+pdsweep** (OR-high > prior-day high / OR-low < prior-day low): culls ~60-70% of trades for FLAT (NQ
+  +0.736→+0.748, QQQ +0.801→+0.798) to WORSE (SPY +0.680→+0.544) exp — at NQ n=128 the vwap-cap frontier is
+  ~+1.1 vs pdsweep's +0.748, i.e. far BELOW the frontier → fails the gate (no additivity needed).
+VERDICT: **Liquidity yields no orthogonal entry edge — DEAD.** Consistent with pdlvl_brk being WEAK in the F38
+study + AMT value-area dead (F42): taking out a daily liquidity level overlaps with EXTENSION, which the adopted
+VWAP-cap already handles; sweep-as-confluence is too rare. The order-block (F41) is the only SMC/liquidity-style
+zone that carries orthogonal edge.
+
+## F42 — Auction Market Theory (prior-day value-area confluence): DEAD (2026-06-16)
+`research/orb_stack_amt.py`. Built a real VOLUME PROFILE of the prior RTH day (volume distributed across each 5m
+bar's [low,high], 50 bins) → POC + 70% value area (VAH/VAL); causal (today uses yesterday's completed profile).
+Tested the canonical AMT thesis as a stack confluence filter: take the breakout only if its entry (OR level) is
+accepted OUTSIDE prior value (outside_va: long OR-high>prior VAH / short OR-low<prior VAL) or beyond prior POC.
+- **DEAD at the gate (no additivity test needed).** Both variants CULL 35-50% of trades AND exp goes flat-to-
+  DOWN: NQ +0.736→+0.688/+0.726, QQQ +0.801→+0.734/+0.773, SPY +0.680→+0.618/+0.611. Lower exp at fewer trades
+  = strictly BELOW the vwap-cap frontier (at NQ n=195 the frontier is ~+1.1 vs AMT's +0.69) → fails the gate.
+- Why: "outside value" partly selects MORE VWAP-extended breakouts, conflicting with the adopted VWAP-cap (F16)
+  that already penalizes extension; and the structure gate already ensures quality, so a coarse daily value-area
+  level doesn't separate the stack's trades (in-value breakouts are just as good). Consistent with the F38
+  feature study where pdlvl_brk (entry beyond prior-day level) was already WEAK (−0.06).
+- Other AMT angles are redundant or exit-side: initial-balance extension ≈ the ORB breakout itself; value-area
+  migration ≈ a trend proxy (dead family); naked-POC-as-magnet is an EXIT/target concept (exits already
+  optimized F25b/F27b/F34b). VERDICT: **AMT yields no orthogonal ENTRY edge for the stack — DEAD.**
+
+## F41 — SMC ORDER-BLOCK confluence: the strongest orthogonal stack filter found → GRADUATES (2026-06-16)
+`research/orb_stack_smc.py` (+ `--additive`). Working the Smart Money Concepts family: market STRUCTURE (HH/HL
+st_state) already GRADUATED (F20), liquidity SWEEPS already DEAD as entries (F18/F19). The untested SMC piece =
+ORDER-BLOCK / FVG zone confluence as a stack FILTER — the harness already computes the zones (in_bull_ob/
+in_bear_ob + at_bull_zone/at_bear_zone, V44 defaults). Tested as a causal (prior-bar) AND-gate on the stack.
+- **+ob** (require the breakout to fire while price is at a bull order block for longs / bear OB for shorts):
+  NQ +0.736→**+0.971** (PF 8.2), QQQ +0.801→**+1.113** (PF 10.6), SPY +0.680→**+0.907** (PF 5.9). Every year+,
+  OOS holds/improves, 2× slip strong, and it KEEPS ~94% of trades — it RE-SELECTS (occupancy/delay), barely culls.
+- **ADDITIVITY = the largest, most stable lift of any filter.** vs the vwap-cap frontier it's POSITIVE at every k:
+  NQ +0.11..+0.20, QQQ **+0.23..+0.28** (flat across the whole grid — bigger than time-of-day's +0.03..+0.10).
+  AND it adds substantially ON TOP of the F38 skip<11:00 gate at ~same n: NQ +0.980→+1.144, QQQ +1.136→**+1.372**
+  → orthogonal to BOTH VWAP-extension AND time-of-day. Two independent new axes now stack (F38 + F41).
+- **+zone (OB-OR-FVG) = MARGINAL** (frontier-lift ~0 on NQ, +0.05..+0.10 QQQ; near-zero on top of F38). Adding
+  the FVG component DILUTES the OB signal → OB-only is the lever, FVG is not.
+- Mechanism: an ORB breakout firing from/at a bullish order block (institutional demand zone) is a genuine SMC
+  confluence — supported breakouts are higher quality independent of how extended (VWAP) or what time of day.
+VERDICT: **GRADUATED — the strongest orthogonal stack filter found.** Banked, NO propagation yet
+([[highstrike-defer-propagation]]). ⚠️ It uses the V44 OB params (untuned here = NOT curve-fit to this test, a
+plus); recommended DE-RISK before eventual propagation = an OB-param robustness sweep (like F23 did for pivots).
+SMC is the richest family: structure gate (F20) + order-block confluence (F41) both graduate; sweeps + FVG dead.
+
+## F40 — the secondary leads (squeeze / ADX): ADX redundant, squeeze is a thin time-of-day shadow → not adopted (2026-06-16)
+`research/orb_stack_squeeze.py` (+ `--additive`). The two other sign-consistent leads from the F38 feature study —
+compress = ATR(7)/ATR(28) prior bar (corr −0.29, lower=squeeze=better) and adx (corr +0.20) — put through the
+full gauntlet incl. the additivity control and an on-top-of-F38 check.
+- **Both LOOK strong standalone** (gate sweep, NQ+QQQ+SPY): adx≥30 → NQ +1.03/QQQ +1.00/SPY +0.89, every yr+,
+  OOS holds, 2× slip ok; compress≤0.95 → NQ +1.13/QQQ +1.13/SPY +1.22. But both cull HARD (adx≥30 keeps ~40%,
+  compress≤0.95 keeps ~15-20% = ~5 trades/yr) — the classic pre-additivity-test illusion.
+- **ADX = REDUNDANT with VWAP-cap.** At the adopted operating point (vwap k=2.0) the frontier-lift delta is
+  NEGATIVE on both NQ (−0.048) and QQQ (−0.200) — adx≥30 is WORSE than tightening the cap to the same n. It only
+  goes positive deep in the survivorship tail (k≤1.2, where the vwap frontier has plateaued). adx is trend-family
+  → rides the frontier exactly like the kernel/RSI/AC (F36/F37), and consistent with F17 ("stricter ADX = TF-
+  dependent, not robust"). DEAD as a new lever.
+- **SQUEEZE (compress) = a thin, NQ-only, TIME-OF-DAY SHADOW.** Additive on NQ (delta +0.05..+0.14 in the
+  realistic k-zone) BUT on QQQ it's NEGATIVE at the operating point (−0.071 @k2.0) and only marginally + when
+  tightened. Decisively: ON TOP OF the F38 skip<11:00 gate it adds ~nothing — QQQ +1.136→+1.129 (−0.007) while
+  cutting trades 196→46. So the −0.29 corr was largely because squeezes CLUSTER midday; F38's time gate already
+  captures the axis. Plus it culls to ~5 trades/yr (n=46-83) = impractical.
+VERDICT: **neither adopted.** ADX is redundant with the VWAP-cap; squeeze is asset-inconsistent + largely
+subsumed by F38 (time-of-day) + far too thin. The lesson holds: testing the secondary leads vs BOTH the vwap-cap
+frontier AND the already-graduated F38 gate is what exposed them — a raw +1.0R standalone meant nothing. F38/F39
+(time-of-day) remain the session's real find; the feature-study's other "leads" were shadows of it or of the cap.
+
+## F39 — TIME-OF-DAY is UNIVERSAL: the opening-hour skip transfers to Asia + London AND rescues ES → GRADUATES (2026-06-16)
+`research/orb_session_tod.py` (+ `--additive`). Tests whether F38's RTH "skip the opening hour" generalises:
+skip the first N min after EACH session's OR closes (RTH 10:00, Asia 20:00 ET, London 03:30 ET; trade-day
+coords for off-hours). Off-hours = NQ + ES only. The structure-maturity mechanism (the HH/HL gate needs
+post-open intraday swings to FORM) should apply to any session open — and it does, even harder off-hours.
+- **Transfers + monotonic on all 3 sessions.** Recommended robust point = skip first **60 min** (matches RTH;
+  60-90 is the plateau). Asia NQ +0.500→**+0.631** (PF 2.78→3.84, 17/17 yr, OOS holds, 2× slip +0.33→+0.47);
+  London NQ +0.574→**+0.866** (PF 3.45→8.98, 14/14, OOS +0.83→+0.95, 2× +0.46→+0.77).
+- **It RESCUES ES off-hours — the #1 open caveat on Asia/London (F22/F29 "NQ-strong, ES-marginal, dies at
+  2× slip").** Asia ES base +0.193/PF1.49/DD−54/5 neg yrs/**2× slip −0.165 (NEGATIVE)** → skip+60 +0.457/
+  PF2.85/DD−8/15-of-17 yr/**2× slip +0.128**; at skip+120 → +0.540, 14/14 yrs, 2× +0.213. London ES base
+  +0.271/**FAIL** (6 neg yrs, 2× slip 0.000) → skip+60 +0.674/PF5.52/**PASS**/15/15 yr/OOS +0.62→+0.80/
+  **2× slip +0.44**. The opening hour was WHERE the ES off-hours fragility lived; cutting it fixes it.
+- **ADDITIVITY (the F37 control) = POSITIVE at every k on all four off-hours streams** (Asia NQ +0.01..+0.08,
+  Asia ES +0.12..+0.20, London NQ +0.08..+0.21, London ES +0.14..+0.31) — STRONGER than RTH (+0.03..+0.10).
+  The off-hours vwap-cap frontier PLATEAUS (it can only filter extension, not time-structure noise) while the
+  time gate climbs past it → strongly ORTHOGONAL, not a frontier-ride. Mechanism confirmed cross-session.
+VERDICT: **GRADUATED — the opening-hour skip is a UNIVERSAL stack gate, all 3 sessions** (skip the first ~60min
+after each session's OR close: RTH ≥11:00, Asia ≥21:00, London ≥04:30 ET). It both lifts every session's edge
+AND de-risks the off-hours ES slippage problem that was the main barrier to Asia/London — so it strengthens the
+"trade all 3 sessions" case (F26b). Adoption = the same near-free clock gate per session → all-scripts
+propagation ([[highstrike-all-scripts-consistency]]) + forward-test. Pairs with F38 (RTH) = one rule everywhere.
+
+## F38 — TIME-OF-DAY: skip the opening hour — the first ORTHOGONAL edge that LIFTS the frontier → GRADUATES (2026-06-15)
+`research/orb_stack_features.py` (feature hunt) + `research/orb_stack_tod.py` (drill + controls). After F36/F37
+(every trend/extension cull just rides the VWAP-cap frontier), I ran F15's feature-separation study on the
+STACK'S RESIDUAL trades (post HH/HL gate + post VWAP-cap) across NQ+QQQ+SPY — so the adopted axes are factored
+out and only ORTHOGONAL separators show. Sign-consistent leads: **tod_min +0.34** (time-of-day), compress −0.29
+(squeeze), adx +0.20, vwap_ext −0.42 (the adopted control). Time-of-day was the standout and is causal + free.
+- **The pattern (all 3 assets):** opening-hour breakouts are near-dead on the stack — 09:30-11:00 exp +0.07/
+  +0.22/+0.27 (NQ/QQQ/SPY), PF 1.1-1.7 — while 11:00-15:00 carry everything (PF 7-23). Mechanism: the HH/HL
+  st_state gate needs intraday swings to FORM; pre-11:00 signals fire on stale overnight/pre-market structure.
+- **skip-mornings sweep (skip stack entries before T; engine skip_mask, a later break same day still fires).**
+  Monotonic + every config PASSES on NQ+ES+QQQ+SPY. Recommended robust point **T = 11:00** (broad plateau
+  10:30-12:00, not a fitted spike):
+  | | exp (from) | PF | win | DD | per-yr | OOS | 2× slip | kept |
+  |---|---|---|---|---|---|---|---|---|
+  | NQ  | **+0.980** (0.736) | 9.0 | 88% | −3 | 13/13 | +0.95→**+1.04** | +0.93 | 75% |
+  | ES  | +0.780 (0.536) | 5.5 | 84% | −3 | 12/12 | +0.77→+0.82 | +0.65 | 68% |
+  | QQQ | **+1.136** (0.801) | 16.4 | 91% | −2 | 7/7 | +1.19→+1.00 | — | 65% |
+  | SPY | +0.982 (0.680) | 8.0 | 86% | −2 | 8/8 | +1.00→+0.95 | — | 59% |
+  exp +33-50%, DD ~halved, win 86-91%, every year+ (it even REMOVES ES's lone 2017 down-year), OOS holds/
+  improves, survives 2× slip. (skip<10:00 = no-op, n unchanged — the OR closes 10:00 so nothing fires earlier;
+  internal-consistency check passed.)
+- **THE DECISIVE CONTROL — additivity / frontier-lift (the F36/F37 killer): PASSES.** delta = (skip<11:00 +
+  vwap k) MINUS vwap-only at matched n, across the whole k grid: **NQ {+0.06,+0.07,+0.06,+0.03,+0.03,+0.10},
+  QQQ {+0.07,+0.08,+0.07,+0.05,+0.05,+0.08} — POSITIVE at EVERY k on BOTH assets.** Unlike the kernel/RSI/AC
+  (which oscillated around 0 = redundant), time-of-day LIFTS the whole vwap-cap frontier by ~+0.05-0.07R → it
+  is genuinely ORTHOGONAL (mornings are low-edge for a reason unrelated to VWAP extension — structure-gate
+  immaturity). This is the first new lever since F27b to clear the full gate INCLUDING the frontier-lift test.
+VERDICT: **GRADUATED — adopt a "no entries before ~11:00 ET" gate on the RTH stack.** Near-free (an entry-time
+clock gate, NO indicator port unlike F36), every-year-positive, OOS-stable, 2×-slip-robust, frontier-additive.
+⚠️ Adoption cost = it changes the tested system → all-scripts propagation ([[highstrike-all-scripts-consistency]])
++ the forward-test gate, same as every graduated lever. ⚠️ RTH-SPECIFIC as tested: the Asia/London analog
+("skip the first ~90min after THAT session's OR") is untested — the structure-maturity mechanism should
+transfer but must be checked per-session before applying off-hours. Secondary orthogonal leads compress(−0.29
+squeeze) + adx(+0.20) are real + sign-consistent but untested at signal level — next in the queue.
+
+## F37 — RSI and Accelerator/Decelerator as STACK FILTERS: also REDUNDANT with VWAP-cap → DEAD (2026-06-15)
+`research/orb_momentum_filter.py` (+ `--robust` / `--additive`). Same drill as F36 on two classic momentum
+oscillators, embedded as causal (prior-bar) AND-gates into the stack trend gate. Indicators (textbook params,
+no mining): **RSI(14)** Wilder; **AO** = SMA(hl2,5)−SMA(hl2,34); **AC** (Accel/Decel) = AO−SMA(AO,5). Six
+variants: rsi_side (>50/<50), rsi_cap (don't-chase: skip RSI>70 longs / <30 shorts), rsi_slope, ac_sign
+(AC>0/<0), ac_accel (AC rising/falling), ac_agree (Bill Williams: AC>0 AND rising / AC<0 AND falling).
+- **All six LOOK like graduates** — every variant PASSES (both sides+, CI>0) on NQ+QQQ+SPY+ES, every year+,
+  OOS holds, survives 2× slip. The AC pair is strongest: **ac_agree** NQ +0.736→**+0.847**, QQQ +0.801→
+  **+0.912**, SPY +0.680→**+0.794**, ES +0.536→**+0.639** (PF to 6+, DD cut, 2× slip NQ +0.793/ES +0.494).
+  RSI variants milder (+0.03..+0.07R). By the F16/F20/F21 checklist all would pass.
+- **The redundancy + additivity controls KILL them.** At the *default* operating point ac_agree sat a hair
+  ABOVE the vwap-cap frequency↔quality frontier (NQ +0.020, QQQ +0.056 at matched n) — the only filter yet
+  to do so, which warranted the stronger test: does it lift the WHOLE frontier? **No.** Re-running ac_agree
+  *over the vwap-cap k grid* and differencing vs the vwap-only frontier at matched n, the delta **oscillates
+  around zero** — NQ {+0.02, −0.02, −0.03, −0.04, +0.03}, QQQ {+0.06, +0.02, −0.02, +0.01, +0.02} — i.e.
+  *negative through NQ's mid-range*. The only big +deltas (+0.10) are at k=1.0 where n collapses to 138-196
+  (PF 11-19) = the **F16 survivorship mirage**, unusable. ac_sign sat BELOW the frontier; RSI variants ON it.
+- So RSI and AccelDecel are the SAME story as the kernel (F36): they all proxy "price trending in the trade
+  direction / not over-extended," already captured by st_state HH/HL + VWAP-cap. The single-point "above
+  frontier" reading for ac_agree was a lucky cull location, not an orthogonal axis — the additivity sweep
+  (lift across multiple k) is the control that exposes it (stronger than F36's single matched-n point).
+VERDICT: **DEAD — do NOT embed RSI or Accelerator/Decelerator in the stack.** Cheap-to-port (AC = a few SMAs)
+does NOT rescue a redundant filter: it adds a knob + propagation cost for zero orthogonal edge. (Robustness
+real, additivity nil — identical to F36.) Methodology note: ANY momentum cull mimics graduation; only the
+*frontier-lift / additivity* test vs the existing levers separates a real axis from a frontier-rider.
+
+## F36 — "Neural Kernel Bands" as a STACK FILTER: REDUNDANT with the VWAP-cap → DEAD (2026-06-15)
+`research/orb_kernel_filter.py` (+ `--robust`). User-supplied TradingView indicator. First, what it IS:
+the "kernel regression / ML core" is — on inspection — a **causal one-sided weighted moving average**
+(weights decay with bar AGE i, `wᵢ=exp(-i²/2h²)`, NOT a predictor feature), EMA-smoothed; bands =
+kernelMA ± mult·σ(residual). It is non-repainting (uses only `close[i]`, i≥0). Its primary signal is a
+**volatility-band BREAKOUT** (close crosses the band) — a momentum read, same family as the ORB. Tested AS A
+FILTER on the validated 5m stack (F21 HH/HL gate + VWAP-cap k2, scale_be, OR stop) by AND-ing a causal
+(prior-bar) kernel-agreement condition into the trend gate — exactly how `orb_stack_walkforward.py` injects
+st_state. Four variants: **state** (held band-cross state must agree = the literal "band-cross filter"),
+**slope** (kernelMA rising/falling), **side** (close vs kernelMA), **cap** (don't-chase: skip if already >1σ
+beyond kernelMA).
+- **It LOOKS like a graduate.** Every variant beats or ties the stack on all four metrics, PASSES (both
+  sides+, CI>0) on **NQ+QQQ+SPY+ES**, positive every year, **OOS holds**, and **survives 2× slip** on the
+  futures. `slope`: NQ +0.736→**+0.817**, QQQ +0.801→**+0.836**, SPY +0.680→**+0.756**, ES +0.536→**+0.658**
+  (PF 4.5→5.6, DD cut, CI up). `state` similar. By the F16/F20/F21 checklist alone it would graduate.
+- **The redundancy control KILLS it.** Tightening the **existing** VWAP-cap knob `k` to the SAME trade count
+  reproduces the entire lift: NQ vwap-cap **k=1.7 → n=351, +0.823** ≈ kern:state **n=375, +0.822**; and
+  **k=1.5 → n=307, +0.892** *beats* kern:state at FEWER trades. The kernel filter lands right on the
+  frequency↔quality frontier the stack already exposes via one input. The fact that **all four** variants
+  (incl. orthogonal `cap`) improve is the tell — they're all proxies for "price trending in the trade
+  direction / not over-extended," which **st_state HH/HL + VWAP-cap already capture.** The marginal +0.05R
+  at matched-n is within ~1 SE and is dominated by simply turning the cap knob further.
+- This is the **F1/F11/F13/F19 trap caught again**: a cull that rides the frontier mimics every graduation
+  signal (cross-asset, per-year, OOS, slip) without adding orthogonal information — the redundancy control is
+  the only test that separates them, and the methodology demanded it.
+VERDICT: **DEAD as a quant filter — do NOT adopt.** It does not earn the heavy engineering cost (port the
+kernel + adaptive bandwidth + residual bands + band-state machine into Pine, reconcile, propagate to 5
+scripts) for a benefit you already own via VWAP-cap. Fine as a **discretionary visual**; not a signal lever.
+(Robustness intact — the cross-asset/OOS/slip wins are *real*, just not *additive*.)
 
 ## F34 (option A) — production-config validation in DOLLARS, cross-instrument (2026-06-15)
 `orb_config_validate.py` — NQ/QQQ/SPY/ES/GC 5m RTH, fixed $250 risk/trade, per-year + OOS + STOP-rate.
