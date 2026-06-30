@@ -26,7 +26,7 @@
 indicator("HIGHSTRIKE ORB — STACK", overlay=true, max_labels_count=300, max_lines_count=300)
 
 // ───────────────────────── SESSION ─────────────────────────
-sess_preset = input.string("Asia / Tokyo (1900-2000 ET)", "Session", group="Session",
+sess_preset = input.string("Auto (Asia + London + RTH by clock)", "Session", group="Session",
               options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
               tooltip="Auto runs all THREE cycles per trade-day by the clock: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). One chart covers all sessions.")
 or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
@@ -42,19 +42,31 @@ allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="OR
 max_entries  = input.int(2, "Max entries per side / day", group="ORB", minval=1)
 entry_delay  = input.int(60, "Skip entries N min after OR close (F38/F39)", group="ORB", minval=0,
             tooltip="F38/F39 GRADUATED: the first ~hour after each session's OR closes is near-dead on the stack (the HH/HL structure gate is immature off the open). 60 = no entries until ~11:00 RTH / ~21:00 Asia / ~04:30 London ET. Lifts exp ~+33-50% + ~halves DD across all sessions, every year+, OOS holds, 2x slip ok. 0 = off.")
+chase_max    = input.float(0.0, "Max chase past level (xATR, 0=off)", group="ORB", step=0.25, minval=0.0,
+            tooltip="F57 (2026-06-22): only fire while price is still within this many ATR of the breakout level — i.e. don't chase a fill far past the level. TESTED and left OFF by default: the structure gate confirms only AFTER a real move, so the 'late' confirmed-momentum entries are the WINNERS; forcing near-level entries (0.25-0.5) selects weak breakouts and turns NQ NEGATIVE (+0.156→−0.039R). The fill PRICE is already honest (gap-aware, fills at the worse of level/open) so a late entry is priced correctly. Use only if you specifically want near-level fills.")
+brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="What counts as a FILL. 'Candle close beyond level' (DEFAULT, per user) = the bar must CLOSE above the OR high (long) / below the OR low (short) — a full-body break, no wick-only fills; the fill is booked at that CLOSE (honest, never better than the close). 'Wick / touch' = a resting stop fills intrabar the instant price tags OR high+buffer (the F58-validated stop entry — earlier, but a wick that closes back inside still counts). The close-confirm entry is being honest-tested separately (F59).")
+strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be a STRONG, decisive candle — body |close−open| ≥ this fraction of the full range (high−low) AND the right colour (BULLISH long / BEARISH short). Default 0.25 = the VALIDATED sweet spot (F59b): rejects dojis / long-wick rejection candles and is BEST on NQ/QQQ (NQ +0.215→+0.233R). Demanding a visually bigger body (0.4-0.6) keeps cutting trades and LOWERS the edge (at 0.5: NQ +0.150R, SPY fails the CI gate) — raise it only if you want a stronger candle and accept fewer/weaker-tested signals. 0 = any close beyond the level.")
+wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="Close-confirm only (user rule): don't fire on the breakout candle itself — WAIT for the NEXT candle to CONTINUE the trend (close higher than the breakout candle for a long, lower for a short), then fill on that continuation candle. Stops 'fired into a reversal' entries (a one-bar pop above the OR that immediately rolls over). VALIDATED (F59c): improves QQQ (+0.283→+0.304) and SPY (+0.232→+0.344, PF 1.66) substantially, ~neutral on NQ — all pass the CI gate. Default ON.")
+dir_seq      = input.bool(true, "Direction sequence (price must be pushing the trade way)", group="ORB",
+            tooltip="USER RULE (example.txt / Evidence early-entry): only fire while price is actually MOVING the trade direction — a LONG needs close > close[1] AND close[1] > close[2] (the 101→102→103 up-sequence); a SHORT the mirror down-sequence. Blocks the counter-trend / 'middle-of-nowhere' touches. VALIDATED F61: on the 'Wick / touch' fill mode this is a real graduate (NQ +0.151→+0.261R PF 1.26→1.47, QQQ +0.276→+0.448, SPY +0.257→+0.383; yrs+ 13/17·9/9·8/9, OOS holds, survives 2× slip). On the close-confirm fill it's already implied by the strong-body + continuation confirm, so it's ~neutral there. Default ON.")
 // ───────────────────────── STRUCTURE GATE ─────────────────────────
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
-             options=["Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"])
+             options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
+             tooltip="USER FILL RULE: a breakout fills only DURING A CLEAR TREND — a LONG needs a structure UPtrend (HH/HL, st_state=1) on ≤5m / EMA-up on ≥15m; a SHORT the mirror downtrend. Default ON (Auto). NOTE (F58): net of honest fills the gate does not ADD expectancy (pure ORB ≈ gated on NQ/QQQ/SPY) — it is kept ON as the entry SETUP (only take clean-trend breakouts), not for a statistical edge. 'Off — plain ORB' trades every breakout. Macro + local-regime filters are separate (Regime group).")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
 // ───────────────────────── VWAP CAP ─────────────────────────
-cap_on = input.bool(true, "VWAP-extension cap", group="VWAP cap")
+cap_on = input.bool(false, "VWAP-extension cap", group="VWAP cap", tooltip="F58 (2026-06-23): the cap HURTS honest fills — it removes the late-momentum breakouts that ARE the winners (F57); NQ exp decays monotonically as k tightens. Default OFF. Toggle on only to suppress over-extended entries by preference.")
 cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
 // ───────────────────────── ORDER-BLOCK CONFLUENCE (F41) ─────────────────────────
-ob_on   = input.bool(true, "Order-block confluence", group="Order block",
-          tooltip="F41 GRADUATED (strongest filter; robust over its params per F47): only take the breakout when price is at a bullish order block (long) / bearish OB (short) — an institutional demand/supply zone supporting the move. Lifts the vwap-cap frontier on NQ/QQQ/SPY/ES and STACKS with the time gate (F45 = ~2x stack expectancy). Ported from hs_harness.py — confirm on a TV compile + reconcile.")
+ob_on   = input.bool(false, "Order-block confluence", group="Order block",
+          tooltip="F58 (2026-06-23): adds ~0 net of HONEST fills — the F41/F45 'lift' was the F56 stale-fill artifact; it only thins trades. Default OFF. Toggle on for the institutional demand/supply confluence by preference (only take the breakout at a bullish OB long / bearish OB short). Ported from hs_harness.py.")
 ob_body = input.float(0.3, "OB: min displacement body x ATR", group="Order block", step=0.1)
 ob_vol  = input.float(0.7, "OB: min volume x SMA20",          group="Order block", step=0.1)
 ob_keep = input.int(5,     "OB: keep last N zones",           group="Order block", minval=1)
@@ -81,11 +93,14 @@ stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Ris
             options=["Structure swing (HH/HL)", "OR edge"],
             tooltip="F25b: resting the stop at the last HH/HL swing (vs the OR edge) ~halves risk per trade and lifts R, walk-forward confirmed.")
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
-min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR (manual)", group="Risk plan", step=0.1)
+auto_minstop= input.bool(true, "Auto min-stop per instrument (futures 0.5 / equity 0.75 ATR)", group="Risk plan",
+            tooltip="F51 (2026-06-22): a 0.5-ATR floor is noise-tight on equities/ETFs (median structure stop on QQQ ≈0.57 ATR) and drives the 'instant TP1' look; 0.75 ATR is expectancy-NEUTRAL on the NQ/QQQ sweep and less whippy. ON = futures use 0.5, stocks/funds use 0.75. OFF = use the manual value above for every instrument.")
+float eff_min_stop = auto_minstop ? (syminfo.type == "futures" ? 0.5 : 0.75) : min_stop_atr
 sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
-exit_mode = input.string("Trail (ATR chandelier)", "Exit", group="Risk plan",
+exit_mode = input.string("Full → cap @ TP2 (struct stop)", "Exit", group="Risk plan",
             options=["Trail (ATR chandelier)", "Scale 50% @ TP1 → BE → TP2", "Full → cap @ TP2 (struct stop)"],
-            tooltip="F27b: a momentum TRAIL beats scale-to-TP on the stack (default). F34b GRADUATED a third option: 'Full → cap @ TP2' = full position to the TP2 R-cap (set TP2 R below, default 4R) on the structure stop, no scale, no trail. Walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip; ~2× the median $/trade of the trail and honest PF (3-6 vs the trail's tail-inflated 17) — best for steady eval accumulation. Toggle freely.")
+            tooltip="DEFAULT = 'Full → cap @ TP2' (F34b graduate): full position to the TP2 R-cap (default 4R) on the structure stop — no scale, no trail. Honest PF (3-6) + ~2× the trail's median $/trade, best for steady eval accumulation. F50/F51 (2026-06-22): the ATR-chandelier TRAIL's headline R/PF is TAIL-INFLATED (a few low-ATR trades blow up the R-denominator; F27b made it default on exactly that unreliable R-comparison) → demoted to a toggle for momentum-riding, no longer the default. 'Scale' = bank 50% @ TP1, runner BE→TP2.")
 trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
 tp1_rr      = input.float(1.0, "TP1 R (scale mode)", group="Risk plan", step=0.25)
 tp2_rr      = input.float(4.0, "TP2 R (scale mode)", group="Risk plan", step=0.25)
@@ -209,9 +224,10 @@ if array.size(obBearT) > 0
             in_bear_ob := true
 
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
+bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = use_struct ? (st_state == 1) : trend_up
-bool eff_down = use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -298,9 +314,9 @@ float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? p
 var float Ls = na
 var float Ss = na
 if not na(Le) and not in_long
-    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * eff_min_stop)
 if not na(Se) and not in_short
-    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * eff_min_stop)
 float Lt1 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp1_rr
 float Lt2 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp2_rr
 float St1 = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp1_rr
@@ -343,8 +359,20 @@ if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < 
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
     traded_s := false
-bool sig_l = window and not traded_l and gate_long  and high >= Le
-bool sig_s = window and not traded_s and gate_short and low  <= Se
+bool near_l = chase_max <= 0 or low  <= Le + atr14 * chase_max   // F57 no-chase guard (default off — late confirmed entries are the winners)
+bool near_s = chase_max <= 0 or high >= Se - atr14 * chase_max
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"          // user: a FULL-BODY, STRONG candle that CLOSES beyond the level
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)   // decisive candle, not a doji / long-wick rejection
+bool qual_l = close >= Le and close > open and body_strong                        // a strong full-body BULLISH close above OR high (the breakout candle)
+bool qual_s = close <= Se and close < open and body_strong
+// brk fires on the breakout candle (wait_ft off) OR on the NEXT candle that CONTINUES the trend (wait_ft on, F59c)
+bool brk_l = conf_close ? (wait_ft ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le
+bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
+// F61 direction sequence: only fire while price is pushing the trade way (101->102->103 up / mirror down)
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+bool sig_l = window and not traded_l and gate_long  and brk_l and near_l and seq_l
+bool sig_s = window and not traded_s and gate_short and brk_s and near_s and seq_s
 bool long_fire  = sig_l and cap_long_ok
 bool short_fire = sig_s and cap_short_ok
 bool long_skip  = sig_l and not cap_long_ok
@@ -383,6 +411,8 @@ var int s_fill_t = na
 var int s_t1_t   = na
 var int s_t2_t   = na
 var int s_stop_t = na
+var float l_stop_px = na      // price the stop actually filled at (for the at-price STOP marker)
+var float s_stop_px = na
 float ev_r = 0.0              // R closed THIS bar (eval signal-sim)
 // signal-sim R for a close at px (scale mode: 50% banked at TP1, runner from BE)
 f_lr(px) => is_trail ? (px - l_ep) / l_rk : l_tp1 ? 0.5 * tp1_rr + 0.5 * (px - l_ep) / l_rk : (px - l_ep) / l_rk
@@ -412,12 +442,14 @@ if reset_now
     s_t1_t   := na
     s_t2_t   := na
     s_stop_t := na
+    l_stop_px := na
+    s_stop_px := na
 if long_fire
     in_long := true
     lstop := Ls
     l_tp1 := false
-    l_ep := Le
-    l_rk := Le - Ls
+    l_ep := conf_close ? close : math.max(Le, open)                   // close-confirm: fill at the confirming CLOSE; stop: gap-aware (no better than the open)
+    l_rk := l_ep - Ls                                                 // honest risk from the ACTUAL fill (higher close = bigger 1R, fewer R to a fixed target)
     l_t1h := false
     l_t2h := false
     stL := "FILLED"
@@ -429,8 +461,8 @@ if short_fire
     in_short := true
     sstop := Ss
     s_tp1 := false
-    s_ep := Se
-    s_rk := Ss - Se
+    s_ep := conf_close ? close : math.min(Se, open)                   // close-confirm: fill at the confirming CLOSE; stop: gap-aware (no better than the open)
+    s_rk := Ss - s_ep                                                 // honest risk from the ACTUAL fill
     s_t1h := false
     s_t2h := false
     stS := "FILLED"
@@ -438,7 +470,7 @@ if short_fire
     s_t1_t   := na
     s_t2_t   := na
     s_stop_t := na
-if in_long
+if in_long and not long_fire                                          // F-fix: management starts the bar AFTER the fill — no same-bar fill->TP/stop inflation (matches engine i+1)
     if is_trail
         lstop := math.max(lstop, close - trail_atr * atr14)            // chandelier ratchet
     else if not is_full                                                // scale mode only (full rides the struct stop to the cap)
@@ -460,9 +492,10 @@ if in_long
         in_long := false
         if low <= lstop
             l_stop_t := time
+            l_stop_px := lstop                                         // the price the stop filled at (at-price STOP marker)
             if not l_t1h or is_full                                    // full mode banks nothing at TP1, so a stop is a full loss
                 stL := "STOP HIT"
-if in_short
+if in_short and not short_fire                                        // F-fix: management starts the bar AFTER the fill — no same-bar fill->TP/stop inflation (matches engine i+1)
     if is_trail
         sstop := math.min(sstop, close + trail_atr * atr14)
     else if not is_full
@@ -484,6 +517,7 @@ if in_short
         in_short := false
         if high >= sstop
             s_stop_t := time
+            s_stop_px := sstop                                         // the price the stop filled at (at-price STOP marker)
             if not s_t1h or is_full                                    // full mode banks nothing at TP1, so a stop is a full loss
                 stS := "STOP HIT"
 if is_auto and o_now >= trade_end                              // auto: flatten the displayed trade at the session cutoff
@@ -535,17 +569,16 @@ plot(lp and not is_trail and not is_full ? Lt1 : na, "Long TP1",  color=color.ne
 plot(lp and not is_trail ? Lt2 : na, "Long TP2",  color=color.new(color.green, 10), style=plot.style_linebr)
 plot(sp and not is_trail and not is_full ? St1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
 plot(sp and not is_trail ? St2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
-plotshape(long_fire,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
-plotshape(short_fire, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
-plotshape(long_skip,  "Long capped",  shape.xcross, location.belowbar, color.new(color.gray, 0), text="EXT", textcolor=color.gray, size=size.tiny)
-plotshape(short_skip, "Short capped", shape.xcross, location.abovebar, color.new(color.gray, 0), text="EXT", textcolor=color.gray, size=size.tiny)
-// event markers — WHERE it happened on the chart (mirrors the dashboard times)
-plotshape(l_t1h and not l_t1h[1], "Long TP1 hit",  shape.diamond, location.abovebar, color.new(color.teal, 0),        text="TP1", textcolor=color.white, size=size.tiny)
-plotshape(l_t2h and not l_t2h[1], "Long TP2 hit",  shape.diamond, location.abovebar, color.new(color.green, 0),       text="TP2", textcolor=color.white, size=size.tiny)
-plotshape(s_t1h and not s_t1h[1], "Short TP1 hit", shape.diamond, location.belowbar, color.new(color.teal, 0),        text="TP1", textcolor=color.white, size=size.tiny)
-plotshape(s_t2h and not s_t2h[1], "Short TP2 hit", shape.diamond, location.belowbar, color.new(color.green, 0),       text="TP2", textcolor=color.white, size=size.tiny)
-plotshape(l_stop_t == time, "Long stop hit",  shape.xcross, location.belowbar, color.new(color.red, 0), text="STOP", textcolor=color.red, size=size.tiny)
-plotshape(s_stop_t == time, "Short stop hit", shape.xcross, location.abovebar, color.new(color.red, 0), text="STOP", textcolor=color.red, size=size.tiny)
+// FILL markers anchored AT the actual fill price (gap-aware l_ep/s_ep), not below/above the bar — so a LONG fill
+// always sits at/above the OR high and a SHORT fill at/below the OR low (a buy-stop fills no better than
+// max(Le,open) ≥ OR high; a sell-stop no better than min(Se,open) ≤ OR low). Makes the break-confirmation visible.
+// SIMPLE CHART (user 2026-06-29): only the FILL marker (anchored at the fill price) with the
+// trigger TIME, plus the TP1/TP2 (and stop) LINES plotted above. No TP/STOP/EXT hit-markers —
+// they were the clutter that kept "showing the same issue". The dashboard still logs hit times.
+if long_fire
+    label.new(bar_index, l_ep, "FILL ▲ " + str.format_time(time, "HH:mm", sess_tz), yloc=yloc.price, style=label.style_label_up,   color=color.new(color.lime, 0), textcolor=color.white, size=size.small)
+if short_fire
+    label.new(bar_index, s_ep, "FILL ▼ " + str.format_time(time, "HH:mm", sess_tz), yloc=yloc.price, style=label.style_label_down, color=color.new(color.red, 0),  textcolor=color.white, size=size.small)
 plotshape(ev_passed and not ev_passed[1], "Eval target reached", shape.flag, location.abovebar, color.new(color.lime, 0), text="TGT ✓", textcolor=color.lime, size=size.small)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
@@ -600,8 +633,10 @@ f_qc(x) => na(x) ? color.gray : x <= cap_k ? color.lime : color.orange
 var table dash = table.new(position.top_right, 3, 13, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     string sess_lbl = is_auto ? ("Auto: " + (phase_rth ? "RTH" : phase_london ? "London" : "Asia")) : sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
-    string regL = eff_up ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_state == 3 ? "Range" : eff_down ? "Bearish (no long)" : "No Structure"
-    string regS = eff_down ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_state == 3 ? "Range" : eff_up ? "Bullish (no short)" : "No Structure"
+    bool   dispUp = gate_off ? (st_state == 1) : eff_up        // F58: when gate is off, show the true structure (info only), not a forced both-sided trend
+    bool   dispDn = gate_off ? (st_state == 2) : eff_down
+    string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_state == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
+    string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_state == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
     string grL = f_grade(eff_up, gate_long, cap_long_ok)
     string grS = f_grade(eff_down, gate_short, cap_short_ok)
     string etagL = in_long ? "FILLED" : traded_l ? "DONE" : armL ? "ARMED" : "WAIT"
@@ -621,8 +656,8 @@ if barstate.islast and show_dash
     table.cell(dash,1,2, grL, text_color=grL == "A+" or grL == "A" ? color.lime : grL == "B" ? color.orange : color.gray, text_size=size.tiny)
     table.cell(dash,2,2, grS, text_color=grS == "A+" or grS == "A" ? color.lime : grS == "B" ? color.orange : color.gray, text_size=size.tiny)
     table.cell(dash,0,3,"ENTRY", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,3, f_v(Le) + " [" + etagL + "]" + f_t(l_fill_t) + f_sz(na(Le) or na(Ls) ? na : Le - Ls), text_color=etcL, text_size=size.tiny)
-    table.cell(dash,2,3, f_v(Se) + " [" + etagS + "]" + f_t(s_fill_t) + f_sz(na(Se) or na(Ss) ? na : Ss - Se), text_color=etcS, text_size=size.tiny)
+    table.cell(dash,1,3, f_v(in_long ? l_ep : Le) + " [" + etagL + "]" + f_t(l_fill_t) + f_sz(na(Ls) ? na : (in_long ? l_ep : Le) - Ls), text_color=etcL, text_size=size.tiny)
+    table.cell(dash,2,3, f_v(in_short ? s_ep : Se) + " [" + etagS + "]" + f_t(s_fill_t) + f_sz(na(Ss) ? na : Ss - (in_short ? s_ep : Se)), text_color=etcS, text_size=size.tiny)
     table.cell(dash,0,4,"STOP", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,4, f_v(l_stop_now) + stop_tag + (in_long and is_trail ? " trail" : "") + (na(l_stop_t) ? "" : " [HIT]" + f_t(l_stop_t)), text_color=stL == "STOP HIT" ? color.red : color.new(color.red, 25), text_size=size.tiny)
     table.cell(dash,2,4, f_v(s_stop_now) + stop_tag + (in_short and is_trail ? " trail" : "") + (na(s_stop_t) ? "" : " [HIT]" + f_t(s_stop_t)), text_color=stS == "STOP HIT" ? color.red : color.new(color.red, 25), text_size=size.tiny)

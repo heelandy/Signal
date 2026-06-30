@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HIGHSTRIKE BOT</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root{--bg:#0b1220;--card:#121a2b;--line:#1f2b45;--txt:#cdd6e8;--mut:#7d8db0;--grn:#22c55e;--red:#ef4444;--yel:#eab308;--blu:#3b82f6}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.4 system-ui,Segoe UI,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:12px 18px;border-bottom:1px solid var(--line);background:#0e1626}
+  header h1{font-size:16px;margin:0;letter-spacing:.5px}
+  .pill{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin:0 0 10px}
+  .col4{grid-column:span 4}.col6{grid-column:span 6}.col8{grid-column:span 8}.col12{grid-column:span 12}
+  .kpi{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}
+  .kpi b{font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:12.5px} th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600} .num{text-align:right;font-variant-numeric:tabular-nums}
+  button{background:#1b2740;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer;font-weight:600}
+  button:hover{border-color:var(--blu)} .kill{background:#3a1414;border-color:var(--red);color:#ffd0d0}
+  .gauge{font-size:34px;font-weight:700;text-align:center} .mut{color:var(--mut)}
+  select,input{background:#1b2740;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:6px;font-size:13px;width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--blu)}
+  .up{color:var(--grn)}.dn{color:var(--red)}
+</style></head>
+<body>
+<header>
+  <h1>⚡ HIGHSTRIKE BOT</h1>
+  <span id="mode" class="pill" style="background:#1b2740">mode —</span>
+  <span id="health" class="pill" style="background:#1b2740">health —</span>
+  <span id="market" class="pill" style="background:#1b2740">market —</span>
+  <span class="mut" style="margin-left:auto">SIGNAL ENGINE · the bot never trades — you place trades manually</span>
+</header>
+
+<div class="grid">
+  <!-- LIVE SIGNALS (the product) -->
+  <div class="card col12">
+    <h2 style="display:flex;align-items:center;gap:12px">Live Signals
+      <button onclick="scanSignals()" id="scanbtn">SCAN NOW</button>
+      <span id="scanmsg" class="mut" style="font-weight:400;text-transform:none;letter-spacing:0"></span>
+    </h2>
+    <div id="signals"><div class="mut">Auto-scanning SPY/QQQ/NQ/GC across the 3 futures sessions + RTH… signals appear here as they form.</div></div>
+  </div>
+
+  <!-- MY TRADES (journal: take/skip + tracked outcome) -->
+  <div class="card col12"><h2>My Trades — taken & skipped (outcome tracked: stop / TP1 / TP2 first)
+      <span id="trsum" class="mut" style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:10px"></span></h2>
+    <div id="decisions"><div class="mut">Take or Skip a signal above and the system tracks where it went.</div></div>
+  </div>
+  <!-- Controls / Health -->
+  <div class="card col4">
+    <h2>Health & Controls</h2>
+    <div id="healthkpi"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="kill" onclick="kill(true)">KILL SWITCH</button>
+      <button onclick="kill(false)">Resume</button>
+      <select id="modesel" onchange="setMode(this.value)">
+        <option>replay</option><option>shadow</option><option>paper</option><option>live</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Performance -->
+  <div class="card col4"><h2>Performance</h2><div id="perf"></div></div>
+
+  <!-- Prop-Firm / Capital-Preservation eval -->
+  <div class="card col4"><h2>Prop-Firm Eval</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+      <select id="pp_prof"><option value="50k">50k</option><option value="100k" selected>100k</option><option value="150k">150k</option></select>
+      <input id="pp_eq" type="number" placeholder="current equity">
+      <input id="pp_day" type="number" placeholder="today PnL $" value="0">
+      <input id="pp_peak" type="number" placeholder="peak equity (opt)">
+    </div>
+    <label class="mut" style="display:flex;align-items:center;gap:6px;margin-top:7px;font-size:11px">
+      <input type="checkbox" id="pp_ft" style="width:auto" onchange="checkProp()"> estimate equity from my taken trades @ $
+      <input id="pp_rr" type="number" value="100" style="width:60px" placeholder="$/R"> per R</label>
+    <button style="margin-top:8px;width:100%" onclick="checkProp()">CHECK EVAL</button>
+    <div id="pp_out" style="margin-top:9px;font-size:12px"></div>
+  </div>
+
+  <!-- Order-flow score gauge (live WS) -->
+  <div class="card col4"><h2>Order-Flow Direction Score</h2>
+    <div id="score" class="gauge mut">—</div>
+    <div class="mut" style="text-align:center" id="scorestate">awaiting tape…</div>
+  </div>
+
+  <!-- Equity curve -->
+  <div class="card col8"><h2>Equity Curve</h2><canvas id="equity" height="90"></canvas></div>
+
+  <!-- Attribution -->
+  <div class="card col4"><h2>Attribution (by symbol)</h2><div id="attrib"></div></div>
+
+  <!-- Options Calculator (read-only — plug a signal's levels in to see the option play) -->
+  <div class="card col6"><h2>Options Calculator</h2>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:7px">
+      <input id="o_sym" value="QQQ" placeholder="symbol">
+      <select id="o_side"><option value="long">long</option><option value="short">short</option></select>
+      <input id="o_entry" type="number" step="0.01" placeholder="entry">
+      <input id="o_stop" type="number" step="0.01" placeholder="stop">
+      <input id="o_tp" type="number" step="0.01" placeholder="tp2">
+    </div>
+    <button style="margin-top:9px;width:100%" onclick="optionsPlay()">SHOW OPTIONS PLAY (naked / debit / credit)</button>
+    <div id="o_opts" style="margin-top:8px;font-size:11.5px"></div>
+  </div>
+
+  <!-- Recent Candidates -->
+  <div class="card col6"><h2>Recent Candidates</h2><div id="cands"></div></div>
+
+  <!-- Positions / recent trades -->
+  <div class="card col6"><h2>Recent Trades</h2><div id="trades"></div></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), col=v=>v>=0?'up':'dn';
+async function J(u,o){const r=await fetch(u,o);return r.json()}
+function kpis(el,obj){el.innerHTML=Object.entries(obj).map(([k,v])=>
+  `<div class="kpi"><span class="mut">${k}</span><b>${v}</b></div>`).join('')}
+
+async function refresh(){
+  const h=await J('/api/health');
+  $('#mode').textContent='mode: '+h.mode; $('#mode').style.background=h.mode==='live'?'#3a1414':'#1b2740';
+  $('#health').textContent=h.healthy?'● healthy':'● HALTED';
+  $('#health').style.color=h.healthy?'var(--grn)':'var(--red)';
+  kpis($('#healthkpi'),{mode:h.mode,kill_switch:h.kill_switch,live_allowed:h.live_allowed,alpaca_paper:h.alpaca_paper,source_healthy:h.source_healthy});
+
+  const p=await J('/api/performance');
+  if(p.trades){kpis($('#perf'),{trades:p.trades,exp_R:p.exp_R,total_R:p.total_R,win_pct:p.win_pct+'%',profit_factor:p.profit_factor,max_dd:p.max_dd_pct+'%'})}
+  else $('#perf').innerHTML='<div class="mut">no trades logged yet — run a replay or paper session</div>';
+
+  const a=(await J('/api/attribution')).by_symbol||{};
+  $('#attrib').innerHTML=Object.keys(a).length?`<table><tr><th>sym</th><th class="num">trades</th><th class="num">expR</th><th class="num">totR</th></tr>`+
+    Object.entries(a).map(([s,v])=>`<tr><td>${s}</td><td class="num">${v.trades}</td><td class="num ${col(v.exp_R)}">${v.exp_R}</td><td class="num ${col(v.total_R)}">${v.total_R}</td></tr>`).join('')+`</table>`:'<div class="mut">—</div>';
+
+  const c=(await J('/api/candidates?limit=12')).candidates||[];
+  $('#cands').innerHTML=c.length?`<table><tr><th>time</th><th>sym</th><th>side</th><th>setup</th><th class="num">entry</th><th class="num">R:R</th></tr>`+
+    c.slice().reverse().map(x=>`<tr><td>${(x.generated_at||'').slice(11,16)}</td><td>${x.symbol}</td><td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.setup}</td><td class="num">${x.entry}</td><td class="num">${x.expected_r??''}</td></tr>`).join('')+`</table>`:'<div class="mut">no candidates logged</div>';
+
+  const t=(await J('/api/positions')).recent_closed||[];
+  $('#trades').innerHTML=t.length?`<table><tr><th>sym</th><th>side</th><th>exit</th><th class="num">net R</th></tr>`+
+    t.slice().reverse().map(x=>`<tr><td>${x.symbol}</td><td>${x.side}</td><td>${x.exit_reason||''}</td><td class="num ${col(x.net_r||0)}">${x.net_r??''}</td></tr>`).join('')+`</table>`:'<div class="mut">no trades logged</div>';
+
+  const eq=(await J('/api/equity')).curve||[];
+  drawEquity(eq);
+}
+let SIGS=[];
+async function scanSignals(force){
+  const btn=$('#scanbtn'); if(force){btn.disabled=true; $('#scanmsg').textContent='scanning…';}
+  try{
+    const d=await J('/api/signals'+(force?'?force=1':''));
+    const sigs=(d.signals||[]).filter(s=>!s.error); SIGS=sigs;
+    const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
+    $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
+    if(!sigs.length){$('#signals').innerHTML='<div class="mut">No active setups on the latest bars. (No signal = nothing to trade.)</div>';}
+    else $('#signals').innerHTML=`<table><tr><th>asset</th><th>sess</th><th>family</th><th>side</th><th class="num">entry</th><th class="num">now</th><th class="num">stop</th>`+
+      `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th class="num">units</th><th>options</th><th>action</th></tr>`+
+      sigs.map((s,i)=>{
+        const opt=s.options?(()=>{const r=s.options.recommended;const st=s.options.structures[r];return `<b>${r.toUpperCase()}</b>: ${st.legs.join(' / ')} $${st.cost_or_credit_usd} → ${st.exit.target}`;})():'futures';
+        const flags=[s.tradeable?'':'INFO',s.asset_status==='unverified'?'UNVERIFIED':'',s.bar_age_min>30?'STALE '+s.bar_age_min+'m':''].filter(Boolean).join(' ');
+        const fl=s.orderflow&&s.orderflow.feed?(s.orderflow.confirms?' ✓':s.orderflow.diverges?' ✗':''):'';
+        const drift=Math.abs((s.last_price-s.entry));const nowc=drift>(Math.abs(s.entry-s.stop))?'dn':'mut';
+        const ftt=s.features?Object.entries(s.features).map(([k,v])=>k+'='+v).join('  '):'';
+        return `<tr><td title="features: ${ftt}"><b>${s.symbol}</b></td><td class="mut">${s.session||'rth'}</td><td>${s.family}${flags?' <span class="dn" style="font-size:9px">'+flags+'</span>':''}</td>`+
+          `<td class="${s.side==='long'?'up':'dn'}">${s.side.toUpperCase()}</td>`+
+          `<td class="num">${s.entry}</td><td class="num ${nowc}" title="last bar from ${s.source}, ${s.bar_age_min}m ago">${s.last_price}</td><td class="num">${s.stop}</td><td class="num">${s.tp1}</td><td class="num">${s.tp2}</td>`+
+          `<td class="num">${s.rr}</td><td class="num">${s.confidence}${fl}</td>`+
+          `<td class="num" title="${s.risk_pct}% of $100k${s.risk_ok?'':' · risk-gate: '+s.risk_reason}">${s.suggested_qty} <span class="mut">(${s.risk_pct}%)</span></td>`+
+          `<td style="font-size:11px">${opt}</td>`+
+          `<td><button style="border-color:var(--grn);padding:3px 8px" onclick="decide(${i},true)">Take</button> `+
+          `<button style="padding:3px 8px" onclick="decide(${i},false)">Skip</button></td></tr>`;
+      }).join('')+`</table><div class="mut" style="margin-top:6px;font-size:11px">entry = trigger price · now = live price (${(SIGS[0]&&SIGS[0].source)||'?'}) · units = sizing for $100k @0.25% risk (≥1; futures may exceed 0.25%). You trade manually; Take/Skip to journal — outcome is tracked.</div>`;
+  }catch(e){$('#scanmsg').textContent='scan error: '+e}
+  btn.disabled=false;
+}
+async function decide(i,taken){
+  const s=SIGS[i]; const c=s.candidate||{};
+  const sig={candidate_id:c.candidate_id||(s.symbol+s.family+s.entry),symbol:s.symbol,side:s.side,family:s.family,
+    session:s.session,entry:s.entry,stop:s.stop,tp1:s.tp1,tp2:s.tp2,generated_at:c.generated_at};
+  await fetch('/api/signal/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal:sig,taken})});
+  loadDecisions();
+}
+async function loadMarket(){
+  try{const m=await J('/api/market');const reg=(m.regime||'unknown').replace('_',' ');
+    const el=$('#market');el.textContent='market: '+reg+(m.spy?` · SPY ${m.spy} ${m.spy_trend==='up'?'↑':'↓'} · VIX ${m.vix}`:'');
+    el.style.color=m.regime==='risk_on'?'var(--grn)':m.regime==='risk_off'?'var(--red)':'var(--yel)';
+  }catch(e){}
+}
+async function checkProp(){
+  const ft=$('#pp_ft').checked?1:0;
+  const q=`profile=${$('#pp_prof').value}&equity=${$('#pp_eq').value||0}&day_pnl=${$('#pp_day').value||0}&peak=${$('#pp_peak').value||0}&from_trades=${ft}&risk_per_r=${$('#pp_rr').value||0}`;
+  let d; try{d=await J('/api/prop?'+q);}catch(e){$('#pp_out').innerHTML='<span class="dn">'+e+'</span>';return}
+  if(ft)$('#pp_eq').value=Math.round(d.equity);
+  const sc=d.status==='passed'?'up':d.status==='failed'?'dn':'yel';
+  const bar=(label,room,total)=>{const pct=Math.max(0,Math.min(100,100*room/total));
+    return `<div class="kpi"><span class="mut">${label}</span><b class="${room>0?'':'dn'}">$${room.toLocaleString()}</b></div>`+
+      `<div style="height:5px;background:#1b2740;border-radius:3px;margin:-3px 0 7px"><div style="height:5px;width:${pct}%;background:${room>0?'var(--grn)':'var(--red)'};border-radius:3px"></div></div>`;};
+  $('#pp_out').innerHTML=`<div class="kpi"><span class="mut">status</span><b class="${sc}">${d.status.toUpperCase()} · ${d.can_trade?'can trade':'NO NEW TRADES'+(d.block_reason?' ('+d.block_reason+')':'')}</b></div>`+
+    `<div class="kpi"><span class="mut">equity</span><b>$${(d.equity||0).toLocaleString()} · P/L $${(d.total_profit||0).toLocaleString()}</b></div>`+
+    bar('to profit target',d.room_to_target,d.profit_target)+
+    bar('to daily loss',d.room_to_daily_loss,d.daily_loss)+
+    bar('to '+(d.trailing?'trailing':'static')+' drawdown',d.room_to_drawdown,d.max_drawdown)+
+    `<div class="mut" style="font-size:10px;margin-top:2px">DD floor $${(d.drawdown_floor||0).toLocaleString()} · max ${d.max_contracts} contracts · advisory (you trade manually)</div>`;
+}
+async function loadDecisions(){
+  const d=await J('/api/decisions'); const ds=d.decisions||[]; const su=d.summary||{};
+  $('#trsum').textContent=su.taken_closed?`taken closed ${su.taken_closed} · ${su.total_R>=0?'+':''}${su.total_R}R · win ${su.win_pct}% · ${JSON.stringify(su.outcomes)}`:'';
+  $('#decisions').innerHTML=ds.length?`<table><tr><th>when</th><th>sym</th><th>family</th><th>side</th><th>take?</th><th class="num">entry</th><th class="num">stop</th><th class="num">TP1</th><th class="num">TP2</th><th>outcome</th><th class="num">R</th></tr>`+
+    ds.map(x=>{const oc=x.outcome,c=oc==='tp2'||oc==='tp1_open'||oc==='tp1'?'up':oc==='stop'||oc==='tp1_then_stop'?'dn':'mut';
+      return `<tr><td class="mut">${(x.decided_at||'').slice(5,16).replace('T',' ')}</td><td><b>${x.symbol}</b></td><td>${x.family||''}</td>`+
+      `<td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.taken?'TAKEN':'skip'}</td>`+
+      `<td class="num">${x.entry}</td><td class="num">${x.stop}</td><td class="num">${x.tp1??''}</td><td class="num">${x.tp2??''}</td>`+
+      `<td class="${c}">${oc}</td><td class="num ${c}">${x.result_r??''}</td></tr>`;}).join('')+`</table>`:'<div class="mut">No decisions yet.</div>';
+}
+async function optionsPlay(){
+  const body={symbol:$('#o_sym').value,side:$('#o_side').value,entry:parseFloat($('#o_entry').value),
+    stop:parseFloat($('#o_stop').value),tp2:parseFloat($('#o_tp').value),iv:0.20,dte:0,sel_n:1};
+  const r=await fetch('/api/options',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(d.error){$('#o_opts').innerHTML=`<span class="dn">${d.error}</span>`;return}
+  const o=d.options;const row=(k,p)=>`<tr><td><b>${k}</b></td><td>${p.legs.join(' / ')}</td>`+
+    `<td class="num">$${p.cost_or_credit_usd}</td><td class="num">${p.max_profit_usd==='unlimited'?'∞':'$'+p.max_profit_usd}</td>`+
+    `<td class="num">$${p.max_loss_usd}</td><td class="num">${p.rr}</td></tr>`;
+  $('#o_opts').innerHTML=`<div class="mut">priced from ${d.priced_from}, ${d.expiry}</div>`+
+    `<table><tr><th>play</th><th>legs</th><th class="num">cost</th><th class="num">maxP</th><th class="num">maxL</th><th class="num">R:R</th></tr>`+
+    row('naked',o.naked)+row('debit',o.debit)+row('credit',o.credit)+`</table>`;
+}
+let chart;
+function drawEquity(curve){
+  const ctx=$('#equity');
+  if(!chart){chart=new Chart(ctx,{type:'line',data:{labels:curve.map((_,i)=>i),datasets:[{data:curve,borderColor:'#3b82f6',borderWidth:1.5,pointRadius:0,fill:true,backgroundColor:'rgba(59,130,246,.08)'}]},
+    options:{plugins:{legend:{display:false}},scales:{x:{display:false},y:{grid:{color:'#1f2b45'},ticks:{color:'#7d8db0'}}}}});}
+  else{chart.data.labels=curve.map((_,i)=>i);chart.data.datasets[0].data=curve;chart.update()}
+}
+async function kill(on){await J('/api/control/kill?on='+on,{method:'POST'});refresh()}
+async function setMode(m){await J('/api/control/mode?mode='+m,{method:'POST'});refresh()}
+
+// live order-flow tape
+function tape(){const ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/tape');
+  ws.onmessage=e=>{const d=JSON.parse(e.data);const s=d.score;$('#score').textContent=s;
+    $('#score').className='gauge '+(s>=75?'up':s<50?'dn':'mut');
+    $('#scorestate').textContent=s>=80?'BUY NOW':s>=65?'PRE-LONG / ARMED':s<35?'SELL pressure':'balanced'};
+  ws.onclose=()=>setTimeout(tape,3000)}
+// the SCAN NOW button forces a fresh scan; otherwise the dashboard polls the continuous auto-scanner
+function scanNow(){scanSignals(true);}
+window.scanSignals=scanSignals;
+$('#scanbtn').setAttribute('onclick','scanSignals(true)');
+refresh();setInterval(refresh,5000);tape();
+scanSignals();loadDecisions();loadMarket();
+setInterval(()=>{scanSignals();loadDecisions();},15000);
+setInterval(loadMarket,60000);
+</script>
+</body></html>

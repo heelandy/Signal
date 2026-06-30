@@ -22,8 +22,17 @@ auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
 reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
             tooltip="OFF (default) = one signal per side per day (the first break is highest quality). ON = re-arm after price falls back inside the OR, up to N/day. RESEARCH: re-entries DILUTE the edge (QQQ 15m PF 2.11->1.99) — opt-in.")
 max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", minval=1, maxval=5)
+brk_confirm = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="F59: a FILL needs a FULL-BODY close beyond the OR high (long) / OR low (short), not a wick touch. Default close-confirm (validated F59). 'Wick / touch' = the resting-stop entry.")
+strong_body = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level. The EMA trend gate already requires a clear trend.")
+wait_ft = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="F59c (user rule): don't fire on the breakout candle — WAIT for the NEXT candle to CONTINUE the trend (higher close long / lower close short), then fill. Stops 'fired into a reversal' entries. Validated: improves QQQ/SPY, ~neutral NQ. Default ON.")
 trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
+gate_off    = input.bool(false, "Off — plain ORB (no trend gate, F58)", group="Trend",
+              tooltip="F58 (2026-06-23): honest gap-aware fills show the trend gate adds ~0 net of costs; the live set (STACK/AUTO/OPTIONS) now defaults to plain ORB. This legacy indicator keeps the EMA trend gate ON by default; enable this to match the honest config.")
 local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
 local_atr_hi  = input.float(2.5,  "Volatile ATR%",         group="Local Regime", step=0.25)
 block_range   = input.bool(true,  "Block signals in RANGE regime", group="Local Regime")
@@ -70,6 +79,8 @@ emaF = ta.ema(close, trend_ema_f)
 emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
+bool eff_up   = gate_off ? true : trend_up                              // F58: gate off ⇒ plain ORB (no trend filter)
+bool eff_down = gate_off ? true : trend_down
 int o_now = hour(time, sess_tz) * 60 + minute(time, sess_tz)
 bool new_day = ta.change(time("D")) != 0
 bool rth = (dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday)
@@ -184,8 +195,8 @@ float Lt2 = Le + (Le - Ls) * tp2_rr
 float St1 = Se - (Ss - Se) * tp1_rr
 float St2 = Se - (Ss - Se) * tp2_rr
 bool window = or_set and rth and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
-bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
 // re-entry: re-arm once price falls back inside the OR; cap entries/day. OFF => one signal per side.
 if reentry and not na(or_high) and close < or_high
     armed_l := true
@@ -193,8 +204,17 @@ if reentry and not na(or_low) and close > or_low
     armed_s := true
 bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
 bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
-bool long_fire  = window and ok_l and gate_long  and high >= Le
-bool short_fire = window and ok_s and gate_short and low  <= Se
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"          // F59: full-body STRONG close beyond the level
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
+bool qual_l = close >= Le and close > open and body_strong
+bool qual_s = close <= Se and close < open and body_strong
+bool brk_l = conf_close ? (wait_ft ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le   // F59c: fire on the next-candle continuation
+bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
+bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+bool long_fire  = window and ok_l and gate_long  and brk_l and seq_l
+bool short_fire = window and ok_s and gate_short and brk_s and seq_s
 if long_fire
     traded_l := true
     armed_l := false
@@ -284,8 +304,12 @@ if barstate.islast and show_line_labels
     lbl_St1 := f_setlbl(lbl_St1, splan and not is_trail, St1, "TP1 " + str.tostring(St1, format.mintick) + "  +" + r1 + "R",   color.new(color.teal, 0))
     lbl_St2 := f_setlbl(lbl_St2, splan and not is_trail, St2, "TP2 " + str.tostring(St2, format.mintick) + "  +" + r2 + "R",   color.new(color.green, 0))
 plot(emaS, "EMA slow", color=trend_up ? color.new(color.lime,50) : trend_down ? color.new(color.red,50) : color.new(color.gray,60))
-plotshape(long_fire,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
-plotshape(short_fire, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
+// FILL markers anchored AT the breakout level — a LONG fill sits at/above the OR high (Le = OR high + buffer),
+// a SHORT at/below the OR low (Se = OR low − buffer); makes the break-confirmation visible (matches STACK).
+if long_fire
+    label.new(bar_index, conf_close ? close : Le, "FILL ▲", yloc=yloc.price, style=label.style_label_up,   color=color.new(color.lime, 0), textcolor=color.white, size=size.small)
+if short_fire
+    label.new(bar_index, conf_close ? close : Se, "FILL ▼", yloc=yloc.price, style=label.style_label_down, color=color.new(color.red, 0),  textcolor=color.white, size=size.small)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
 alertcondition(long_fire,  "ORB Long",  "HIGHSTRIKE ORB: LONG breakout confirmed")

@@ -9,6 +9,11 @@ data/
 *.zst
 2011-2018vix*
 
+# secrets — real keys live in .env (working copy, ignored); .env.example is the placeholder template
+.env
+**/.env
+.env.local
+
 # python
 __pycache__/
 *.pyc

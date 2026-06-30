@@ -49,13 +49,22 @@ auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
 reentry  = input.bool(false, "Allow re-entry (re-break same day)", group="ORB",
             tooltip="OFF (default) = ONE entry per side per day — the first opening-drive break is the highest quality. ON = re-arm after price falls back inside the OR and re-take a fresh break, up to N/day. RESEARCH: re-entries pass the gate but DILUTE the edge (QQQ 15m PF 2.11->1.99, NQ 1.83->1.67, worse drawdown). Quantity over quality — use deliberately.")
 max_entries = input.int(2, "Max entries per day (re-entry on)", group="ORB", minval=1, maxval=5)
+brk_confirm = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="F59: a FILL needs a FULL-BODY close beyond the level. Default close-confirm = market entry on a bar that CLOSES above OR high (long)/below OR low (short). 'Wick / touch' = the resting buy/sell-STOP at the level.")
+strong_body = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b, best on NQ/QQQ; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level.")
+wait_ft = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="F59c (user rule): don't fire on the breakout candle — WAIT for the NEXT candle to CONTINUE the trend (higher close long / lower close short), then enter. Stops 'fired into a reversal' entries. Validated: improves QQQ/SPY, ~neutral NQ. Default ON.")
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
 
 trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
 // STACK upgrades (validated; OFF by default here to preserve V1 legacy behavior — the STACK/AUTO files run them ON)
 trend_mode = input.string("EMA trend (legacy)", "Trend gate", group="Trend",
-             options=["EMA trend (legacy)", "Structure (HH/HL)", "Auto (structure <=5m / EMA >=15m)"],
-             tooltip="F20/F21: the HH/HL swing-structure gate (st_state) is the graduated 5m upgrade — exp ~2x with the VWAP cap. Legacy EMA kept as this script's default.")
+             options=["EMA trend (legacy)", "Off — plain ORB (F58)", "Structure (HH/HL)", "Auto (structure <=5m / EMA >=15m)"],
+             tooltip="F58 (2026-06-23) UPDATE: honest gap-aware fills show the HH/HL structure gate adds ~0 net of costs (the F20/F21 'exp ~2x' was the F56 stale-fill artifact). The live set (STACK/AUTO/OPTIONS) now DEFAULTS to 'Off — plain ORB'. This LEGACY script keeps EMA trend as its default for reference; select 'Off — plain ORB (F58)' to match the live honest config.")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Trend", minval=2)
 struct_tol = input.float(0.10, "Structure tolerance %", group="Trend", step=0.05)
 cap_on = input.bool(false, "VWAP-extension cap (F16; stack runs ON, k=2)", group="Trend")
@@ -171,9 +180,10 @@ float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
 int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
 // TF-adaptive trend gate (legacy EMA unless the input opts into the structure state)
+bool gate_off   = trend_mode == "Off — plain ORB (F58)"                               // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = use_struct ? (st_state == 1) : trend_up
-bool eff_down = use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME (ported from V44) ─────────────────────────
 spy_b() =>
@@ -332,12 +342,20 @@ f_units(entry, stop) =>
     eval_on ? math.max(eval_min_ct, u) : math.max(1, u)
 
 // place / refresh the resting STOP orders during the entry window; cancel outside it
-if window and ok_l and flat and gate_long and not eval_block and (Le - Ls > 0)
-    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, comment="ORB L")
+// F59b/c close-confirm fill: a strong full-body breakout candle, then (wait_ft) the NEXT candle continues the trend
+bool qual_l = close >= Le and close > open and body_strong
+bool qual_s = close <= Se and close < open and body_strong
+bool fill_l = wait_ft ? (qual_l[1] and close > close[1]) : qual_l
+bool fill_s = wait_ft ? (qual_s[1] and close < close[1]) : qual_s
+bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+if window and ok_l and flat and gate_long and not eval_block and (Le - Ls > 0) and (not conf_close or fill_l) and seq_l   // F59c: close-confirm = market on the confirmed continuation candle; touch = resting buy-stop
+    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=conf_close ? na : Le, comment="ORB L")
 else
     strategy.cancel("L")
-if window and ok_s and flat and gate_short and not eval_block and (Ss - Se > 0)
-    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, comment="ORB S")
+if window and ok_s and flat and gate_short and not eval_block and (Ss - Se > 0) and (not conf_close or fill_s) and seq_s
+    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=conf_close ? na : Se, comment="ORB S")
 else
     strategy.cancel("S")
 // on fill: latch traded-today + freeze the exit levels from the frozen geometry
@@ -462,8 +480,12 @@ if barstate.islast and show_line_labels
     lbl_St1 := f_setlbl(lbl_St1, s_live and not is_trail, ss1, "TP1 " + str.tostring(ss1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
     lbl_St2 := f_setlbl(lbl_St2, s_live and not is_trail, ss2, "TP2 " + str.tostring(ss2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
 plot(trend_ema_s > 0 ? emaS : na, "EMA slow", color=color.new(color.gray, 50))
-plotshape(just_long,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
-plotshape(just_short, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
+// FILL markers anchored AT the breakout level — a LONG fill sits at/above the OR high (Le = OR high + buffer),
+// a SHORT at/below the OR low (Se = OR low − buffer); makes the break-confirmation visible (matches STACK).
+if just_long
+    label.new(bar_index, Le, "FILL ▲", yloc=yloc.price, style=label.style_label_up,   color=color.new(color.lime, 0), textcolor=color.white, size=size.small)
+if just_short
+    label.new(bar_index, Se, "FILL ▼", yloc=yloc.price, style=label.style_label_down, color=color.new(color.red, 0),  textcolor=color.white, size=size.small)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(eval_block ? color.new(color.red, 80) : na)
 

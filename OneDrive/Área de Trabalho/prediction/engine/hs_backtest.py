@@ -80,7 +80,8 @@ def attach_mtf(con, sym, d):
 
 
 def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False,
-                 reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20, entry_delay=0, ob_l=None, ob_s=None):
+                 reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20, entry_delay=0, ob_l=None, ob_s=None,
+                 chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
@@ -99,6 +100,7 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
     in_or = wkday & (mins >= or_s) & (mins < or_e)
     rth = wkday & (mins >= or_s) & (mins < tod_end)
     hp, lp = d["high"].to_numpy(), d["low"].to_numpy()
+    op = d["open"].to_numpy()                                    # for the no-chase guard (F57)
     df = pd.DataFrame({"date": date, "h": hp, "l": lp, "in_or": in_or})
     org = df[df.in_or].groupby("date").agg(orh=("h", "max"), orl=("l", "min"))
     m = pd.DataFrame({"date": date}).merge(org, on="date", how="left")
@@ -137,15 +139,33 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         elif execm == "rebreak":                     # SECOND break only: broke, reclaimed back inside, breaks again
             l_cross, ll_lvl = (reclaimed_l and hp[i] >= lh), lh
             s_cross, ls_lvl = (reclaimed_s and lp[i] <= ll), ll
-        else:                                       # close-confirm
-            l_cross, ll_lvl = c[i] > lh, lh
-            s_cross, ls_lvl = c[i] < ll, ll
+        else:                                       # close-confirm (optionally strong full-body + next-bar follow-through)
+            if ft_confirm:                          # F59c: prior bar = strong breakout close, THIS bar CONTINUES the trend (no one-bar pop-and-reverse)
+                pq_l = i > 0 and date[i-1] == date[i] and c[i-1] > lh and c[i-1] > op[i-1] and (strong_body <= 0 or (hp[i-1]-lp[i-1]) <= 0 or abs(c[i-1]-op[i-1]) >= strong_body*(hp[i-1]-lp[i-1]))
+                pq_s = i > 0 and date[i-1] == date[i] and c[i-1] < ll and c[i-1] < op[i-1] and (strong_body <= 0 or (hp[i-1]-lp[i-1]) <= 0 or abs(c[i-1]-op[i-1]) >= strong_body*(hp[i-1]-lp[i-1]))
+                l_cross, ll_lvl = (pq_l and c[i] > c[i-1]), lh
+                s_cross, ls_lvl = (pq_s and c[i] < c[i-1]), ll
+            elif strong_body > 0:                   # F59b: a strong full-body, right-colour close beyond the level
+                bigb = (hp[i]-lp[i]) <= 0 or abs(c[i]-op[i]) >= strong_body*(hp[i]-lp[i])
+                l_cross, ll_lvl = (c[i] > lh and c[i] > op[i] and bigb), lh
+                s_cross, ls_lvl = (c[i] < ll and c[i] < op[i] and bigb), ll
+            else:
+                l_cross, ll_lvl = c[i] > lh, lh
+                s_cross, ls_lvl = c[i] < ll, ll
         ok_l = armed_l if reentry else (not done_l)
         ok_s = armed_s if reentry else (not done_s)
         vok = (not vol_conf) or (not np.isnan(vavg[i]) and vavg[i] > 0 and vol[i] >= vol_mult * vavg[i])
-        if ok_l and l_cross and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
+        # F57 no-chase guard: skip if price has already run > chase_atr·ATR past the level (buying exhaustion);
+        # done_l NOT set, so a later PULLBACK bar near the level can still fire (waits instead of chasing)
+        near_l = chase_atr <= 0 or (not np.isnan(atr[i]) and lp[i] <= ll_lvl + atr[i] * chase_atr)
+        near_s = chase_atr <= 0 or (not np.isnan(atr[i]) and hp[i] >= ls_lvl - atr[i] * chase_atr)
+        # direction sequence (example.txt / Evidence early-entry): only fire while price is
+        # actually pushing the trade way — long needs 101->102->103 (c>c[-1]>c[-2]) same day; short mirror
+        seq_l = (not dir_seq) or (i >= 2 and date[i-1] == date[i] and date[i-2] == date[i] and c[i] > c[i-1] and c[i-1] > c[i-2])
+        seq_s = (not dir_seq) or (i >= 2 and date[i-1] == date[i] and date[i-2] == date[i] and c[i] < c[i-1] and c[i-1] < c[i-2])
+        if ok_l and l_cross and near_l and seq_l and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
             lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False
-        if ok_s and s_cross and tdn[i] and (ob_s is None or ob_s[i]) and vok:
+        if ok_s and s_cross and near_s and seq_s and tdn[i] and (ob_s is None or ob_s[i]) and vok:
             ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
@@ -166,7 +186,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
              tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
              time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5,
-             entry_delay=0, ob_confluence=False):
+             entry_delay=0, ob_confluence=False, chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -185,6 +205,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     EQ = sym_ in ("SPY", "QQQ", "NVDA", "TSLA", "AVGO", "ORCL", "AAPL", "MSFT", "AMZN", "META",
                   "GOOGL", "DIA", "IWM", "AMD", "NFLX")
     pt_val_, tick_, comm_, slip_ = (1.0, 0.01, 0.0, 1) if EQ else (PT_VALUE, TICK, COMM, SLIP_TICKS)
+    min_stop_atr_ = 0.75 if EQ else MIN_STOP_ATR    # F51: ticker-adaptive min-stop floor (0.5 ATR is noise-tight on equities) — matches the STACK Pine
     _et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")        # for EOD-flat (match Pine)
     if tradeday:        # sessions crossing midnight (Asia/London): trade-day coords, 18:00 ET = day start
         _sd = _et + pd.Timedelta(hours=6)
@@ -203,7 +224,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     if entry_type == "orb":                       # Opening-Range Breakout entry
         _obl = d["in_bull_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bull_ob" in d) else None
         _obs = d["in_bear_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bear_ob" in d) else None
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs)
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)
@@ -235,7 +256,11 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                 last_day = daykey[i]; day_n = 0
             if reentry and day_n >= max_entries:
                 i += 1; continue
-            entry = (lvl_l[i] if sig == 1 else lvl_s[i]) if (entry_type == "orb" and execm in ("stop", "retest", "sweepgo", "rebreak")) else c[i]
+            if entry_type == "orb" and execm in ("stop", "retest", "sweepgo", "rebreak"):
+                _lvl = lvl_l[i] if sig == 1 else lvl_s[i]
+                entry = max(_lvl, o[i]) if sig == 1 else min(_lvl, o[i])   # F-fix: gap-aware — a stop fills no better than the bar's open
+            else:
+                entry = c[i]
             if vwap_cap > 0 and not np.isnan(vs_prev[i]) and not np.isnan(atr[i]) and atr[i] > 0:
                 ext = (entry - vs_prev[i]) / atr[i] if sig == 1 else (vs_prev[i] - entry) / atr[i]
                 if ext > vwap_cap:                 # breakout already extended beyond prior-bar VWAP -> skip (stay flat)
@@ -250,10 +275,10 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                 anc = _nearest(entry, [vs[i], vw[i], e9[i], e20[i], e50[i]], below=(sig == 1))
             if sig == 1:
                 raw = (anc - atr[i] * SL_BUF_ATR) if not np.isnan(anc) else entry - atr[i] * 1.5
-                stop = min(max(raw, entry - atr[i] * SL_MAX_ATR), entry - atr[i] * MIN_STOP_ATR)
+                stop = min(max(raw, entry - atr[i] * SL_MAX_ATR), entry - atr[i] * min_stop_atr_)
             else:
                 raw = (anc + atr[i] * SL_BUF_ATR) if not np.isnan(anc) else entry + atr[i] * 1.5
-                stop = max(min(raw, entry + atr[i] * SL_MAX_ATR), entry + atr[i] * MIN_STOP_ATR)
+                stop = max(min(raw, entry + atr[i] * SL_MAX_ATR), entry + atr[i] * min_stop_atr_)
             risk = abs(entry - stop)
             if risk <= 0:
                 i += 1; continue

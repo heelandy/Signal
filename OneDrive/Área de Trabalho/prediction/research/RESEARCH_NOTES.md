@@ -495,6 +495,7 @@ The three sessions trade on different clocks (near-independent) → the auto-ses
 | **against-gap (equity)** (F13) | 🟡 real tilt, thin + PF-warning + equity-only → confidence signal, not a filter |
 | **VWAP-extension cap** (F16) | ✅ PASSED honest signal-level test (k≈2.0, all 3 assets × both TFs, NQ DD ~halves) — promotion = user decision; costs ~25-60% of trades |
 | **"Neural Kernel Bands" filter** (F36) | ❌ REDUNDANT with VWAP-cap — kernel state/slope/side/cap all improve the stack (NQ+QQQ+SPY+ES, every yr+, OOS holds, 2× slip ok) BUT tightening the existing vwap-cap k to matched trade-count matches/beats it → no orthogonal axis; the all-variants-improve pattern = the F1/F11 cull trap. Don't adopt; fine as a discretionary visual |
+| **"Neural Kernel Bands" STANDALONE Buy/Sell signal** (F49) | ❌ DEAD — the band-cross flip labels have ~ZERO directional accuracy (fwd hit-rate 44–50% i.e. ≤ coin flip, mean fwd move 0.00–0.02 ATR) on NQ+QQQ 5m & 15m; flip-to-flip always-in is net-NEGATIVE after costs (NQ 5m −0.575R PF0.66, NQ 15m −0.235R, QQQ 5m −0.047R; only QQQ 15m +0.07R but raw −47%); win 31–33% (trend-chase shredded in chop). The chart "looks on point" is an ILLUSION: the Buy label is drawn at the bar LOW but the fill is the close, already ~1.2–1.6 ATR past the band → hindsight perfect, unfillable. Not a replacement for the ORB entries. `orb_kernel_signal.py` |
 | **RSI + Accel/Decel filter** (F37) | ❌ REDUNDANT with VWAP-cap — all 6 RSI/AC variants pass the gate (NQ+QQQ+SPY+ES, every yr+, OOS, 2× slip); ac_agree (Bill Williams) even sat slightly ABOVE the frontier at the default point, but the ADDITIVITY sweep (lift across the vwap-cap k grid) oscillates around 0 (negative mid-range) → no frontier lift. Don't embed; cheap-to-port doesn't rescue zero orthogonal edge |
 | Statistical: DoW / seasonality / day-context (F44) | ❌ DEAD — DoW best/worst day FLIPS across NQ/QQQ/SPY (curve-fit, confirms F15); against-prior-day + prior-range are sign-consistent but thin tilts (≈ F13 against-gap) that cull ~60% for ~flat exp = below the frontier. No tradable edge. `orb_stack_stat.py` |
 | Liquidity confluence (F43) | ❌ DEAD — sweep-confluence too rare (<30 trades); prior-day-level take-out (pdsweep) culls 60-70% for flat-to-worse exp (NQ +0.75/QQQ +0.80/SPY +0.54) = below the frontier. Level take-out ≈ extension (vwap-cap handles it). `orb_stack_liquidity.py` |
@@ -543,6 +544,408 @@ VERDICT: **validated candidate** — GC/MGC 5m, US equity-open OR, stack gates, 
 Adds an INSTRUMENT-diversified 4th stream to the NQ Asia→London→RTH rotation (not a 4th time slot).
 ⚠️ provisional bits: macro gate is SPY/VIX (equity-native) — a gold-macro (DXY/real-yield) variant is
 untested; slippage-sensitive (paper-test GC fills, MGC spread is wider); same forward-test gate as the rest.
+
+## F61 — research-folder entry-mistake re-audit + re-run: NO uncorrected mistake remains (2026-06-23)
+User asked to "correct the same underlying entry mistake and run all the research again." Did a full sweep:
+- **The ~60 `orb_*` scripts route through `B.backtest`** → they INHERIT the engine fixes (F56 gap-aware fill +
+  the F59x `execm`/`strong_body`/`ft_confirm` params). No per-script edit needed; the corrected-entry re-run of
+  the ORB family is F60 (NQ/QQQ/SPY PASS, ES marginal/fails slip, GC dead).
+- **The 4 custom-sim `strat_*` scripts have their OWN fill loops (not the engine)** — re-read + verified all are
+  already gap-aware / close-honest (no stale-level, no same-bar phantom): strat_daily (`e=max(level,open)`, exits
+  i+1), strat_volbreak_test (`e=max(u,o[i])`, exit at close), strat_rangefade (enter at signal CLOSE, stop worse
+  of {stop,next open}, exits i+1), strat_ml (next-day-return direction, no fill to game). RE-RAN all four → results
+  are BYTE-IDENTICAL to F52-F55 (volbreak passes both-side on NQ/QQQ/SPY, short dead, ES/GC fail, ~30% path-amb;
+  range-fade dead every config; Connors + ML pass ONLY QQQ/SPY post-2018; VIX-fade/Donchian dead). They don't
+  depend on the engine entry, so nothing moved — confirming they never had the F56 mistake.
+- **CONCLUSION: there is no uncorrected fill mistake left in the research folder.** The F56 bug was engine-central
+  (fixed there, inherited by every orb_* test); the custom sims were built honest from the start (F57 audit, now
+  re-confirmed by re-running). "Re-running under the corrected entry" only changes the ORB family, and that = F60.
+
+## F64 — WHERE to take TP1 / TP2 (R-multiple sweep, NQ/QQQ/SPY/GC 5m) (2026-06-29)
+`research/orb_tp2.py`. Full-to-cap vs scale(50%@TP1, runner→TP2) vs trail.
+
+- **TP2 = 4R is the knee** (validated). QQQ cap 4R +0.264 / 5R +0.265 / 6R +0.266 = a PLATEAU, but OOS
+  is BEST at 4R (4R OOS +0.294 vs 6R +0.222) and every-year-positive — beyond 4R adds ~nothing and
+  costs robustness. SPY trends harder (6R +0.302 raw) but yr+ drops 8/9→7/9; 4R is the disciplined cap.
+- **medMFE ≈ 1.0R** on every instrument — the MEDIAN trade only runs ~1R favorable. So 4R is a FAT-TAIL
+  target: most trades never reach it; the cap is filled by the minority of big winners. Take-profit
+  structure must respect this (most money is near 1R; 4R is the lottery on trend days).
+- **TP1**: full-to-4R-cap (no scale) has the highest expectancy (QQQ +0.264) but ~42% win; SCALING 50%
+  at **TP1 = 1.5R** trades exp down (+0.219) for a much higher win% (49%) and smoothness — and 1.5R is
+  the best scale point (beats 1.0R). Choose by goal: max EV = full-to-4R; smoother/higher-hit = scale@1.5R.
+- **Trail LOSES** everywhere (QQQ +0.091, NQ +0.002, SPY +0.077) — worst of all; do NOT trail (reverses
+  the tail-inflated F27b under honest fills).
+- **GC FAILS this config** (cap 4R −0.10R, all negative) — because skip-first-hour (entry_delay=60) MISSES
+  gold's US-morning move; GC's validated edge (F30, +0.44R) is the immediate 09:30-10:00 OR with
+  **entry_delay=0** + its own session. Gold needs its own TP/entry config, NOT the index-tuned one.
+- **OPTIONS MAP**: TP1=1.5R = the DEBIT-spread short leg (high-probability workhorse, most trades reach
+  ~1R); TP2=4R = the NAKED target (convex tail-capture for trend days); CREDIT spread short @ the
+  structure stop = theta/range income. See `bot/options/exit_plan.py`.
+
+## F63 — BOOK-LEVEL order flow is NOT predictive (QQQ MBO, 12 days) (2026-06-29)
+`research/strat_orderflow_book.py`. The F62 open question: is L3 order flow ADDITIVE (predicts
+direction) or just a filter? 4,680 RTH minutes of QQQ MBO, signed aggressive-trade flow (cum-delta +
+z-score) vs forward returns.
+
+| feature | fwd1m | fwd5m | fwd15m | fwd30m |
+|---------|-------|-------|--------|--------|
+| delta   | −0.007 | −0.011 | −0.034 | −0.017 |
+| zcd     | −0.001 | −0.006 | −0.057 | −0.047 |
+
+- **Every IC is ~0 / slightly NEGATIVE** → minute-level trade order flow has NO positive predictive
+  power for forward direction (mild reversion at 15–30m). Continuation toy (trade the strong-imbalance
+  direction, hold 5/15m) is NEGATIVE expRet at every threshold (−0.003%..−0.032%, win 39–48%).
+- **VERDICT: order flow is contemporaneous/reversion only, NOT predictive/additive** at 1s–30m
+  (confirms the earlier 1s-ahead negative IC; QI–microprice +0.96 is same-instant only).
+- Combined with F62 (bar features OOS AUC 0.48) → **the ORB breakout outcome is largely UNPREDICTABLE**
+  from both bar context AND order flow at testable resolutions. The edge stays the rule-based breakout;
+  ML/order-flow do NOT add predictive power.
+- CAVEATS: 12 days (decent for IC, small for a strategy); tested TRADE cum-delta, NOT full sub-second
+  event-time OFI/queue-imbalance with execution-aware persistence (the Evidence claim) — but the 1s
+  deep-feature IC was also negative, so that path is unpromising. The honest "predictive+adaptive" ML
+  layer (`bot/ml/pipeline.py`) is wired but correctly REFUSES to deploy (no model beats random).
+
+## F62 — FOUR-FAMILY head-to-head on NQ/QQQ/SPY (5m RTH), honest gauntlet (2026-06-29)
+`research/strat_four_families.py`. One clean representative of each family, capped-TP2/struct-stop/
+skip-1st-hr, gauntlet = exp net R>0 + CIlo>0 + both sides>0 + ≥70% yrs+ + 70/30 OOS>0.
+
+| family | NQ | QQQ | SPY |
+|--------|----|-----|-----|
+| 1 trend/momentum (gated ORB) | +0.176 fail (yr 11/17) | **+0.304 PASS** | **+0.344 PASS** |
+| 2 **breakout / vol-expansion** (plain ORB) | **+0.158 PASS** | **+0.264 PASS (9/9 yrs)** | **+0.270 PASS** |
+| 3 mean-reversion / range-fade | −0.174 DEAD | −0.086 DEAD | −0.073 DEAD |
+| 4 smc / order-block (F41 OB) | +0.157 fail | **+0.229 PASS** | **+0.284 PASS** |
+| 4b smc / liquidity-sweep (sweepgo) | +0.279 fail (n138) | +0.362 PASS (n79) | +0.204 fail (CI<0) |
+
+- **BREAKOUT/vol-expansion is the only edge that PASSES all three instruments** (cleanest: QQQ every
+  year+). It is THE validated edge (= the production ORB stack, confirms F58).
+- **Trend/momentum** and **SMC/order-block** PASS on **equities (QQQ/SPY) only**, FAIL NQ on year-
+  consistency; both just FILTER the breakout trades (OB: 371 vs 728 NQ, similar exp) → ~0 additive net
+  of honest fills (confirms F58, not a separate edge). Liquidity-sweep intriguing on QQQ (PF 1.75) but
+  small-n / not robust (SPY CI<0).
+- **MEAN-REVERSION / range-fade is DEAD on all three** (negative exp, ~every year −) — fades get run
+  over by range-day breakouts (confirms F18/F53). Do not trade intraday on these instruments.
+- Numbers tie out to prior validated findings (breakout QQQ +0.264=F58, trend QQQ +0.304/SPY +0.344=F59).
+- **OPTIONS**: the passing QQQ/SPY families translate to 0DTE naked/debit/credit via `bot/options`
+  (naked call/put, debit @ TP1, credit @ structure stop). NQ/MNQ = futures or NQ options.
+- **Verdict**: trade the BREAKOUT core on all instruments; the equity trend/SMC filters are optional
+  selectivity on QQQ/SPY (fewer trades, not strongly additive); skip mean-reversion.
+
+## F61 — DIRECTION-SEQUENCE entry gate (example.txt / Evidence "where is price going") (2026-06-29)
+`research/orb_dir_seq.py`. User rule: a long fires only while price is PUSHING UP — close>close[1]
+AND close[1]>close[2] (the 101→102→103 up-sequence); short mirror ("no middle-of-trend, no chase,
+no opposite-direction signal"). New engine `dir_seq` param + STACK `dir_seq` input (default ON).
+
+| sym | fill mode | base exp | +dir_seq exp | base PF | +PF | n→ | yrs+ | OOS | 2× slip |
+|-----|-----------|----------|--------------|---------|-----|----|------|-----|---------|
+| NQ  | wick/touch | +0.151 | **+0.261** | 1.26 | **1.47** | 856→792 | 13/17 | +0.314 | +0.203 (PF1.35) ✓ |
+| QQQ | wick/touch | +0.276 | **+0.448** | 1.52 | **1.91** | 513→477 | 9/9 | +0.461 | — |
+| SPY | wick/touch | +0.257 | **+0.383** | 1.48 | **1.76** | 526→484 | 8/9 | +0.489 | — |
+| NQ/QQQ/SPY | close-confirm | (shipped) | **≈ unchanged** | — | — | ~0 cut | — | — | — |
+
+- On the **wick/touch fill** the gate is a real graduate (exp↑, PF↑, CIlo>0, yrs+ majority, OOS
+  holds/improves, survives 2× slip) — it removes the counter-trend pokes the user saw in the
+  screenshots. On the **close-confirm fill** (shipped default) it's ~neutral because strong-body +
+  next-bar continuation already imply the up-sequence → **safe default-ON everywhere**.
+- **No-chase re-tested, stays OFF** (F57 confirmed): close+chase0.5 drops NQ +0.156→+0.081,
+  QQQ +0.264→+0.106, SPY +0.270→+0.186. Forcing near-zone entries selects weak breakouts; the
+  honest gap-aware fill already prices a late entry correctly, and those late confirmed entries
+  are the winners. The user's "don't chase" intuition is a visual preference that costs edge here.
+- ADOPTED: `dir_seq` default ON (engine param + STACK input). Propagate to OPTIONS/AUTO/V1_* next.
+
+## F60 — CONSOLIDATED GAUNTLET under the FINAL entry (all fixes in one config) (2026-06-23)
+`research/orb_final_gauntlet.py` (run one symbol/process — low-RAM box). Re-ran the whole validation under the
+single production entry = clean-TREND gate (structure) + close-confirm + STRONG full-body candle (0.25) +
+NEXT-candle CONTINUATION + honest fill at the confirming close + struct stop + skip-1st-hr + cap4 exit; cap/OB off.
+
+**FINAL-config gauntlet, RTH 5m:**
+| sym | n | exp R | PF | win | CIlo | gate | long/short | yr+ | worstYr | IS/OOS | 2x slip |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| NQ  | 582 | +0.173 | 1.29 | 42% | +0.068 | PASS | +0.174/+0.172 | 11/17 | −0.460 | +0.174/+0.173 | +0.111 ✓ |
+| QQQ | 361 | +0.304 | 1.56 | 43% | +0.156 | PASS | +0.406/+0.156 | 7/9  | −0.176 | +0.324/+0.260 | (equity) |
+| SPY | 379 | +0.344 | 1.66 | 44% | +0.202 | PASS | +0.420/+0.235 | 8/9  | −0.141 | +0.258/+0.545 | (equity) |
+| ES  | 559 | +0.127 | 1.21 | 41% | +0.013 | pass* | +0.154/+0.083 | 11/17 | −0.492 | +0.092/+0.210 | **−0.021 DIES** |
+| GC  | 450 | −0.067 | 0.92 | 36% | −0.201 | **FAIL** | +0.009/−0.261 | 7/17 | −0.830 | −0.117/+0.050 | dead |
+
+**Entry-fix ladder (cumulative, structure gate):** NQ touch +0.188→close +0.215→+strong +0.179→+ft FINAL +0.173;
+QQQ +0.299→+0.287→+0.283→+0.304; SPY +0.221→+0.176→+0.232→**+0.344**. So the fixes do NOT raise NQ headline R
+(slightly lower) — their value is HONESTY (no phantom fills) + RISK-QUALITY (follow-through filters reversals,
+lifts win% and SPY/QQQ markedly); SPY is the big winner, NQ ~flat-to-slightly-lower but still passes.
+
+**VERDICT:** the user's finalized entry PASSES the full gauntlet on **NQ / QQQ / SPY** (CIlo>0, OOS holds, majority
+years+, NQ survives 2x slip; QQQ/SPY strong PF 1.56/1.66). **ES** barely clears the CI gate (+0.013) and **DIES at
+2x slip** → not tradeable. ⚠️ **GC is DEAD under the new entry** (CIlo −0.201, neg everywhere) — F30's gold edge
+was under the OLD plain-stop US-morning entry; the trend-gate + strong-close + follow-through combo does not suit
+gold. DECISION NEEDED: drop GC, or run GC on the legacy plain-stop entry (`brk_confirm`="Wick/touch", gate off).
+Worst-years are deep on the futures (NQ −0.46, ES −0.49) — real losing years exist; equities (QQQ/SPY) are the
+cleaner streams.
+
+## F59c — next-candle CONTINUATION confirm ("don't fire into a reversal") — VALIDATED, improves QQQ/SPY (2026-06-23)
+User (chart: a long FILL fired on a breakout candle that immediately rolled into a downtrend): "after the price
+moves above/below the ORB, WAIT for the NEXT candle to continue the trend to fire." = a 2-candle confirmation:
+the breakout candle qualifies (strong full-body close beyond the level, F59b), then the FOLLOWING candle must
+CONTINUE (higher close for a long / lower close for a short) before the fill. Added to the engine (`_orb_signals`/
+`backtest` params `strong_body`, `ft_confirm`; close-confirm branch) and tested on top of TREND gate + close-confirm
++ strong0.25, NQ/QQQ/SPY 5m RTH:
+| sym | no follow-through | + FOLLOW-THROUGH |
+|---|---|---|
+| NQ  | +0.179 PF1.30 CIlo+0.074 | +0.173 PF1.29 CIlo+0.060 (≈neutral) |
+| QQQ | +0.283 PF1.51 CIlo+0.146 | **+0.304 PF1.56 CIlo+0.156** |
+| SPY | +0.232 PF1.42 CIlo+0.105 | **+0.344 PF1.66 CIlo+0.208** |
+Cuts ~13% of trades; improves QQQ + SPY clearly (it filters exactly the pop-and-reverse fills the user flagged),
+~neutral on NQ, all pass the CI gate. ADOPTED default ON. Pine (all 5): new `wait_ft` input → close-confirm fills
+on the continuation bar = `qual[1] and close ⋛ close[1]` (qual = strong full-body breakout candle); strategies
+(AUTO/V1_STRATEGY) market-enter on that continuation bar. Engine `ft_confirm`/`strong_body` default OFF (other
+callers unchanged). NEEDS TV COMPILE on all 5.
+
+## F59b — USER FILL RULE finalized: clear-trend gate ON + STRONG full-body close-confirm (2026-06-23)
+User (3rd restatement, explicit): "long has to fill DURING A CLEAR UPTREND, [a] close strong candle above the ORB
+then fill; short mirror it." Two requirements stacked: (1) a clear TREND in place (the structure/EMA gate — so
+F58's gate-OFF default is REVERSED per user's discretionary setup), (2) a STRONG, full-bodied candle that CLOSES
+beyond the OR level (bullish-coloured + body ≥ k·range). Tested (engine: structure gate + execm="close" + body
+skip-mask), NQ/QQQ/SPY 5m RTH:
+- **TREND gate + close-confirm (no body filter)**: NQ +0.215 (PF1.36, CIlo+0.110, BETTER than plain +0.190),
+  QQQ +0.287 (CIlo+0.155, ≈plain), SPY +0.176 (CIlo+0.052, slightly < plain but passes). → the two core
+  requirements VALIDATE; requiring a clean trend + full-body close holds the edge (NQ improves).
+- **+ strong-body filter** (body ≥ k·(high−low)) sweep: k=**0.25 is the SWEET SPOT** — NQ **+0.233** (best of all),
+  QQQ **+0.306** (best), both CIlo up; it rejects dojis/long-wick rejections (the user's actual concern). Going
+  heavier monotonically HURTS: k0.4 NQ +0.168, k0.5 NQ +0.150 (CIlo+0.016) & SPY FAILS the CI gate, k0.6 NQ CIlo
+  −0.039. SPY dislikes any body filter (prefers off). → default **strong_body = 0.25** (light, decisive-candle).
+ADOPTED across all 5 Pine: `trend_mode` default back to "Auto (structure ≤5m / EMA ≥15m)" on STACK/AUTO/OPTIONS
+(V1 pair already gate-on); new `strong_body` input (default 0.25) → close-confirm also requires `close>open` (long)
+/`close<open` (short) AND `|close−open| ≥ strong_body·(high−low)`. NOTE: the trend gate is kept ON as the user's
+SETUP (clean-trend breakouts only), NOT for added expectancy — F58 still stands that it doesn't ADD edge net of
+honest fills (it's ≈neutral here too); the user's preference governs the entry. NEEDS TV COMPILE on all 5.
+
+## F59 — full-body CLOSE-confirm entry vs the resting-stop touch (2026-06-23)
+User directive: a FILL needs a **full-body candle close beyond the level**, not a wick that just tags it (they
+were seeing the FILL marker on wick-touch bars). The engine already models this as `execm="close"` (fire on
+`close > level`, fill AT the close — honest, never better than the close). Head-to-head on PLAIN ORB (gate off,
+cap4 exit, struct stop, skip-first-hour), honest, NQ/QQQ/SPY 5m RTH:
+| sym | stop/touch | close-confirm |
+|---|---|---|
+| NQ  | +0.151 PF1.26 CIlo+0.066 | **+0.190 PF1.34 CIlo+0.096** (BETTER) |
+| QQQ | +0.276 PF1.52 CIlo+0.159 | +0.282 PF1.54 CIlo+0.160 (≈equal) |
+| SPY | +0.257 PF1.48 CIlo+0.140 | +0.197 PF1.36 CIlo+0.082 (mildly worse, still passes) |
+Close-confirm fires ~5-8% fewer trades, PASSES the CI gate on all three, is BETTER on NQ (primary futures),
+neutral on QQQ, mildly worse on SPY. Net: a legitimate, validated-enough entry that also removes the "wick fill"
+look. ADOPTED as the production default (the engine was already on execm="close"). Pine: new `brk_confirm` input
+(default "Candle close beyond level (full body)"; "Wick / touch (resting stop)" = the F58 stop entry) →
+`conf_close ? close>=Le : high>=Le`; fill `l_ep = conf_close ? close : max(Le,open)`; risk `l_rk = l_ep − Ls`
+(honest from the actual fill, both modes). Propagated to all 5 (AUTO/V1_STRATEGY swap the resting stop order for
+a market-on-close-confirm when conf_close). NEEDS TV COMPILE on all 5.
+
+## F58 — ⚠️ HONEST RE-VALIDATION: the structure/OB GATE adds ~0 and the VWAP-CAP HURTS (2026-06-23)
+`research/orb_honest_revalidation.py`. The F56-fix question, settled head-to-head with honest gap-aware fills,
+net of costs, cap4 exit + struct stop + skip-first-hour (= the production STACK config), varying ONLY the gate
+and the cap. NQ/QQQ/SPY/ES 5m RTH.
+
+**A) The GATE (F20 struct HH/HL + F41 OB confluence) adds nothing — confirmed F56:**
+| sym | pure ORB exp | struct exp | stackOB exp | gate verdict |
+|---|---|---|---|---|
+| NQ  | +0.151 (12/17 yr+) | +0.188 (13/17) | +0.158 (9/17) | ~neutral, OB thins it |
+| QQQ | +0.276 (8/9)  | +0.299 (7/9)  | +0.298 (9/9)  | ~equal |
+| SPY | +0.257 (8/9)  | +0.221 (8/9)  | +0.236 (7/9)  | gate HURTS pt-est + worst-yr |
+| ES  | +0.046 (7/17) | +0.036 (10/17)| +0.035 (7/17) | all ~zero (ES dead) |
+The gate cuts ~40% of trades without lifting expectancy; bootstrap CIs are WIDER for stackOB (fewer trades) →
+strictly LESS confidence for the same/lower exp. So F20/F21/F41/F45's headline lift was the stale-fill artifact.
+
+**B) The VWAP-cap (F16, k=2.0) HURTS honest fills** (it was tuned against inflated entries). NQ monotonic decay:
+no-cap +0.151 → k2.0 +0.094 → k1.3 +0.106; ES same; QQQ/SPY noisy-but-not-better. Best cap = NONE — consistent
+with F57 (the late-momentum entries the cap removes ARE the winners). → disable the cap on honest fills.
+
+**Bootstrap 90% CI (the WIN gate):** pure ORB PASSES (CIlo>0) on NQ [+0.066,+0.240], QQQ [+0.158,+0.395],
+SPY [+0.139,+0.377]; FAILS on ES [−0.043,+0.138]. stackOB also passes NQ/QQQ/SPY but with wider CIs.
+**2x slip:** NQ pure survives (+0.151→+0.098); ES pure DIES (+0.046→−0.100). OOS (70/30) holds for NQ/QQQ/SPY.
+
+**VERDICT (part 1):** the honest tradeable core is a **PLAIN ORB on NQ/QQQ/SPY** (cap4 exit, struct stop,
+skip-first-hour), exp ~+0.15–0.28R, PF 1.26–1.52, CIlo>0, OOS holds. **ES is dead.** The structure gate, OB
+confluence, and VWAP-cap are NOT the edge — drop/disable them (gate neutral-to-harmful; cap harmful).
+
+**Part 2 — honest re-check of the levers held CONSTANT above** (`research/orb_honest_levers.py`, plain ORB,
+one-lever sweeps, NQ/QQQ/SPY):
+- **TIME GATE (skip first hour, F38) = REAL and survives the fill fix** — and MORE skip is better: delay 0→90m
+  lifts exp on all three (NQ +0.149→+0.214 CIlo+0.118; QQQ +0.205→+0.307 CIlo+0.186; SPY +0.205→+0.276
+  CIlo+0.158). The 10:00–11:00 post-OR hour is the chop; later breakouts are cleaner. KEEP (delay 60–90).
+- **STOP anchor (F25b struct vs OR) = NEUTRAL** — struct ≈ OR to 3 d.p. on all three (NQ +0.151 vs +0.150;
+  QQQ identical; SPY +0.257 vs +0.262). The struct stop's claimed lift was ALSO the artifact; it doesn't hurt,
+  but it adds nothing — can keep or simplify to the OR-edge stop.
+- **EXIT (F34b) cap4 = CORRECT (already shipped)** — full→4R cap is the best honest exit on all three (NQ +0.151,
+  QQQ +0.276, SPY +0.257) and beats scale_be-4R / tp2_full-2R / trail. **trail is the WORST** (NQ +0.032
+  CIlo−0.020 FAIL) — confirms F50/F51 that trail's old headline was tail-inflation; the Trail→cap4 default
+  switch was right.
+
+**FULL HONEST CONFIG = plain ORB + skip-first-hour (60–90m) + cap4 exit, NO direction gate, NO OB, NO VWAP-cap,
+OR-or-struct stop (either), on NQ/QQQ/SPY (ES dead).** Production STACK currently ships gate+OB+cap2.0 ON =
+now known SUBOPTIMAL. Simplification surgery (across all 5 Pine + keep engine defaults off) pending user's call —
+it gives up the gate's chart-readability and ~40% more (both-side) fires for tighter CIs at equal/better exp.
+
+## F57 — research-code fill audit + the no-chase guard (the lateness is a FEATURE) (2026-06-22)
+Audited ALL research code for the F56-class fill mistakes (stale-level fill, same-bar fill→TP, lookahead):
+- **The mistake is CENTRALIZED in the engine** (`_orb_signals` execm + `backtest` entry-at-level) → inherited by
+  all ~59 engine-based scripts; fixing the engine fixes them all. Scripts that produce signals/levels and route
+  through `B.backtest` (orb_confirm_entry's `_signals` override, orb_kernel_filter, all orb_stack_* filters,
+  eval/prop scripts which reuse `tr["net_R"]`) are now PROTECTED by the engine gap-aware-entry fix.
+- **Custom-sim scripts checked individually**: orb_projection_test (enters at the signal-bar CLOSE, exits from
+  j=i+1 → clean, no stale level / no same-bar); strat_daily/rangefade/ml/volbreak_test/kernel_signal (built
+  gap-aware/causal in F49/F52-55). No independent fill bug found in the custom sims.
+- **Structure columns are CAUSAL** — `H.pivots()` returns the pivot only at the CONFIRM bar (`right` bars AFTER
+  it; `ci=i-L`), so st_state/sph/spl LAG, they don't peek. This is WHY the gate fires late (F56), and confirms
+  the F56 problem was the fill, not a structure lookahead. (Prior known lookahead: F19 clean-day, already killed.)
+- **NO-CHASE guard tested** (engine+Pine `chase_atr`/`chase_max`, off by default): only fire while price is still
+  within k·ATR of the level (don't chase a late fill). Result: it HURTS — NQ +0.156→−0.039R (chase0.5)→−0.141
+  (0.25), QQQ slightly worse. The late, confirmed-momentum entries are the WINNERS (the structure gate confirms
+  only after a real move); forcing near-level entries selects weak breakouts. So the chart's "late fill at
+  exhaustion" is intrinsic + beneficial; the only real bugs were the stale FILL PRICE and same-bar TP (both fixed
+  F56). Left `chase_atr` as an off-by-default option. Honest stack with the fixes ≈ +0.15-0.23R (marginal).
+
+## F56 — ⚠️ CRITICAL: the gated-stack "edge" is largely a STALE-FILL ARTIFACT (2026-06-22)
+User flagged two fill issues that "inflate the stack production": (1) mid-bar/stale fill, (2) fill+TP on the same
+bar. Both were REAL, and chasing them down unravelled a chunk of the program.
+- **Same-bar fill→TP**: the PINE STACK booked TP/stop on the SAME bar as the fill (the `if in_long` block ran on
+  the fire bar). FIXED → `if in_long and not long_fire` (management starts the bar AFTER fill, matching the
+  engine's i+1). The Python engine was already clean here (entry at i, scan from i+1).
+- **STALE-LEVEL fill (the big one)**: `execm="stop"` fires `lsig` on the first bar where `high>=lh` AND the
+  TREND GATE (`tup`) is true — but `high>=lh` stays true for every bar after the break, so when the structure
+  gate confirms LATE (it lags the breakout), the fire lands well past `lh` while the engine recorded the entry AT
+  `lh`. Measured on NQ 5m: mean (firing-bar open − level)/ATR = PURE ORB **−0.56** (fills at the cross, honest) →
+  +structure **+0.60** → +structure+OB (the stack) **+1.82 ATR**, with 73% of stack fires opening ABOVE the level.
+  So the stack credited entries ~1.8 ATR better than fillable. FIXED → engine + Pine entry = WORSE of
+  {level, bar open} (gap/late-aware).
+- **HONEST head-to-head (NQ 5m RTH, scale_be, no cap)**: pure ORB exp **+0.124** (n198) vs structure+OB stack exp
+  **+0.129** (n411) — IDENTICAL. The structure gate / OB confluence add ~0 per-trade once fills are honest. With
+  cap2 the stack is +0.156 on ~110 trades (~6/yr) = marginal. Documented F45 ~+1-2R and the F20/F25b/F41 lifts
+  were substantially the stale-fill artifact (the gates pick already-run breakouts; the backtest bought the pre-run level).
+- **IMPLICATION**: F20 (structure gate), F21, F25b (struct stop), F41 (OB), F45 (the ~2× config) — all validated
+  via `execm="stop"` with stale-level fills — are SUSPECT and need honest re-validation. The PURE ORB fills
+  honestly and is the clean baseline (~+0.12R). Cap/costs need re-tuning for honest fills (vwap_cap2 on honest
+  entries behaves differently — pure+cap2 went NEGATIVE). The kernel/CVD/AMT/etc FILTER studies compared deltas
+  on the same inflated base, so their RELATIVE conclusions (redundant/dead) likely survive; absolute exp does not.
+- FIXES SHIPPED: engine `hs_backtest.py` gap-aware entry; STACK pine same-bar defer + gap-aware fill. AUTO uses
+  the broker emulator (strategy.*) so its fills are broker-modeled; review separately. NEEDS TV compile.
+VERDICT: pause new-strategy adoption; the urgent task is an HONEST re-validation of whether the structure stack
+beats a plain ORB at all once fills are realistic.
+
+## F55 — volatility-breakout FULL GAUNTLET: fails once stressed (2026-06-22)
+`research/strat_volbreak_test.py`. The F52 survivor stress-tested: (A) k-plateau NQ/QQQ/SPY pass k0.2-0.4,
+ES/GC fail; (B) **2× slippage = futures FAIL** (NQ 15/17 at 2×, ES/GC collapse), only QQQ/SPY survive (equity
+costs ~0.25bp) but those are 2018+ only; (C) **short side dead everywhere** (long/drift effect); (D) weaker
+pre-2018 even on NQ; (E) **~30% of trades are both-levels-hit days** (path-ambiguous). Path test: assume-long
++0.12% / skip-both-hit **+0.31% PF3.8** / pessimistic **−0.07%** → the headline depends entirely on the coin-flip
+both-hit days. VERDICT: not tradeable as a daily-bar strategy (fails 2× slip on futures, short dead, 30%
+path-ambiguous); the clean single-break-day edge is real but needs an INTRADAY re-run (take first break) to resolve
+fills honestly — deprioritized given F56.
+
+## F54 — Supervised ML / learned combiner (daily direction): NO robust edge → DEAD (2026-06-22)
+`research/strat_ml.py`. HistGradientBoosting on causal OHLCV+VIX features (returns 1/2/3/5/10d, RSI2/14, SMA5/20/
+50/200 distance, ATR%, range%, gap, vol-z, DoW, VIX level+rel), target = sign(next-day return). WALK-FORWARD
+(train years<Y, predict Y; OOS only). Edge counts only if OOS acc > base rate (majority class) AND strat passes.
+- NQ acc 55.9% vs base 56.3% (BELOW base, fail), ES 55.9 vs 54.6 (yr+7/13 fail), GC 51.7 vs 52.5 (fail).
+- QQQ acc 62.4 vs 54.9 Sharpe 4.14 PASS, SPY 63.3 vs 54.2 Sharpe 4.68 PASS — but IMPLAUSIBLY high + does NOT
+  REPLICATE: the same indices via futures (NQ/ES, 2010+ history) only hit ~56% ≈ base rate. QQQ/SPY series start
+  2018 so their OOS is just 5 recent trending years.
+VERDICT: **DEAD** — no robust daily-direction edge. The QQQ/SPY pass is the SAME post-2018 equity-regime artifact
+as Connors RSI-2 (F52): both pass on QQQ/SPY 2018+ and fail on the longer NQ/ES history. Daily direction ≈ base
+rate out-of-sample, as expected. (A learned combiner on INTRADAY ORB-entry features — not daily direction — is a
+different, untried question; would need the harness feature matrix at entry bars.)
+
+## F53 — Range-day VWAP fade + the regime-switch ensemble: BOTH DEAD (2026-06-22)
+`research/strat_rangefade.py`. Idea: the stack SKIPS local_regime==2 (chop/low-ADX) bars; fade VWAP extension
+(>= k·ATR) back to VWAP on exactly those bars to harvest them. Conservative fills (entry at signal-bar close,
+cover at VWAP = limit, stop at WORSE of stop/next-open). Result on NQ 5m RTH: DEAD across k{1.5,2.0}×stop{1.0,1.5}
+— expR −0.17..−0.25, PF 0.69-0.74, win 31-45%, NEGATIVE in ~15/17 years, both-sides fail. Low-ADX "range"
+classification does NOT imply mean-reversion — fades get run over by range breakouts. → the regime-switch
+ENSEMBLE (stack on trend days + fader on chop days) is MOOT: there is no profitable chop-day leg to switch into,
+so the stack's existing "skip chop" (exclude local_regime==2) is already the correct behavior. (Multi-symbol run
+OOM'd on the memory-starved box; NQ alone decisive.)
+
+## F52 — FOUR new standalone DAILY strategies: volbreak + Connors graduate, donchian/VIX die (2026-06-22)
+`research/strat_daily.py`. Gauntlet on NQ/ES/QQQ/SPY/GC 1d, conservative gap-aware fills (stop-entry fills at the
+WORSE of level/open; exits gap-aware; no target booked on the entry bar — addresses the user's mid-bar-fill-then-TP
+concern). Gate = exp>0 net costs AND bootstrap CI(R)>0 AND >=70% yrs+ AND 70/30 OOS-out>0 AND both-sides.
+- **Volatility breakout (Crabel/Williams, open±k·prior-range, EOD exit), k0.3 = GRADUATES**: NQ +0.12%/t PF1.54
+  win56% **17/17 yrs+**, QQQ PF1.69 **9/9**, SPY PF1.55 **9/9**, all PASS, OOS+. ⚠️ thin (~12 bps/trade, fires
+  ~daily) → SLIPPAGE-SENSITIVE (k0.5 weaker; ES fails 14/17; GC dead). An intraday momentum/trend-persistence edge.
+- **Connors RSI-2 (close>SMA200 & RSI2<10 → long; mirror short) = GRADUATES on EQUITIES only**: QQQ PF1.97 win73%
+  CI+0.182 PASS, SPY PF2.14 win77% PASS — but REGIME-DEPENDENT: fails NQ/ES over full 2010+ (NEG '11/'15/'16/'18);
+  the QQQ/SPY pass rides the post-2018 dip-buy regime (those series only start 2018). Real but not all-weather.
+- **Donchian/Turtle (N{20,55} breakout, M=N/2 exit, 2ATR stop) = DEAD as graded**: real but LUMPY (win 33-44%,
+  many negative years, CI<0) — classic trend-following fails the strict every-year gauntlet. N55 has fat per-trade
+  (+0.5..+1.6%) but n small + CI<0.
+- **VIX-spike fade (VIX>sma5·1.10 → LONG index, exit 5d/VIX-normalises) = DEAD**: PF 0.16-0.56, big losses
+  '18/'20/'21 — naive "buy the index on a vol spike" catches falling knives.
+VERDICT: two genuine NEW return streams = volbreak (best consistency, slippage caveat) + Connors RSI-2 (equity,
+regime-dependent). Both are DIFFERENT streams from the intraday ORB stack → diversification value. Donchian/VIX/
+range-fade dead. Next: forward/slippage-stress volbreak before it could be a real 5th stream.
+
+## F51 — struct-stop "inflation" dig RESOLVED + production exit/floor updated (2026-06-22)
+Followed up the F50 flag (`orb_stop_floor.py`, NQ+QQQ 5m RTH, prod config). Findings:
+- **The entry/stop EDGE is real, not inflated.** With a BOUNDED exit (scale_be / capped-TP2) expectancy is
+  +1.4..+1.7R (scale) / +2.1..+2.4R (capped 4R) = consistent with documented F45 (~2× stack). Robust to the
+  stop floor: MIN_STOP_ATR sweep 0.5→1.5 moves exp <0.15R (NQ +1.362→+1.211, QQQ +1.660→+1.473). My F50 worry
+  (tight-stop artifact) is DISPROVEN.
+- **The inflation was the TRAIL exit's R-metric only** — a few low-ATR trades blow up the R-denominator
+  (grossR max ~50R), so trail R/PF is tail-driven (already documented F34b: "trail PF tail-inflated 17 vs
+  capped honest 3-6"). In $ terms trail is fine; in R it misleads — and F27b made trail the DEFAULT on exactly
+  that R-comparison. So the default was resting on the unreliable metric.
+- **The 0.5-ATR floor is noise-tight on equities** (QQQ median structure stop ≈0.57 ATR; 52% of QQQ trades
+  resolved ≤1 bar at 0.5 = trivial TP1). Expectancy-neutral to widen.
+PRODUCTION CHANGES (user-directed, overriding the batch-defer rule for this script):
+1. **STACK default exit Trail → "Full → cap @ TP2 (struct stop)"** (the F34b honest/eval-steady graduate;
+   trail demoted to a toggle). `production/HIGHSTRIKE_ORB_STACK.pine` exit_mode default + tooltip.
+2. **Ticker-adaptive min-stop floor**: futures 0.5 ATR, stocks/funds 0.75 ATR (`auto_minstop` ON by default,
+   `eff_min_stop = syminfo.type=="futures" ? 0.5 : 0.75`). Engine matched for parity:
+   `min_stop_atr_ = 0.75 if EQ else MIN_STOP_ATR` in `hs_backtest.backtest` (verified: NQ min riskATR 0.50,
+   QQQ 0.74). Capped-TP2 then reads NQ +2.14R PF9.0 win75% / QQQ +2.40R PF11 win74% (realistic, bounded).
+⚠️ TODO consistency: the same exit-default + min-stop change should propagate to AUTO (real-order twin — must
+match the STACK display) and the other Pine (V1/OPTIONS/ASIA/MTF) + a TV compile; not yet done (scope was STACK).
+
+## F50 — OB-port reconcile (PASS) + the VWAP-cap "earlier-entry" frontier (2026-06-22)
+User asks: (1) is the order-block actually implemented in the STACK pine, (2) the ORB fill feels "mid-range/too late".
+**(1) OB RECONCILE — Pine ⇄ harness: FAITHFUL PORT, no logic drift.** Mapped `HIGHSTRIKE_ORB_STACK.pine`
+L170-209 against `hs_harness._zones_sweep_patterns` L302-345 line-for-line: formation (bull `close>high[1] &
+close[1]<open[1] & ob_strong` → zone (open[1],low[1]); bear mirror), ob_strong (`|close-open|≥atr·0.3 & vol≥sma20·0.7`),
+keep-N FIFO (5), invalidation (close beyond far edge OR |close-near edge|>3·atr), containment (`low≤top & high≥bot`),
+and the gate uses `in_bull_ob[1]` (prior bar = causal) == engine `.shift(1)`. ALL MATCH. Pine array loops are
+guarded (size>0) and remove top-down (safe). Only true open item = a TV COMPILE (can't run TV here); the OB block
+itself is syntactically clean. OB is default-ON, F47-robust params.
+**(2) VWAP-cap = the anti-late lever** (`orb_cap_lateness.py`, NQ+QQQ 5m RTH, prod config: struct gate + OB + time
+gate + struct stop). Measured entry extension beyond prior-bar session VWAP (ATR) per cap k:
+- NQ: ext mean +0.28 (uncapped, entries CHASE) → −0.17 (k2.0 prod) → −0.36 (k1.5) → −0.60 (k1.1); extMax mechanically
+  bounded by k (6.4→2.0→1.5→1.1); MAE_R (initial heat) −0.32→−0.25→−0.22→−0.20. Trades kept 100%→86%→78%→68%.
+- QQQ same shape. So lowering k pulls the AVERAGE entry from the chasing side to the VWAP side and halves worst-case
+  lateness, monotonically, costing ~14% (k2.0) → ~22% (k1.5) → ~32% (k1.1) of trades. Sweet spot **k≈1.3–1.5**.
+- Expectancy RISES as k tightens (validated frontier, consistent w/ F16/F36) — but ⚠️ the ABSOLUTE exp/win% from
+  this harness config look OPTIMISTIC (85-94% win, hold med 1 bar): the struct stop pins to MIN_STOP_ATR=0.5 floor →
+  4R target ≈ 2 ATR, reached intrabar where the engine assumes TP-before-stop. RELATIVE frontier is trustworthy;
+  absolute struct-stop expectancy (F25b/F45) may be inflated by tight-stop intrabar optimism — flag to revisit.
+VERDICT: OB is correctly wired (needs only a TV compile to close). For "too late" the validated knob is **lower the
+VWAP-cap toward 1.3–1.5** (user-tunable Pine input; NOT changing the default per defer-propagation). Retest/confirm
+entries stay dead on 5m (Finding 8/11).
+
+## F49 — "Neural Kernel Bands" STANDALONE Buy/Sell signal: ~zero accuracy, the chart look is an illusion → DEAD (2026-06-22)
+`research/orb_kernel_signal.py`. User reported the stack's 5m/15m ORB entries "are not working" and that the
+kernel-band Buy/Sell labels "look on point" on the chart — asked to test the label accuracy directly. F36 tested
+this indicator as a FILTER (redundant w/ VWAP-cap); this tests the band-cross flip AS ITS OWN ENTRY. Reused the
+verified causal port (kernelMA=EMA(Σwᵢ·close[i]/Σwᵢ), bands=±mult·σ(resid), state→±1 on close vs band, "Buy"/"Sell"
+= held-state flip). Three causal reads (signal confirmed at close[t] → entry at open[t+1]):
+- **forward-return accuracy**: dir hit-rate 44→50% across H=1..20 bars (BELOW coin flip early, ~50% at 20) on
+  NQ+QQQ × 5m+15m; mean fwd move 0.00–0.02 ATR = statistically zero. The labels do NOT predict direction.
+- **flip-to-flip always-in** (reverse on opposite flip): GROSS expR tiny + (+0.04..+0.12, just the always-in trend
+  drift) but win 31–33% (chopped); NET of realistic costs negative everywhere (NQ 5m −0.575R PF0.66 over ~48k
+  flips, NQ 15m −0.235R, QQQ 5m −0.047R; QQQ 15m +0.07R but raw return −47%).
+- **charitable re-check (both polarities, RTH-only, real ATR bracket stop=1.0/target=1.5R, exit on opp flip/EOD)**:
+  FOLLOW the label (momentum) loses — NQ 5m −0.283R PF0.63, 15m −0.167R; QQQ 5m −0.082R, 15m −0.006R (≈breakeven);
+  FADE it (mean-reversion to the kernel) loses too — NQ 5m −0.334R, 15m −0.239R; QQQ 5m −0.069R, 15m −0.074R.
+  Win 38–42% vs a 1.5R target = breakeven before costs, negative after. NEITHER direction is tradeable.
+- **the illusion, quantified**: the Buy label is drawn at the bar LOW, but the fill is the CLOSE — already
+  **+1.2–1.6 ATR past the upper band**. So the marker sits at a swing low and price "rallies away from it" in
+  hindsight = looks perfect, but that ~1.3-ATR is unfillable. That marker placement + the smoothed band hugging
+  price IS why it "looks accurate."
+VERDICT: **DEAD as an entry**, consistent with F36 (dead as a filter). Fine as a discretionary visual; not a
+replacement for the ORB stack entries. (Separately: the user's "5m/15m entries not working" is about the STACK,
+not the kernel — 15m was never a validated stack TF anyway: structure gate graduated on 5m only, 15m-retest
+non-replicates. Need to clarify whether "not working" = not firing in Pine vs not profitable, then target that.)
 
 ## F48 — Order Flow (CVD proxy): a WEAK but CONSISTENT additive lead → real tick data is the one live direction (2026-06-17)
 `research/orb_stack_orderflow.py`. True order flow needs TICK / bid-ask / trade-delta data we DON'T have; the

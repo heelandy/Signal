@@ -42,7 +42,7 @@ strategy("HIGHSTRIKE ORB AUTO", overlay=true,
 // Only ORDER FILLS post the trade webhooks, so intrabar recalc can't spam orders.
 
 // ───────────────────────── SESSION ─────────────────────────
-sess_preset = input.string("US RTH (0930-1000 ET)", "Session", group="Session",
+sess_preset = input.string("Auto (Asia + London + RTH by clock)", "Session", group="Session",
               options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "London (0300-0330 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
               tooltip="Auto runs all THREE cycles per trade-day: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). Each cycle flattens at its cutoff.")
 or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
@@ -58,15 +58,25 @@ auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip=
 allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
             tooltip="OFF = one breakout per side per session (validated default). ON = re-arm when price falls back inside the OR; capped by Max entries.")
 max_entries  = input.int(2, "Max entries per side / session", group="ORB", minval=1)
+brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="F59: a FILL needs a FULL-BODY close beyond the level. Default close-confirm = on a bar that CLOSES above OR high (long)/below OR low (short), AUTO sends a MARKET entry (fills ~next open), in lockstep with the STACK signal. 'Wick / touch' = a resting buy/sell-STOP at the level (intrabar fill). Broker holds the SL+TP bracket either way.")
+strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b, best on NQ/QQQ; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level.")
+wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="F59c (user rule): don't fire on the breakout candle — WAIT for the NEXT candle to CONTINUE the trend (higher close long / lower close short), then market-enter. Stops 'fired into a reversal' entries. Validated: improves QQQ/SPY, ~neutral NQ. Default ON, in lockstep with STACK.")
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
 // ───────────────────────── STRUCTURE GATE ─────────────────────────
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
-             options=["Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"])
+             options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
+             tooltip="USER FILL RULE: entries fire only DURING A CLEAR TREND (long = structure UPtrend ≤5m / EMA-up ≥15m; short the mirror). Default ON (Auto), in lockstep with STACK. NOTE F58: the gate doesn't ADD expectancy net of honest fills — it's the entry SETUP (clean-trend breakouts only), not a statistical edge. 'Off — plain ORB' trades every breakout.")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
 // ───────────────────────── VWAP CAP ─────────────────────────
-cap_on = input.bool(true, "VWAP-extension cap", group="VWAP cap")
+cap_on = input.bool(false, "VWAP-extension cap", group="VWAP cap", tooltip="F58: the cap HURTS honest fills (removes the late-momentum winners, F57). Default OFF, in lockstep with STACK.")
 cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
 // ───────────────────────── REGIME ─────────────────────────
 local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
@@ -90,11 +100,14 @@ stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Ris
             options=["Structure swing (HH/HL)", "OR edge"],
             tooltip="F25b: stop at the last HH/HL swing (vs the OR edge) ~halves risk per trade and lifts R.")
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
-min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR (manual)", group="Risk plan", step=0.1)
+auto_minstop= input.bool(true, "Auto min-stop per instrument (futures 0.5 / equity 0.75 ATR)", group="Risk plan",
+            tooltip="F51 (2026-06-22): a 0.5-ATR floor is noise-tight on equities/ETFs (median QQQ structure stop ≈0.57 ATR); 0.75 ATR is expectancy-neutral and less whippy. ON = futures 0.5 / stocks-funds 0.75. OFF = manual value for all. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_min_stop = auto_minstop ? (syminfo.type == "futures" ? 0.5 : 0.75) : min_stop_atr
 sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
-exit_mode = input.string("Trail (ATR chandelier)", "Exit", group="Risk plan",
+exit_mode = input.string("Fixed TP bracket (broker-held)", "Exit", group="Risk plan",
             options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)"],
-            tooltip="F27b: trail 2ATR beats fixed-TP on AVERAGE (catches tail trends, most slip-robust) — default. F34b GRADUATED the bracket: full position to a fixed-R cap on the structure stop = ~2× the trail's MEDIAN $/trade and honest, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip — best for steady eval accumulation (set Take-profit R = 4 below). Bracket also survives a dead webhook pipe (broker holds SL+TP). Toggle freely.")
+            tooltip="DEFAULT = 'Fixed TP bracket' (F34b graduate): full position to a fixed-R cap on the structure stop (set Take-profit R = 4 below) = ~2× the trail's MEDIAN $/trade, honest PF, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip, best for steady eval accumulation; also survives a dead webhook pipe (broker holds SL+TP). F50/F51 (2026-06-22): the trail's headline R/PF is TAIL-INFLATED (a few low-ATR trades) — demoted to a toggle, no longer the default. Matches HIGHSTRIKE_ORB_STACK's exit default. Toggle freely.")
 trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
 tp_rr       = input.float(4.0, "Take-profit R (bracket mode)", group="Risk plan", step=0.5,
             tooltip="F34b: 4R is the graduated cap (only level surviving 2× slip on all 5 instruments; 2R/3R die on ES/GC). The structure stop puts this ~4× the typical stop distance in points.")
@@ -212,9 +225,10 @@ if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
     st_state := 0
 
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
+bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = use_struct ? (st_state == 1) : trend_up
-bool eff_down = use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -293,9 +307,9 @@ float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? p
 var float Ls = na
 var float Ss = na
 if not na(Le) and strategy.position_size <= 0
-    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * eff_min_stop)
 if not na(Se) and strategy.position_size >= 0
-    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * eff_min_stop)
 bool is_trail = exit_mode == "Trail (ATR chandelier)"
 float Ltp = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp_rr      // bracket-mode targets only
 float Stp = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp_rr
@@ -420,12 +434,20 @@ if arm_l and not arm_l[1]
 if arm_s and not arm_s[1]
     alert(armed_as_json ? f_armed_json("short", Se, Ss, Stp) :
          "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] SHORT ARMED — sell-stop " + f_px(Se) + " | SL " + f_px(Ss) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Stp)), alert.freq_once_per_bar)
-if arm_l
-    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=Le, alert_message=f_entry_json("buy", Le, Ls, Ltp))
+// F59b/c close-confirm fill: a strong full-body breakout candle, then (wait_ft) the NEXT candle continues the trend
+bool qual_l = close >= Le and close > open and body_strong
+bool qual_s = close <= Se and close < open and body_strong
+bool fill_l = wait_ft ? (qual_l[1] and close > close[1]) : qual_l
+bool fill_s = wait_ft ? (qual_s[1] and close < close[1]) : qual_s
+bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire/arm while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+if arm_l and (not conf_close or fill_l) and seq_l                                 // close-confirm = market entry on the confirmed candle; touch = resting buy-stop at Le
+    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=conf_close ? na : Le, alert_message=f_entry_json("buy", Le, Ls, Ltp))
 else
     strategy.cancel("L")
-if arm_s
-    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=Se, alert_message=f_entry_json("sell", Se, Ss, Stp))
+if arm_s and (not conf_close or fill_s) and seq_s
+    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=conf_close ? na : Se, alert_message=f_entry_json("sell", Se, Ss, Stp))
 else
     strategy.cancel("S")
 
@@ -487,8 +509,12 @@ plot(show_plan and l_live ? l_stop_now : na, "Long stop",  color=color.new(color
 plot(show_plan and s_live ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
 plot(show_plan and l_live and not is_trail ? (strategy.position_size > 0 ? t_tp : Ltp) : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
 plot(show_plan and s_live and not is_trail ? (strategy.position_size < 0 ? t_tp : Stp) : na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr)
-plotshape(just_long,  "Long entry",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="BUY",  textcolor=color.white, size=size.tiny)
-plotshape(just_short, "Short entry", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.tiny)
+// markers anchored AT the entry level (NOT the bar high/low — that floated BUY/SELL off the
+// entry line and stacked them). Le/Se = the level the broker order rests at.
+if just_long
+    label.new(bar_index, Le, "BUY",  yloc=yloc.price, style=label.style_triangleup,   color=color.new(color.lime, 0), textcolor=color.white, size=size.tiny)
+if just_short
+    label.new(bar_index, Se, "SELL", yloc=yloc.price, style=label.style_triangledown, color=color.new(color.red, 0),  textcolor=color.white, size=size.tiny)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(eval_block and not eval_passed ? color.new(color.red, 82) : na)
 bgcolor(eval_passed ? color.new(color.green, 88) : na)
@@ -533,7 +559,7 @@ if barstate.islast and show_dash
     table.cell(t,0,2,"Status", text_color=color.silver, text_size=size.tiny)
     table.cell(t,1,2, st, text_color=stc, text_size=size.tiny)
     table.cell(t,0,3,"Trend gate", text_color=color.silver, text_size=size.tiny)
-    table.cell(t,1,3, use_struct ? "STRUCT: " + f_st(st_state) : "EMA: " + (trend_up ? "UP" : trend_down ? "DOWN" : "flat"), text_color=eff_up ? color.lime : eff_down ? color.red : color.gray, text_size=size.tiny)
+    table.cell(t,1,3, gate_off ? "OFF (plain ORB)" : use_struct ? "STRUCT: " + f_st(st_state) : "EMA: " + (trend_up ? "UP" : trend_down ? "DOWN" : "flat"), text_color=gate_off ? color.silver : eff_up ? color.lime : eff_down ? color.red : color.gray, text_size=size.tiny)
     table.cell(t,0,4,"Stop", text_color=color.silver, text_size=size.tiny)
     table.cell(t,1,4, (stop_mode == "Structure swing (HH/HL)" ? "structure swing" : "OR edge"), text_color=color.red, text_size=size.tiny)
     table.cell(t,0,5,"Exit", text_color=color.silver, text_size=size.tiny)

@@ -2,3 +2,6 @@ pandas>=2.0
 numpy>=1.24
 duckdb>=0.10
 pyarrow>=14
+# BOT data + execution (only needed for the bot; engine/research run without these)
+databento>=0.40   # Databento API puller (historical + live). Local D: files read via duckdb, no key needed.
+alpaca-py>=0.20    # Alpaca equity + options execution (paper first)

@@ -32,15 +32,23 @@ auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip=
 allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
             tooltip="OFF = one signal per side per day (validated default). ON = re-arm when price falls back inside the OR; capped by Max entries.")
 max_entries  = input.int(2, "Max entries per side / day", group="ORB", minval=1)
+brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="F59: a FILL needs a FULL-BODY close beyond the OR high (long) / OR low (short), not a wick touch. Default close-confirm (validated F59, in lockstep with STACK). 'Wick / touch' = the resting-stop entry.")
+strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body |close−open| ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b, best on NQ/QQQ; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level.")
+wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="F59c (user rule): don't fire on the breakout candle — WAIT for the NEXT candle to CONTINUE the trend (higher close long / lower close short), then fill. Stops 'fired into a reversal' entries. Validated: improves QQQ/SPY, ~neutral NQ. Default ON, in lockstep with STACK.")
 // ───────────────────────── STRUCTURE GATE (stack engine) ─────────────────────────
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
-             options=["Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"])
+             options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
+             tooltip="USER FILL RULE: entries fire only DURING A CLEAR TREND (long = structure UPtrend ≤5m / EMA-up ≥15m; short the mirror). Default ON (Auto), in lockstep with STACK. NOTE F58: the gate doesn't ADD expectancy net of honest fills — it's the entry SETUP (clean-trend breakouts only). 'Off — plain ORB' trades every breakout.")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
 // ───────────────────────── VWAP CAP ─────────────────────────
-cap_on = input.bool(true, "VWAP-extension cap", group="VWAP cap")
+cap_on = input.bool(false, "VWAP-extension cap", group="VWAP cap", tooltip="F58: the cap HURTS honest fills (removes the late-momentum winners, F57). Default OFF, in lockstep with STACK.")
 cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
 // ───────────────────────── REGIME ─────────────────────────
 local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
@@ -137,9 +145,10 @@ if st_prev == 2 and not na(ph_last) and close > ph_last and close[1] <= ph_last
     st_state := 0
 if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
     st_state := 0
+bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = use_struct ? (st_state == 1) : trend_up
-bool eff_down = use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -237,8 +246,17 @@ if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < 
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
     traded_s := false
-bool sig_l = window and not traded_l and gate_long  and high >= Le
-bool sig_s = window and not traded_s and gate_short and low  <= Se
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"          // F59: full-body STRONG close beyond the level
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
+bool qual_l = close >= Le and close > open and body_strong
+bool qual_s = close <= Se and close < open and body_strong
+bool brk_l = conf_close ? (wait_ft ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le   // F59c: fire on the next-candle continuation
+bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
+bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire while close>close[1]>close[2] (long) / mirror (short) — price is actually moving the trade direction. Graduate on the touch fill (NQ +0.151->+0.261R, QQQ +0.448, SPY +0.383), ~neutral on close-confirm. Default ON.")
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+bool sig_l = window and not traded_l and gate_long  and brk_l and seq_l
+bool sig_s = window and not traded_s and gate_short and brk_s and seq_s
 bool long_fire  = sig_l and cap_long_ok
 bool short_fire = sig_s and cap_short_ok
 bool long_skip  = sig_l and not cap_long_ok
@@ -337,7 +355,7 @@ f_strike_n(e, isl, n) =>
 int sel_n = strike_sel == "2 ITM" ? 2 : strike_sel == "1 ITM" ? 1 : strike_sel == "1 OTM" ? -1 : strike_sel == "2 OTM" ? -2 : 0
 // display side: a LIVE trade first, else the structure-aligned side
 bool have = or_set and not na(Le) and not na(Se)
-int dside = in_long ? 1 : in_short ? -1 : traded_l ? 1 : traded_s ? -1 : eff_up ? 1 : eff_down ? -1 : 0
+int dside = in_long ? 1 : in_short ? -1 : traded_l ? 1 : traded_s ? -1 : gate_off ? 0 : eff_up ? 1 : eff_down ? -1 : 0   // F58: gate off ⇒ no forced bias when flat (wait for the actual breakout side)
 bool islong = dside == 1
 bool shc = dside != 0 and have
 float e_  = islong ? Le : Se
@@ -412,7 +430,7 @@ string st = not sym_ok ? "⚠ use SPY or QQQ (scope for now)" :
      (traded_l or traded_s) ? "done for today (signal used)" :
      not wkday ? "off-session" :
      not window ? "window closed — no entry today" :
-     dside == 0 ? (use_struct ? "waiting: no HH/HL structure" : "waiting: trend flat") :
+     dside == 0 ? (gate_off ? "waiting: no breakout yet" : use_struct ? "waiting: no HH/HL structure" : "waiting: trend flat") :
      not gated ? "blocked: regime " + regime + (not side_macro ? " + SPY stand-down" : "") :
      not (islong ? cap_long_ok : cap_short_ok) ? "EXT ⚠ beyond VWAP cap — stand down" :
      "ARMED — fires on a touch of " + f_px(e_)
@@ -428,12 +446,20 @@ plot(show_levels and l_live ? Lt1 : na, "Long TP1 (debit cap)",  color=color.new
 plot(show_levels and s_live ? St1 : na, "Short TP1 (debit cap)", color=color.new(color.green, 10), style=plot.style_linebr)
 plot(show_levels and l_live ? Lt2 : na, "Long TP2",  color=color.new(color.green, 45), style=plot.style_linebr)
 plot(show_levels and s_live ? St2 : na, "Short TP2", color=color.new(color.green, 45), style=plot.style_linebr)
-plotshape(long_fire,  "Long fire",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="CALL", textcolor=color.white, size=size.tiny)
-plotshape(short_fire, "Short fire", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="PUT",  textcolor=color.white, size=size.tiny)
-plotshape(long_skip,  "Long capped",  shape.xcross, location.belowbar, color.new(color.gray, 0), text="EXT", textcolor=color.gray, size=size.tiny)
-plotshape(short_skip, "Short capped", shape.xcross, location.abovebar, color.new(color.gray, 0), text="EXT", textcolor=color.gray, size=size.tiny)
-plotshape(exit_l, "Exit long",  shape.square, location.abovebar, color.new(color.orange, 0), text="EXIT", textcolor=color.white, size=size.tiny)
-plotshape(exit_s, "Exit short", shape.square, location.belowbar, color.new(color.orange, 0), text="EXIT", textcolor=color.white, size=size.tiny)
+// markers anchored AT the entry level / exit price (NOT the bar high/low — that floated them
+// off the lines and stacked CALL/PUT visually). Le/Se = the breakout entry the option translates.
+if long_fire
+    label.new(bar_index, Le, "CALL", yloc=yloc.price, style=label.style_triangleup,   color=color.new(color.lime, 0), textcolor=color.white, size=size.tiny)
+if short_fire
+    label.new(bar_index, Se, "PUT",  yloc=yloc.price, style=label.style_triangledown, color=color.new(color.red, 0),  textcolor=color.white, size=size.tiny)
+if long_skip
+    label.new(bar_index, Le, "EXT", yloc=yloc.price, style=label.style_xcross, color=color.new(color.gray, 0), textcolor=color.gray, size=size.tiny)
+if short_skip
+    label.new(bar_index, Se, "EXT", yloc=yloc.price, style=label.style_xcross, color=color.new(color.gray, 0), textcolor=color.gray, size=size.tiny)
+if exit_l
+    label.new(bar_index, close, "EXIT", yloc=yloc.price, style=label.style_square, color=color.new(color.orange, 0), textcolor=color.white, size=size.tiny)
+if exit_s
+    label.new(bar_index, close, "EXIT", yloc=yloc.price, style=label.style_square, color=color.new(color.orange, 0), textcolor=color.white, size=size.tiny)
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 f_setlbl(lbl, cond, price, txt, col) =>
     label out = lbl
