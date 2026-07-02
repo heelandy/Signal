@@ -57,6 +57,13 @@ def asset_config(symbol: str) -> Asset:
     return ASSETS.get(symbol.upper(), DEFAULT)
 
 
+def struct_lb(symbol: str) -> int:
+    """Structure pivot lookback per instrument (fast-direction study 2026-07): futures use lb=3 — the faster
+    swing keeps the FULL structure edge (NQ +0.285 vs +0.290 at lb5) while catching MORE + EARLIER breakouts;
+    equity uses lb=5 (QQQ needs it — lb=3 fails its gauntlet; SPY ~tied). Mirrors the Pine auto_lb toggle."""
+    return 3 if asset_config(symbol).is_futures else 5
+
+
 if __name__ == "__main__":
     for s in ("NQ", "QQQ", "SPY", "GC", "TSLA"):
         a = asset_config(s)

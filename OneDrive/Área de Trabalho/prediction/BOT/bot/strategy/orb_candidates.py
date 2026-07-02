@@ -51,7 +51,8 @@ def load_state(sym: str = "QQQ", tf: str = "5m", sess: str = "rth"):
         con = hs_db.connect()
         bars = B._externals(con, hs_db.bars(con, tf, sess, sym=sym), sym)
         con.close()
-    d = H.compute_state(bars, H.P())
+    from bot.strategy.asset_config import struct_lb
+    d = H.compute_state(bars, H.P(struct_lb_fix=struct_lb(sym)))   # futures lb=3 / equity lb=5
     d.attrs["sym"] = sym
     d["trend_up"] = True
     d["trend_down"] = True                       # F58 plain-ORB gate (shipped default)

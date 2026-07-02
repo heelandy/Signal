@@ -5,6 +5,29 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-02 — Fast-direction study: auto structure speed (lb 3/5) + OR-mid chart line, all 5 Pine + BOT
+
+⚠️ Needs a **TradingView compile-check** on all 5 (mechanical edits; `var bool or_bull = na` bool-na fix already applied).
+
+Direction-hunt CONVERGENCE (see `memory/highstrike-fast-direction.md`): ~33 direction/prediction detectors tested
+(momentum, OLS/robust/Kalman slope, persistence±ε, efficiency, Hurst, HH/HL, CUSUM, Mann–Kendall, t-significance,
+regime-z, EHMA, Markov, microprice, lead-lag, XGBoost/LightGBM/NN/HMM) — **ALL redundant, curve-fit-inconsistent,
+or worse-than-follow.** The corrected F58: the confirmed HH/HL structure gate ~DOUBLES exp (trending-day selection)
+and no fast/predictive read replaces it — direction is FOLLOWABLE, not forecastable. Propagated the two validated
+outputs:
+- **Auto structure speed** — `auto_lb` toggle + `int eff_lb = futures 3 / equity 5`, pivots use `eff_lb`. NQ keeps
+  the full edge at lb=3 with more + EARLIER breakout entries (catches the move sooner); QQQ needs lb=5 (lb=3 fails
+  its gauntlet); SPY ~tied. All 5 Pine + BOT (`asset_config.struct_lb()`, wired into `families.prepare` +
+  `orb_candidates.load_state`). BOT smoke-tested (NQ/ES/GC=3, QQQ/SPY=5).
+- **OR-mid equilibrium line** on the chart (all 5 Pine), colored lime/red by which half the OR closed in (the
+  premium/discount bias axis) — per user request to SEE OR-mid on the chart. Plus STACK dashboard visibility:
+  per-side block reasons (`WAIT · OR-mid: short day` / `narrow OR` / `trend gate`…), a `DIR·fast` row (OR-mid +
+  VWAP + 12-bar regression slope = continuous awareness read), grade `—` when a side is directionally blocked.
+
+FILL-MODE finding (`research/orb_fillmode.py`, NOT auto-applied): **stop-entry ≥ close-confirm everywhere**, decisive
+on equities (QQQ +0.214→+0.473, SPY +0.553→+0.718), ~tied on NQ; retest dead. Close-confirm (user's strong-body
+spec) is free on NQ but costs ~0.16-0.26R on QQQ/SPY → consider defaulting OPTIONS to stop-entry (`brk_confirm` toggle, user's call).
+
 ## 2026-07-01 — OR-mid BIAS (graduated) + asset-aware max-stop propagated to ALL 5 Pine + BOT
 
 ⚠️ Needs a **TradingView compile-check** on INDICATOR / STRATEGY / OPTIONS / AUTO (STACK already checked).

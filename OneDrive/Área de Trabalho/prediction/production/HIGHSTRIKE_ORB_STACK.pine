@@ -64,8 +64,9 @@ dir_seq      = input.bool(true, "Direction sequence (price must be pushing the t
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
              tooltip="KEEP ON — Auto (2026-07 fast-direction study, corrects F58): the confirmed HH/HL swing-structure gate ROUGHLY DOUBLES expectancy by selecting trending days (RTH NQ +0.16->+0.29, QQQ +0.26->+0.46, SPY +0.37->+0.56 R, CIlo up on all) and NO fast price-derived read replaces it — VWAP-side, EMA-slope, 2-bar momentum AND a rolling price-array regression slope ALL land on plain-ORB (they show where price WAS, not where it's GOING). The edge costs latency: structure confirms ~50-60 min after the OR. Tune the speed/edge tradeoff with the pivot lookback below (lb=3 keeps NQ's full edge with more/earlier entries). 'Off' trades every breakout (OR-mid + dir-seq still gate direction) but gives up ~0.13-0.20R. The DIR·fast dashboard row is the early AWARENESS read; THIS gate is the confirmed EDGE.")
-struct_lb  = input.int(3, "Structure pivot lookback (L=R)", group="Structure gate", minval=2,
-            tooltip="FASTER STRUCTURE (2026-07, per user): lower = pivots confirm in fewer bars (a swing is confirmed L bars after it forms). Reduced 5->3 so st_state / BOS flip sooner — the swing gate was too slow to confirm a fresh breakout's direction (lb=5 on 5m = 25 min of lag; lb=3 = 15 min; lb=2 = fastest/noisiest). Direction speed matters more than pivot purity here.")
+struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
+auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="FASTER STRUCTURE (2026-07 fast-direction study): NQ/futures keep the FULL structure edge at lb=3 (pivots confirm 2 bars sooner = MORE + EARLIER breakout entries, same exp on NQ); QQQ needs lb=5 (lb=3 fails its gauntlet); SPY ~tied. ON = futures 3 / equity 5. OFF = the manual value above for every instrument.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 ormid_bias = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate",
             tooltip="GRADUATED (2026-07): a 2nd DIRECTIONAL filter on top of the trend gate — the OPENING RANGE sets the day's bias: if the OR CLOSED in its UPPER half (close > OR mid) the day is biased LONG so SHORTS are blocked; lower half = biased SHORT so LONGS blocked. ADDITIVE + robust: bias-aligned lifts exp NQ +0.169->+0.290, QQQ +0.392->+0.478, SPY +0.351->+0.563 (all PASS the gauntlet); the DROPPED counter-bias trades are the LOSERS (NQ -0.10, SPY -0.05, ES -0.14); survives 2x/3x slip. Fixes NQ year-consistency (10/17->13/17). Turn OFF to trade both breakouts regardless of the OR's bias.")
@@ -167,8 +168,8 @@ int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 
 // ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
-float ph = ta.pivothigh(high, struct_lb, struct_lb)
-float pl = ta.pivotlow(low,  struct_lb, struct_lb)
+float ph = ta.pivothigh(high, eff_lb, eff_lb)
+float pl = ta.pivotlow(low,  eff_lb, eff_lb)
 var float ph_last = na
 var float ph_prev = na
 var float pl_last = na
@@ -582,6 +583,8 @@ f_grade(trendok, gateok, capok, volexp) => not trendok ? "—" : not capok ? "C"
 // ───────────────────────── PLOTS ─────────────────────────
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+// OR-mid (equilibrium / premium-discount line) — the OR-mid bias axis, colored by which half the OR closed in
+plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
 plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 // dimmed entry levels while a gate BLOCKS the side (would NOT fire on a touch — see dashboard "Gated"/"Trend gate")

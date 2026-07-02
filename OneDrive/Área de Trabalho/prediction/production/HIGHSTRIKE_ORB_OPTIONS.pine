@@ -32,9 +32,9 @@ auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip=
 allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
             tooltip="OFF = one signal per side per day (validated default). ON = re-arm when price falls back inside the OR; capped by Max entries.")
 max_entries  = input.int(2, "Max entries per side / day", group="ORB", minval=1)
-brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+brk_confirm  = input.string("Wick / touch (resting stop)", "Breakout fill", group="ORB",
             options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
-            tooltip="F59: a FILL needs a FULL-BODY close beyond the OR high (long) / OR low (short), not a wick touch. Default close-confirm (validated F59, in lockstep with STACK). 'Wick / touch' = the resting-stop entry.")
+            tooltip="DEFAULT STOP-ENTRY (2026-07 fill-mode study): on the EQUITY surface this file trades (SPY/QQQ), a resting STOP at the level clearly beats waiting for the candle close — QQQ +0.214(fail)->+0.473(pass), SPY +0.553->+0.718. 'Candle close beyond level' = the full-body close-confirm (the STACK/NQ default; on NQ the two are ~tied so it's a preference there, but on equities it costs ~0.16-0.26R). 'Wick / touch' fills intrabar the instant price tags the level (earlier).")
 strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
             tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body |close−open| ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b, best on NQ/QQQ; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level.")
 wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
@@ -43,7 +43,9 @@ wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle con
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
              tooltip="USER FILL RULE: entries fire only DURING A CLEAR TREND (long = structure UPtrend ≤5m / EMA-up ≥15m; short the mirror). Default ON (Auto), in lockstep with STACK. NOTE F58: the gate doesn't ADD expectancy net of honest fills — it's the entry SETUP (clean-trend breakouts only). 'Off — plain ORB' trades every breakout.")
-struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
+struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
+auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="Fast-direction study (2026-07): NQ/futures keep the FULL structure edge at lb=3 with MORE + EARLIER breakout entries; QQQ needs lb=5 (SPY/QQQ = equity 5). ON = futures 3 / equity 5. Matches HIGHSTRIKE_ORB_STACK.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
@@ -118,8 +120,8 @@ int trade_end = (trade_end_hhmm / 100) * 60 + (trade_end_hhmm % 100)
 bool sym_ok = syminfo.ticker == "SPY" or syminfo.ticker == "QQQ"
 
 // ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
-float ph = ta.pivothigh(high, struct_lb, struct_lb)
-float pl = ta.pivotlow(low,  struct_lb, struct_lb)
+float ph = ta.pivothigh(high, eff_lb, eff_lb)
+float pl = ta.pivotlow(low,  eff_lb, eff_lb)
 var float ph_last = na
 var float ph_prev = na
 var float pl_last = na
@@ -446,6 +448,7 @@ string st = not sym_ok ? "⚠ use SPY or QQQ (scope for now)" :
 // ───────────────────────── VISUALS ─────────────────────────
 plot(show_levels and or_set ? or_high : na, "OR high", color=color.new(color.aqua, 70),   style=plot.style_linebr)
 plot(show_levels and or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 70), style=plot.style_linebr)
+plot(show_levels and or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
 plot(show_levels and l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(show_levels and s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(show_levels and l_live ? l_stop_now : na, "Long stop",  color=color.new(color.red, 25),  style=plot.style_linebr)

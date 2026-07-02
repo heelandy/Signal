@@ -59,7 +59,9 @@ float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max
 ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate", tooltip="GRADUATED (2026-07): OR closed UPPER half = biased LONG (block shorts); lower half = biased SHORT (block longs). ADDITIVE (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers. Matches HIGHSTRIKE_ORB_STACK.")
 stop_mode = input.string("OR edge", "Stop placement", group="Risk plan", options=["OR edge", "Structure swing (HH/HL)"],
             tooltip="Default 'OR edge' = validated production. 'Structure swing' rests the stop at the last HH/HL swing (research F25b: ~half the risk, higher R, walk-forward-validated on the structure stack) — opt-in.")
-struct_lb = input.int(5, "Structure swing lookback (L=R)", group="Risk plan", minval=2)
+struct_lb = input.int(5, "Structure swing lookback (L=R, manual)", group="Risk plan", minval=2)
+auto_lb   = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Risk plan", tooltip="Fast-direction study (2026-07): futures use lb=3 (faster swing), equity lb=5. Feeds the optional structure-anchored stop. Matches HIGHSTRIKE_ORB_STACK.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
 tp1_rr      = input.float(1.0, "TP1 R", group="Risk plan", step=0.25)
 tp2_rr      = input.float(4.0, "TP2 R", group="Risk plan", step=0.25)
 exit_mode = input.string("Scale to TP", "Exit", group="Risk plan", options=["Scale to TP", "Trail (ATR chandelier)"],
@@ -164,8 +166,8 @@ if not in_or and not na(or_high)
 // resting-stop entry levels + full trade plan frozen at OR close; FILL = price TOUCHES the level
 float brk_buf = atr14 * eff_brk
 // last confirmed HH/HL swing — for the optional structure-anchored stop (F25b)
-float _ph = ta.pivothigh(high, struct_lb, struct_lb)
-float _pl = ta.pivotlow(low,  struct_lb, struct_lb)
+float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
 var float sw_hi = na
 var float sw_lo = na
 if not na(_ph)
@@ -266,6 +268,7 @@ bool s_live = (window and not traded_s) or in_short
 // ───────────────────────── PLOTS + ALERTS ─────────────────────────
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
 // RESTING ENTRY LEVELS — where the buy-stop / sell-stop is waiting (visible as a price line)
 plot(l_live ? Le : na, "Long entry (buy-stop)",   color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry (sell-stop)", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)

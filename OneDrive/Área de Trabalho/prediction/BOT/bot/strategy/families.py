@@ -53,15 +53,16 @@ FAMILIES = [
 ]
 
 
-def prepare(bars: pd.DataFrame) -> pd.DataFrame:
+def prepare(bars: pd.DataFrame, sym: str = "") -> pd.DataFrame:
     """Router bar frame (ts_et, ohlcv) -> engine harness-state frame."""
     import hs_harness as H
+    from .asset_config import struct_lb
     df = bars.rename(columns={"ts_et": "ts"}).copy()
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     for col in ("open", "high", "low", "close"):
         df[col] = df[col].astype(float)
     df["volume"] = df.get("volume", 0).astype("float64")
-    d = H.compute_state(df, H.P())
+    d = H.compute_state(df, H.P(struct_lb_fix=struct_lb(sym)) if sym else H.P())   # futures lb=3 / equity lb=5
     # live scan has no macro externals — make the gates permissive (breakout core doesn't need them)
     for c, v in {"macro_allow_trades": True, "macro_long_ok": True, "macro_short_ok": True,
                  "local_regime": 0}.items():
@@ -95,7 +96,7 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2) -> list[dict]:
     from bot.contracts import TradeCandidate
     from bot.strategy.asset_config import asset_config
     a = asset_config(symbol)                       # per-asset: entry_delay, OR window, status
-    d = prepare(bars)
+    d = prepare(bars, symbol)                       # futures lb=3 / equity lb=5 structure speed
     n = len(d)
     st = d["st_state"].to_numpy() if "st_state" in d else np.zeros(n)
     atr = d["atr14"].to_numpy()

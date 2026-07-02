@@ -71,7 +71,9 @@ bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * 
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
              tooltip="USER FILL RULE: entries fire only DURING A CLEAR TREND (long = structure UPtrend ≤5m / EMA-up ≥15m; short the mirror). Default ON (Auto), in lockstep with STACK. NOTE F58: the gate doesn't ADD expectancy net of honest fills — it's the entry SETUP (clean-trend breakouts only), not a statistical edge. 'Off — plain ORB' trades every breakout.")
-struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
+struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
+auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="Fast-direction study (2026-07): NQ/futures keep the FULL structure edge at lb=3 with MORE + EARLIER breakout entries; QQQ needs lb=5; SPY ~tied. ON = futures 3 / equity 5. Matches HIGHSTRIKE_ORB_STACK.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
@@ -196,8 +198,8 @@ int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 
 // ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
-float ph = ta.pivothigh(high, struct_lb, struct_lb)
-float pl = ta.pivotlow(low,  struct_lb, struct_lb)
+float ph = ta.pivothigh(high, eff_lb, eff_lb)
+float pl = ta.pivotlow(low,  eff_lb, eff_lb)
 var float ph_last = na
 var float ph_prev = na
 var float pl_last = na
@@ -508,6 +510,7 @@ float l_stop_now = strategy.position_size > 0 ? t_sl : Ls
 float s_stop_now = strategy.position_size < 0 ? t_sl : Ss
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
 plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 // dimmed entry levels while a gate BLOCKS the side (no order resting there)
