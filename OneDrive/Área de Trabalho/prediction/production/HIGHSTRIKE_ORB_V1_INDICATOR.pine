@@ -183,6 +183,13 @@ var bool  traded_s = false
 var bool  armed_l = true
 var bool  armed_s = true
 var int   day_n = 0
+// ORB ZONE STATE MACHINE (staleness fix 2026-07, lockstep w/ STACK/AUTO/OPTIONS/V1_STRATEGY):
+// pending side hard-invalidated on a confirmed close beyond the OPPOSITE OR edge / pre-entry stop
+// tag; WATCH on the wrong side of OR mid; re-arm only after the breakout edge is RECLAIMED.
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false
+var bool s_above_mid = false
 if new_day
     Le := na
     Ls := na
@@ -193,6 +200,10 @@ if new_day
     armed_l := true
     armed_s := true
     day_n := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     float aL = (stop_mode == "Structure swing (HH/HL)" and not na(sw_lo)) ? sw_lo : or_low
     float aS = (stop_mode == "Structure swing (HH/HL)" and not na(sw_hi)) ? sw_hi : or_high
@@ -212,8 +223,20 @@ if reentry and not na(or_high) and close < or_high
     armed_l := true
 if reentry and not na(or_low) and close > or_low
     armed_s := true
-bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
-bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
+// ── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short; pending sides only) ──
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    l_below_mid := close < or_mid
+    s_above_mid := close > or_mid
+    if not traded_l and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true
+    else if l_invalid and close > or_high
+        l_invalid := false
+    if not traded_s and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true
+    else if s_invalid and close < or_low
+        s_invalid := false
+bool ok_l = (reentry ? (armed_l and day_n < max_entries) : not traded_l) and not l_invalid and not l_below_mid
+bool ok_s = (reentry ? (armed_s and day_n < max_entries) : not traded_s) and not s_invalid and not s_above_mid
 bool conf_close = brk_confirm == "Candle close beyond level (full body)"          // F59: full-body STRONG close beyond the level
 bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
 bool qual_l = close >= Le and close > open and body_strong
@@ -223,8 +246,10 @@ bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) 
 bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
 bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
 bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
-bool long_fire  = window and ok_l and gate_long  and brk_l and seq_l
-bool short_fire = window and ok_s and gate_short and brk_s and seq_s
+// LIVE==BACKTEST (HS-H4 parity w/ STACK): close-confirm signals latch only on the CONFIRMED bar
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+bool long_fire  = window and ok_l and gate_long  and brk_l and seq_l and cc_bar_ok
+bool short_fire = window and ok_s and gate_short and brk_s and seq_s and cc_bar_ok
 if long_fire
     traded_l := true
     armed_l := false

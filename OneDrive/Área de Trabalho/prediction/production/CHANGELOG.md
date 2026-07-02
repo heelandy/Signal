@@ -5,6 +5,38 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-02 — Zone state machine + 1-minute direction feed, ALL 5 production Pine + BOT (staleness fix)
+
+⚠️ Needs a **TradingView compile-check** on all 5 + a forward session before sizing (mechanical, mirrored edits).
+
+Fixes the state-staleness bug (dashboard showed LONG ARMED @730 with price at 719, below the OR low
+and the proposed stop) and the "5m structure says Bullish while price dumped" lag. Propagated per the
+all-scripts-consistency rule to STACK, AUTO, OPTIONS, V1_STRATEGY, V1_INDICATOR + the BOT engine:
+
+* **ORB zone state machine** (mirrored long/short, confirmed closes only): pending side HARD-
+  INVALIDATED on a confirmed close beyond the OPPOSITE OR edge or a pre-entry tag of its own stop
+  (entry/stop/TP cleared; resting orders cancelled via strategy.cancel in the strategies); WATCH
+  (order pulled) on the wrong side of OR mid; re-arm only after the breakout edge is RECLAIMED on a
+  confirmed close + a completely new confirmation (hysteresis). STACK shows INVALID/WATCH states.
+* **1-minute direction feed** (`fast_dir`, default ON; STACK/AUTO/OPTIONS/V1_STRATEGY — V1_INDICATOR
+  has no structure gate): the identical swing machine runs in the 1m context via request.security
+  (lookahead_off) — the trend gate + DIR-fast Struct/Slope arrows flip at 1m speed on ANY chart TF,
+  each context keeping its own auto pivot lookback (futures 3 / equity 5 = 3-5 MINUTE confirms).
+  Stop anchors stay on chart-TF swings. STACK DIR-fast OR arrow now shows the LIVE zone, not the
+  frozen 10:00 day bias. OPTIONS + V1_INDICATOR also gained the HS-H4 confirmed-bar close-confirm
+  gate they were missing (parity with STACK/AUTO).
+* **Entries cap 0 = UNLIMITED** (STACK manual mode + AUTO) per user; the state machine still forces
+  a fresh confirmed break per entry and hard-blocks an INVALID side.
+* **BOT**: `bot/strategy/orb_state.py` (mirrored FSM + ER/persistence/slope math), proposals carry
+  `or_high/or_low`, `signal_state` (active|watch|invalid) and `dir_fast` votes; paper autotrade +
+  shadow tracker skip invalid signals; `families.scan(bars_1m=…)` aligns the 1m st_state causally
+  onto the 5m frame (Python twin of the fast feed) for the gate + grade. 65/65 tests pass
+  (mirror-symmetry, invalidation tables, causality of the 1m alignment, flip-speed timing).
+* ⚠ VALIDATION: the 1m-fed trend gate is a behavior change vs the chart-TF backtest — run the
+  gauntlet (gate = st_state on 1m bars) + forward-paper before sizing; `fast_dir` OFF reverts.
+
+---
+
 ## 2026-07-02 — Fast-direction study: auto structure speed (lb 3/5) + OR-mid chart line, all 5 Pine + BOT
 
 ⚠️ Needs a **TradingView compile-check** on all 5 (mechanical edits; `var bool or_bull = na` bool-na fix already applied).

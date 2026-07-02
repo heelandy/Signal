@@ -109,22 +109,22 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
         # 1-MINUTE DIRECTION FEED (staleness fix 2026-07, mirrors the Pine fast_dir input): structure
         # + slope + vwap computed on 1m bars so the direction read flips at 1m speed regardless of the
         # 5m signal timeframe. Best-effort: a failed 1m fetch just leaves dir_fast unavailable.
-        _df_ctx = None
+        _df_ctx, b1 = None, None
         try:
-            b1 = get_bars(sym, "1m", period="1d", provider=provider)
+            b1 = get_bars(sym, "1m", period="2d", provider=provider)
             if len(b1) >= 30:
                 d1 = families.prepare(b1, sym)                        # same engine machine, 1m context
                 _df_ctx = (d1["close"].to_numpy(float),
                            float(d1["vwap_sess"].iloc[-1]) if "vwap_sess" in d1 else None,
                            int(d1["st_state"].iloc[-1]) if "st_state" in d1 else None)
         except Exception:
-            _df_ctx = None
+            _df_ctx, b1 = None, None
         # IV estimate from realized vol (5m log-returns annualized) so options price WITHOUT manual input
         import numpy as _np
         _cl = bars["close"].to_numpy(float)[-120:]
         _ret = _np.diff(_np.log(_cl)) if len(_cl) > 6 else _np.array([0.0])
         iv_est = round(float(_np.clip(_np.std(_ret) * (252 * 78) ** 0.5, 0.10, 0.80)), 3) if len(_ret) > 5 else 0.20
-        for s in families.scan(bars, sym, bars_back=bars_back):
+        for s in families.scan(bars, sym, bars_back=bars_back, bars_1m=b1):   # 1m feed -> gate + grade at 1m speed
             c = s["candidate"]
             conf = predict_candidate(c)                       # PREDICTIVE: P(win) from the champion (or prior)
             flow = orderflow_confirm(c)                       # order-flow confirmation (book-level; "no feed" live)

@@ -46,6 +46,8 @@ trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", gro
 struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
 auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="Fast-direction study (2026-07): NQ/futures keep the FULL structure edge at lb=3 with MORE + EARLIER breakout entries; QQQ needs lb=5 (SPY/QQQ = equity 5). ON = futures 3 / equity 5. Matches HIGHSTRIKE_ORB_STACK.")
 int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
+fast_dir   = input.bool(true, "1-MINUTE direction feed (structure at 1m speed on ANY chart TF)", group="Structure gate",
+             tooltip="STALENESS FIX (user 2026-07, matches HIGHSTRIKE_ORB_STACK/AUTO): the trend-gate st_state is computed from 1-MINUTE bars via request.security, so every chart timeframe flips direction as fast as the 1m chart (pivots confirm in eff_lb MINUTES, not eff_lb chart bars). Stop anchors stay on the chart-TF swings. No-op on a 1m chart.")
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
 trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
@@ -150,10 +152,46 @@ if st_prev == 2 and not na(ph_last) and close > ph_last and close[1] <= ph_last
     st_state := 0
 if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
     st_state := 0
+// 1-MINUTE DIRECTION FEED (fast_dir — same swing machine, 1m context; lockstep w/ STACK/AUTO)
+f_struct_1m() =>
+    float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+    float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
+    var float _phL = na
+    var float _phP = na
+    var float _plL = na
+    var float _plP = na
+    var int _st = 0
+    int _stp = _st
+    if not na(_ph)
+        if na(_phL) or math.abs(_ph - _phL) / _phL * 100.0 >= struct_tol
+            _phP := _phL
+            _phL := _ph
+    if not na(_pl)
+        if na(_plL) or math.abs(_pl - _plL) / _plL * 100.0 >= struct_tol
+            _plP := _plL
+            _plL := _pl
+    bool _hh = not na(_phL) and not na(_phP) and _phL > _phP
+    bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
+    bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
+    bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
+    if _hh and _hl
+        _st := 1
+    else if _ll and _lh
+        _st := 2
+    else if (_hh and _ll) or (_hl and _lh)
+        _st := 3
+    if _stp == 2 and not na(_phL) and close > _phL and close[1] <= _phL
+        _st := 0
+    if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
+        _st := 0
+    _st
+int st_1m = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+bool use_fast_dir = fast_dir and tf_s > 60
+int st_dir = use_fast_dir ? st_1m : st_state                      // DIRECTION state at 1m speed (stops stay chart-TF)
 bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
-bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_dir == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_dir == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -218,6 +256,13 @@ var bool  traded_l = false
 var bool  traded_s = false
 var int   n_l = 0
 var int   n_s = 0
+// ORB ZONE STATE MACHINE (staleness fix 2026-07, lockstep w/ STACK/AUTO): pending side hard-
+// invalidated on a confirmed close beyond the OPPOSITE OR edge / pre-entry stop tag; WATCH below
+// (long) / above (short) the OR mid; re-arm only after the breakout edge is RECLAIMED (confirmed).
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false
+var bool s_above_mid = false
 if new_day
     Le := na
     Se := na
@@ -225,6 +270,10 @@ if new_day
     traded_s := false
     n_l := 0
     n_s := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     Le := or_high + brk_buf
     Se := or_low  - brk_buf
@@ -249,6 +298,18 @@ float extL = na(Le) ? na : (Le - vwap_c) / atr14
 float extS = na(Se) ? na : (vwap_c - Se) / atr14
 bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
 bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
+// ── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ──
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    l_below_mid := close < or_mid
+    s_above_mid := close > or_mid
+    if not in_long and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true
+    else if l_invalid and close > or_high
+        l_invalid := false
+    if not in_short and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true
+    else if s_invalid and close < or_low
+        s_invalid := false
 bool window = or_set and wkday and o_now < trade_end and not na(Le)
 bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and (not ormid_bias or or_bull)
 bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and (not ormid_bias or or_bull == false)
@@ -265,8 +326,10 @@ bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) 
 bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire while close>close[1]>close[2] (long) / mirror (short) — price is actually moving the trade direction. Graduate on the touch fill (NQ +0.151->+0.261R, QQQ +0.448, SPY +0.383), ~neutral on close-confirm. Default ON.")
 bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
 bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
-bool sig_l = window and not traded_l and gate_long  and brk_l and seq_l
-bool sig_s = window and not traded_s and gate_short and brk_s and seq_s
+// LIVE==BACKTEST (HS-H4 parity w/ STACK): close-confirm signals latch only on the CONFIRMED bar
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+bool sig_l = window and not traded_l and not l_invalid and gate_long  and brk_l and seq_l and cc_bar_ok
+bool sig_s = window and not traded_s and not s_invalid and gate_short and brk_s and seq_s and cc_bar_ok
 bool long_fire  = sig_l and cap_long_ok
 bool short_fire = sig_s and cap_short_ok
 bool long_skip  = sig_l and not cap_long_ok
@@ -332,13 +395,13 @@ if in_short
             stS := "STOP HIT"
 bool exit_l = in_long[1] and not in_long
 bool exit_s = in_short[1] and not in_short
-bool l_live = (window and not traded_l and gate_long) or in_long
-bool s_live = (window and not traded_s and gate_short) or in_short
+bool l_live = (window and not traded_l and not l_invalid and gate_long) or in_long
+bool s_live = (window and not traded_s and not s_invalid and gate_short) or in_short
 float l_stop_now = in_long ? lstop : Ls
 float s_stop_now = in_short ? sstop : Ss
 // flat-side state refresh (final states persist once the side has traded)
-bool armL = window and not traded_l and gate_long and cap_long_ok
-bool armS = window and not traded_s and gate_short and cap_short_ok
+bool armL = window and not traded_l and not l_invalid and gate_long and cap_long_ok
+bool armS = window and not traded_s and not s_invalid and gate_short and cap_short_ok
 if not in_long and not traded_l
     stL := armL ? "ARMED" : "WAIT"
 if not in_short and not traded_s

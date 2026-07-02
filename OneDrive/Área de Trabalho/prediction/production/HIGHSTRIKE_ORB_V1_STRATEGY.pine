@@ -68,6 +68,8 @@ trend_mode = input.string("EMA trend (legacy)", "Trend gate", group="Trend",
 struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Trend", minval=2)
 auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Trend", tooltip="Fast-direction study (2026-07): NQ/futures keep the FULL structure edge at lb=3 with MORE + EARLIER breakout entries; QQQ needs lb=5; SPY ~tied. ON = futures 3 / equity 5. Matches HIGHSTRIKE_ORB_STACK.")
 int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
+fast_dir   = input.bool(true, "1-MINUTE direction feed (structure at 1m speed on ANY chart TF)", group="Trend",
+             tooltip="STALENESS FIX (user 2026-07, matches HIGHSTRIKE_ORB_STACK/AUTO): the structure-gate st_state is computed from 1-MINUTE bars via request.security, so every chart timeframe flips direction as fast as the 1m chart (pivots confirm in eff_lb MINUTES, not eff_lb chart bars). Stop anchors stay on the chart-TF swings. No-op on a 1m chart; only affects the Structure/Auto trend-gate modes.")
 struct_tol = input.float(0.10, "Structure tolerance %", group="Trend", step=0.05)
 cap_on = input.bool(false, "VWAP-extension cap (F16; stack runs ON, k=2)", group="Trend")
 cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="Trend", step=0.25, minval=0.5)
@@ -184,11 +186,47 @@ int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
 int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+// 1-MINUTE DIRECTION FEED (fast_dir — same swing machine, 1m context; lockstep w/ STACK/AUTO)
+f_struct_1m() =>
+    float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+    float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
+    var float _phL = na
+    var float _phP = na
+    var float _plL = na
+    var float _plP = na
+    var int _st = 0
+    int _stp = _st
+    if not na(_ph)
+        if na(_phL) or math.abs(_ph - _phL) / _phL * 100.0 >= struct_tol
+            _phP := _phL
+            _phL := _ph
+    if not na(_pl)
+        if na(_plL) or math.abs(_pl - _plL) / _plL * 100.0 >= struct_tol
+            _plP := _plL
+            _plL := _pl
+    bool _hh = not na(_phL) and not na(_phP) and _phL > _phP
+    bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
+    bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
+    bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
+    if _hh and _hl
+        _st := 1
+    else if _ll and _lh
+        _st := 2
+    else if (_hh and _ll) or (_hl and _lh)
+        _st := 3
+    if _stp == 2 and not na(_phL) and close > _phL and close[1] <= _phL
+        _st := 0
+    if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
+        _st := 0
+    _st
+int st_1m = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+bool use_fast_dir = fast_dir and tf_s > 60
+int st_dir = use_fast_dir ? st_1m : st_state                      // DIRECTION state at 1m speed (stops stay chart-TF)
 // TF-adaptive trend gate (legacy EMA unless the input opts into the structure state)
 bool gate_off   = trend_mode == "Off — plain ORB (F58)"                               // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
-bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_dir == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_dir == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME (ported from V44) ─────────────────────────
 spy_b() =>
@@ -272,6 +310,14 @@ var bool  traded_s = false
 var bool  armed_l = true     // re-entry: armed when price is inside the OR
 var bool  armed_s = true
 var int   day_n = 0          // entries taken today (re-entry cap)
+// ORB ZONE STATE MACHINE (staleness fix 2026-07, lockstep w/ STACK/AUTO): a PENDING side is
+// HARD-INVALIDATED on a confirmed close beyond the OPPOSITE OR edge or a pre-entry tag of its own
+// stop (resting order cancelled, blocked until the breakout edge is RECLAIMED on a confirmed
+// close); a confirmed close on the wrong side of OR mid = WATCH (order pulled until re-cross).
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false
+var bool s_above_mid = false
 if new_day
     Le := na
     Ls := na
@@ -282,6 +328,10 @@ if new_day
     armed_l := true
     armed_s := true
     day_n := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
 if or_set and na(Le) and not na(or_high) and not na(or_low)       // freeze levels at OR close
     Le := or_high + brk_buf
     Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * min_stop_atr)
@@ -310,8 +360,20 @@ if reentry and not na(or_high) and close < or_high
     armed_l := true
 if reentry and not na(or_low) and close > or_low
     armed_s := true
-bool ok_l = reentry ? (armed_l and day_n < max_entries) : not traded_l
-bool ok_s = reentry ? (armed_s and day_n < max_entries) : not traded_s
+// ── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ──
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    l_below_mid := close < or_mid
+    s_above_mid := close > or_mid
+    if strategy.position_size <= 0 and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true
+    else if l_invalid and close > or_high
+        l_invalid := false
+    if strategy.position_size >= 0 and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true
+    else if s_invalid and close < or_low
+        s_invalid := false
+bool ok_l = (reentry ? (armed_l and day_n < max_entries) : not traded_l) and not l_invalid and not l_below_mid
+bool ok_s = (reentry ? (armed_s and day_n < max_entries) : not traded_s) and not s_invalid and not s_above_mid
 
 // ───────────────────────── ARMED pre-alert (heads-up the moment a setup is ready, BEFORE the touch) ─────────────────────────
 bool arm_l = window and ok_l and gate_long  and (Le - Ls > 0)

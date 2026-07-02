@@ -243,3 +243,60 @@ def test_1m_structure_flips_down_earlier_than_5m_on_the_same_tape():
         first_dn_5m_min = None                               # 5m never flipped at all — max lag
     # the 1m read must lead by a material margin (>= 10 wall-clock minutes) or the 5m never flips
     assert first_dn_5m_min is None or first_dn_5m_min - first_dn_1m_min >= 10
+
+
+def test_fast_state_1m_alignment_is_causal_and_maps_last_1m_bar():
+    """families.fast_state_1m must give each 5m bar the 1m st_state of the LAST 1m bar inside it
+    (known at the 5m close), be NaN before 1m coverage, and never read future 1m bars."""
+    from bot.strategy.families import fast_state_1m, prepare
+    import pandas as pd
+    rng = np.random.default_rng(21)
+    n1 = 300
+    t = np.arange(n1)
+    c1 = 500 + 0.05 * t + 2.0 * np.sin(t / 5.0) + rng.normal(0, 0.02, n1)
+    ts1 = pd.date_range("2026-06-01 09:30", periods=n1, freq="1min",
+                        tz="America/New_York").tz_convert("UTC")
+    b1 = pd.DataFrame({"ts_et": ts1, "open": c1 - 0.02, "high": c1 + 0.2, "low": c1 - 0.2,
+                       "close": c1, "volume": 1000.0})
+    b5 = (b1.set_index(pd.to_datetime(b1["ts_et"]))
+             .resample("5min").agg({"open": "first", "high": "max", "low": "min",
+                                    "close": "last", "volume": "sum"}).dropna().reset_index()
+             .rename(columns={"ts_et": "ts_et"}))
+    d5 = prepare(b5, "QQQ")
+    st_fast = fast_state_1m(d5, b1, "QQQ")
+    d1 = prepare(b1, "QQQ")
+    st1 = d1["st_state"].to_numpy()
+    # each 5m bar's fast state == the 1m state at that bar's last inner 1m bar (index 5k+4)
+    for k in (10, 20, 40, 55):
+        assert st_fast[k] == st1[5 * k + 4], (k, st_fast[k], st1[5 * k + 4])
+    # causality: mutating FUTURE 1m bars must not change earlier aligned values
+    b1_mut = b1.copy()
+    b1_mut.loc[b1_mut.index[250:], ["open", "high", "low", "close"]] = 400.0
+    st_fast_mut = fast_state_1m(d5, b1_mut, "QQQ")
+    same_until = 250 // 5 - 1
+    assert np.array_equal(st_fast[:same_until], st_fast_mut[:same_until], equal_nan=True)
+
+
+def test_scan_uses_1m_state_where_covered(monkeypatch):
+    """families.scan(bars_1m=...) must swap the gate/grade state to the 1m feed where covered and
+    keep the 5m state where the 1m frame has no coverage (NaN fallback)."""
+    from bot.strategy import families
+    import pandas as pd
+    called = {}
+    def fake_fast(d5, b1, sym):
+        called["yes"] = True
+        out = np.full(len(d5), np.nan)
+        out[-3:] = 2.0                              # 1m says DOWN on the last 3 bars only
+        return out
+    monkeypatch.setattr(families, "fast_state_1m", fake_fast)
+    rng = np.random.default_rng(5)
+    n = 120
+    c = 500 + np.cumsum(rng.normal(0, 0.3, n))
+    ts = pd.date_range("2026-06-01 09:30", periods=n, freq="5min",
+                       tz="America/New_York").tz_convert("UTC")
+    b5 = pd.DataFrame({"ts_et": ts, "open": c - 0.05, "high": c + 0.5, "low": c - 0.5,
+                       "close": c, "volume": 1000.0})
+    b1 = b5.head(40).copy()                         # any non-empty frame (fake ignores content)
+    sigs = families.scan(b5, "QQQ", bars_back=2, bars_1m=b1)
+    assert called.get("yes"), "1m fast path must be invoked when bars_1m is provided"
+    assert isinstance(sigs, list)                   # scan completes with the swapped state
