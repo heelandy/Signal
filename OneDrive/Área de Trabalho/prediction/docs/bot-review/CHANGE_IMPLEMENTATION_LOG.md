@@ -1,0 +1,179 @@
+# Change Implementation Log — bot review 2026-07-02
+
+All changes on branch `claude/trading-bot-review-pq637q`. Rollback for any single change:
+`git checkout <pre-review-commit> -- <file>`; the whole review reverts with
+`git revert <review commit>`. Finding IDs reference `TRADING_BOT_COMPLETE_REVIEW.md` §19–22.
+
+---
+
+**2026-07-02 · HS-C1 · secrets/logs untracked**
+Files: `BOT/conf/token.txt`, `BOT/webull_data_sdk.log*` (11), `BOT/config/{server.log, server.log.err, s8010.log, server.pid}`, 6× `debug.log`, `.claude/settings.json`, `.gitignore`
+Reason: live Webull access token + runtime logs committed to source control.
+Before: files tracked; any repo reader obtains a live data-API token.
+After: `git rm --cached` (files stay on disk for the local SDK), `.gitignore` gains `*.log`,
+`*.log.*`, `webull_data_sdk.log*`, `BOT/config/server.pid`, `BOT/conf/`, `token.txt`.
+Tests: `git status` confirms untracked; ignore rules verified.
+Result: PASS. Residual: token remains in git history → **rotate in the Webull portal**; consider
+`git filter-repo` before sharing the remote.
+Rollback: `git rm` reversal + delete the .gitignore block (not recommended).
+
+---
+
+**2026-07-02 · HS-C2 · duplicate-order prevention (webhook + manual ticket)**
+File: `BOT/bot/api/server.py`
+Before: each webhook/ticket built `OrderRequest` with a fresh UUID `idempotency_key` → every
+retry/duplicate alert produced a new broker order.
+After: `_already_submitted()` process-level key set (bounded 5,000); webhook keys on payload
+`signalId` (if the Pine sends one) else the candidate's deterministic
+`(symbol|side|setup|session|day)` key; manual tickets key on sha1 of full geometry
+`(symbol|side|entry|stop|qty|day)`; duplicates return `{"action":"duplicate"}` without touching
+the broker; the key is passed as `OrderRequest.idempotency_key` → Alpaca `client_order_id`
+(broker-side dedup across restarts).
+Tests: `test_repeated_webhook_creates_one_order`, `test_manual_ticket_dedup_and_distinct_orders_pass`,
+`test_webhook_bad_token_rejected`, `test_kill_switch_blocks_webhook` — PASS.
+Trading impact: none on first-time orders; retries/dupes are now no-ops.
+Rollback: restore file from parent commit.
+
+---
+
+**2026-07-02 · HS-H1 · stale-data gate enforced on the live scan**
+File: `BOT/bot/live.py`
+Before: `decide(c, Account(equity=equity, source_healthy=True))` — hardcoded healthy.
+After: new `source_health(bars, max_bar_age_min=15)` (market-truth QA + last-bar age vs system
+time, fail-closed on empty/dirty/old); result feeds `Account.source_healthy` so the risk gate
+returns `SOURCE_HEALTH_CRITICAL` on stale feeds; proposals expose `source_healthy`.
+Tests: `test_fresh_feed_is_healthy`, `test_stale_feed_blocks_entries`,
+`test_empty_and_dirty_feeds_fail_closed` — PASS.
+Trading impact: proposals on a stale/dirty feed now show `risk_ok=false` (they previously showed
+approved); intended behavior per the system's own market-truth design.
+Rollback: restore file.
+
+---
+
+**2026-07-02 · HS-H1b · paper autotrade stale-guard**
+File: `BOT/bot/api/server.py` (`_paper_autotrade`)
+Before: paper bracket orders placed for any A+/A/B signal regardless of feed health.
+After: signals with `source_healthy is False` are skipped.
+Tests: covered via `source_health` tests + suite; no order path regression (45/45).
+Rollback: remove the two-line guard.
+
+---
+
+**2026-07-02 · HS-H2 · OMS fill guards**
+File: `BOT/bot/execution/oms.py` (`on_fill`)
+Before: `qty=0` divided into avg-price math; duplicate broker fill events re-applied to the
+position (doubling it); overfill unbounded.
+After: qty ≤ 0 → ERROR event; fills on terminal orders (FILLED/CANCELLED/REJECTED/EXPIRED/ERROR)
+→ ERROR "duplicate/late fill ignored"; overfill clamped to remaining order quantity.
+Tests: `test_oms_rejects_zero_and_negative_fill`, `test_oms_ignores_duplicate_fill_event`,
+`test_oms_clamps_overfill`, `test_oms_partial_fill_updates_quantity_and_avg` — PASS (plus the
+module self-test).
+Rollback: restore file.
+
+---
+
+**2026-07-02 · HS-H3 · constant-time webhook/API token check**
+File: `BOT/bot/api/server.py`
+Before: `p.get("token") != settings.webhook_token` and header `!=` compare.
+After: `bot.security.verify_token` (`hmac.compare_digest`) in both places.
+Tests: `test_webhook_bad_token_rejected` — PASS.
+Rollback: restore file.
+
+---
+
+**2026-07-02 · HS-H4 · Pine close-confirm entries gated on confirmed bars**
+Files: `production/HIGHSTRIKE_ORB_AUTO.pine`, `production/HIGHSTRIKE_ORB_STACK.pine`
+Before: AUTO runs `calc_on_every_tick=true`; close-confirm conditions read `close` and could fire
+mid-bar on the realtime bar (entries/alerts the finished candle never confirms — live ≠ backtest).
+After: `cc_bar_ok = not conf_close or barstate.isconfirmed` added to the AUTO entry condition and
+the STACK signal latch. Historical bars are always confirmed → backtests unchanged; live now fires
+only on the closed candle in close-confirm mode. Wick/touch mode keeps intrabar behavior by design.
+Tests: not compilable here — **action: load both scripts in TradingView (compile check) and
+forward-paper-test**; logic change is minimal and additive.
+Rollback: remove `and cc_bar_ok` + the `cc_bar_ok` line in each file.
+
+---
+
+**2026-07-02 · HS-H6 · auth on control endpoints**
+File: `BOT/bot/api/server.py`
+Before: `/api/control/mode`, `/api/control/paper_autotrade`, `/api/control/kill` unauthenticated
+even with `API_REQUIRE_AUTH=true`.
+After: mode + paper toggle behind `Depends(auth)`; kill **arm** always allowed (emergency stop),
+kill **disarm** token-gated.
+Tests: suite passes with auth disabled default; behavior inspected (auth off by default preserves
+current UX).
+Rollback: restore file.
+
+---
+
+**2026-07-02 · HS-H5 · tracker same-bar conservative outcome**
+File: `BOT/bot/tracker.py` (`_walk`)
+Before: after TP1, a bar containing both the stop and TP2 scored TP2 (+4R, optimistic) — inflated
+the live-vs-backtest scorecard that gates sizing up.
+After: stop checked before TP2 in all states (matches the engine's stop-first convention and the
+documented BACKTEST_REF model).
+Tests: `test_walk_same_bar_stop_and_tp2_after_tp1_scores_stop`,
+`test_walk_same_bar_stop_and_tp1_scores_stop`, `test_walk_clean_tp2_and_zero_risk_guard` — PASS.
+Trading impact: already-recorded outcomes unchanged (DB rows are final once closed); future
+tracked outcomes are equal or more conservative.
+Rollback: restore file.
+
+---
+
+**2026-07-02 · HS-H7/M10 · tracker self-test unpack + missing data dir**
+File: `BOT/bot/tracker.py`
+Before: `out, r = _walk(...)` (4-tuple) crashed the self-test; `_con()` crashed on a fresh
+checkout (`BOT/data/` absent).
+After: 4-value unpack; `DB.parent.mkdir(parents=True, exist_ok=True)`.
+Tests: `python -m bot.tracker` → "tracker OK".
+Rollback: restore file.
+
+---
+
+**2026-07-02 · PERF-1/2/3 · hs_harness optimizations (output-identical)**
+File: `engine/hs_harness.py`
+1. `pivots()` vectorized fast path for constant lookback (rolling max/min both directions; loop
+   kept for the adaptive path). 2. `_macro_regime` per-bar `.iloc` → numpy views. 3.
+   `_zones_sweep_patterns` per-bar `np.max/np.min` slices → precomputed shifted rolling extremes.
+Measurement: see `PERFORMANCE_REPORT.md` (before/after, method).
+Validation: scripted old-vs-new comparison — 30 state columns identical on 3 seeds (n=777, 5000,
+adaptive path) + permanent regression test `test_pivots_fast_path_matches_loop_path`.
+Trade-offs: none functional; +~20 lines.
+Rollback: restore file (behavior identical either way).
+
+---
+
+**2026-07-02 · TESTS · new regression suite**
+File: `BOT/tests/test_review_fixes.py` (new, 24 tests)
+Result: full suite 45 passed / 0 failed (`pytest BOT/tests -q`).
+
+---
+
+**2026-07-02 · HS-H8 · ORB zone state machine (state-staleness fix) + entries-cap 0=unlimited**
+Files: `production/HIGHSTRIKE_ORB_STACK.pine`, `production/HIGHSTRIKE_ORB_AUTO.pine`,
+`BOT/bot/strategy/orb_state.py` (new), `BOT/bot/strategy/families.py`, `BOT/bot/live.py`,
+`BOT/bot/api/server.py`, `BOT/tests/test_orb_state.py` (new, 15 tests)
+Reason: a pending side had NO invalidation path — the dashboard showed "LONG ARMED @ 730.01"
+with price at 719, below the OR low AND below the proposed stop (user screenshot, QQQ 5m).
+Before: pending state persisted regardless of structure break; AUTO's resting order kept resting.
+After (mirrored long/short, confirmed bars only):
+  * HARD INVALIDATE: confirmed close beyond the OPPOSITE OR edge, or the side's proposed stop
+    tagged pre-entry -> entry/stop/TP cleared, resting order cancelled (`strategy.cancel` via the
+    arm condition in AUTO; `pending_cancelled` flag in Python), side blocked.
+  * Reclaim of the breakout edge on a confirmed close -> WAITING; a completely NEW confirmation
+    is required to re-arm (hysteresis — no flip-flop, no same-structure re-arm).
+  * SOFT WATCH: confirmed close on the wrong side of OR mid pulls the pending entry until price
+    re-crosses the mid (fresh break still required).
+  * Dashboard: new INVALID (dark red) / WATCH (orange) states with the reclaim level in the
+    "why" text; entry lines (bright + dim) cleared while INVALID.
+  * Bot: proposals now carry `or_high/or_low` + `signal_state` (active|watch|invalid|unknown);
+    paper autotrade and the shadow tracker skip `invalid` signals.
+  * Entries cap: `0 = UNLIMITED` supported in STACK (manual mode) and AUTO (state machine still
+    forces a fresh confirmed break per entry and hard-blocks an INVALID side).
+  * `bot/strategy/orb_state.py`: mirrored FSM + spec math (Kaufman ER with zero-path guard,
+    noise-thresholded directional persistence, mean-normalized regression slope, zone_of).
+Tests: 15 new (screenshot scenario, stop-tag invalidation, soft-cancel/re-break, hysteresis,
+stop-first same-bar, exact long/short mirror via reflected prices, zones, ER/persistence/slope
+invariants, monotonic sequences, bad-geometry rejection) — suite 60/60 PASS.
+Residual: Pine edits need a TradingView compile + forward check (no compiler here).
+Rollback: restore the four edited files; delete the two new files.

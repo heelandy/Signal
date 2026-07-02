@@ -39,10 +39,27 @@ _REQUIRE_AUTH = os.environ.get("API_REQUIRE_AUTH", "").lower() in ("1", "true", 
 
 
 def auth(x_api_token: str | None = Header(default=None)):
-    """Optional token guard on order-placing endpoints. Off by default (server is localhost-bound);
-    set API_REQUIRE_AUTH=true to enforce — then send header X-API-Token: <WEBHOOK_TOKEN>."""
-    if _REQUIRE_AUTH and x_api_token != settings.webhook_token:
+    """Optional token guard on order-placing + control endpoints. Off by default (server is
+    localhost-bound); set API_REQUIRE_AUTH=true to enforce — header X-API-Token: <WEBHOOK_TOKEN>."""
+    from bot.security import verify_token
+    if _REQUIRE_AUTH and not verify_token(x_api_token):
         raise HTTPException(status_code=401, detail="bad or missing X-API-Token")
+
+
+# DUPLICATE-ORDER GUARD (review 2026-07): one submission per idempotency key per process, and the
+# key rides to the broker as client_order_id so Alpaca dedupes across retries/restarts too.
+_SUBMITTED_KEYS: set[str] = set()
+
+
+def _already_submitted(key: str | None) -> bool:
+    if not key:
+        return False
+    if key in _SUBMITTED_KEYS:
+        return True
+    _SUBMITTED_KEYS.add(key)
+    if len(_SUBMITTED_KEYS) > 5000:                 # bound memory; oldest keys age out wholesale
+        _SUBMITTED_KEYS.clear(); _SUBMITTED_KEYS.add(key)
+    return False
 
 
 def _broker():
@@ -105,6 +122,10 @@ def _paper_autotrade():
         grade = s.get("grade")
         if not s.get("tradeable") or grade not in ("A+", "A", "B"):   # B → A+ (skip C = info-only/unverified)
             continue
+        if s.get("source_healthy") is False:      # STALE-DATA GATE: never place an order off a stale/dirty feed
+            continue
+        if s.get("signal_state") == "invalid":    # ZONE GATE: structure already broke against the signal
+            continue
         # STUDY size = grade-weighted (A+ 1.5x / A 1.0x / B 0.4x); B kept ≥1 (don't skip) to collect its live data
         qty = max(1, round(int(s.get("suggested_qty") or 1) * GRADE_MULT.get(grade, 0.4)))
         key = f"{s['symbol']}:{s['side']}:{s['entry']}:{s.get('session')}"
@@ -133,6 +154,8 @@ def _autotrack_acceptable():
     from bot.tracker import record_decision
     for s in (_latest.get("signals") or []):
         if not s.get("tradeable") or s.get("grade") not in ("A+", "A", "B"):
+            continue
+        if s.get("signal_state") == "invalid":      # ZONE GATE: don't shadow-track a structurally dead signal
             continue
         if (s.get("bars_ago") or 0) < 1:            # BUGFIX: only CONFIRMED bars — never the forming bar whose
             continue                                # close (=entry) drifts each scan and repaints the signal
@@ -478,13 +501,17 @@ def positions():
 
 
 @app.post("/api/control/kill")
-def kill(on: bool = True):
+def kill(on: bool = True, x_api_token: str | None = Header(default=None)):
+    """ACTIVATING the kill switch is always allowed (an emergency stop must never be locked out);
+    DISARMING it goes through the token guard when API_REQUIRE_AUTH is on."""
+    if not on:
+        auth(x_api_token)
     _state["kill_switch"] = bool(on)        # consulted by the orchestrator before any submit
     return {"kill_switch": _state["kill_switch"]}
 
 
 @app.post("/api/control/paper_autotrade")
-def paper_autotrade_toggle(on: int = 0):
+def paper_autotrade_toggle(on: int = 0, _=Depends(auth)):
     """STUDY toggle: when ON, the bot auto-places PAPER bracket orders on Alpaca for A+/A equity
     signals (grade-sized). PAPER ACCOUNT ONLY (hardcoded paper=True) — it can NEVER place a live trade.
     Requires Alpaca keys + market hours. Data is for study/comparison vs the backtest."""
@@ -502,7 +529,7 @@ def paper_log():
 
 
 @app.post("/api/control/mode")
-def set_mode(mode: str):
+def set_mode(mode: str, _=Depends(auth)):
     if mode == "live" and not settings.live_allowed:
         return {"error": "live blocked: needs LIVE_APPROVED.lock", "mode": _state["mode"]}
     _state["mode"] = mode
@@ -560,9 +587,18 @@ def place_order(t: OrderTicket, _=Depends(auth)):
     if not rd.approved:
         return {"action": "rejected", "reason": rd.reason_code.value, "notes": rd.notes}
     qty = min(t.qty, rd.max_qty) if t.qty else rd.max_qty
+    # DUPLICATE-ORDER GUARD: a double-clicked ticket / retried POST must not stack orders.
+    # Manual tickets are keyed by the full geometry (symbol|side|entry|stop|qty|day) so an
+    # intentionally different second trade on the same symbol still goes through.
+    import hashlib as _hl
+    ticket_key = _hl.sha1(f"manual|{c.symbol}|{c.side.value}|{c.entry}|{c.stop}|{qty}|"
+                          f"{c.generated_at[:10]}".encode()).hexdigest()[:16]
+    if _already_submitted(ticket_key):
+        return {"action": "duplicate", "idempotency_key": ticket_key,
+                "note": "identical ticket already submitted today — no new order"}
     order = OrderRequest(candidate_id=c.candidate_id, symbol=c.symbol, side=c.side, qty=qty,
                          order_type=OrderType.LIMIT, limit_price=c.entry,
-                         stop_price=c.stop, take_profit=c.tp2)
+                         stop_price=c.stop, take_profit=c.tp2, idempotency_key=ticket_key)
     # 3) transmit (paper/live) or shadow-log (replay/shadow)
     if b is None:
         return {"action": "shadow", "qty": qty, "note": "logged, NOT transmitted (mode=" + _state["mode"] + ")",
@@ -616,12 +652,13 @@ async def tv_webhook(req: Request):
     Auth: a 'token' field in the payload must match WEBHOOK_TOKEN (TV can't send custom headers).
     Body: {"event":"entry|exit|close","ticker","action":"buy|sell","quantity","entry","stopLoss","takeProfit","token"}"""
     import json as _json
+    from bot.security import verify_token
     raw = await req.body()
     try:
         p = _json.loads(raw or b"{}")
     except Exception:
         return {"action": "rejected", "reason": "bad json"}
-    if not settings.webhook_token or p.get("token") != settings.webhook_token:
+    if not settings.webhook_token or not verify_token(p.get("token")):   # constant-time compare
         return {"action": "rejected", "reason": "bad or missing token"}
     if _state["kill_switch"]:
         return {"action": "blocked", "reason": "kill_switch"}
@@ -643,6 +680,13 @@ async def tv_webhook(req: Request):
                            strategy_version="tv-auto")
     except (KeyError, ValueError) as e:
         return {"action": "rejected", "reason": f"bad payload geometry: {e}"}
+    # DUPLICATE-WEBHOOK GUARD: TradingView retries + repeated alerts must not stack live orders.
+    # Key = payload signalId if the Pine sends one, else the candidate's deterministic
+    # (symbol|side|setup|session-day) idempotency key.
+    dedup_key = str(p.get("signalId") or p.get("signal_id") or c.idempotency_key)
+    if _already_submitted(dedup_key):
+        return {"action": "duplicate", "ticker": sym, "idempotency_key": dedup_key,
+                "note": "already processed — no new order"}
     _journal.record(c)
     equity = 100_000.0
     if b is not None:
@@ -659,7 +703,8 @@ async def tv_webhook(req: Request):
     qty = int(p.get("quantity") or 0) or rd.max_qty
     qty = min(qty, rd.max_qty)
     order = OrderRequest(candidate_id=c.candidate_id, symbol=sym, side=side, qty=qty,
-                         order_type=OrderType.LIMIT, limit_price=c.entry, stop_price=c.stop, take_profit=c.tp2)
+                         order_type=OrderType.LIMIT, limit_price=c.entry, stop_price=c.stop,
+                         take_profit=c.tp2, idempotency_key=dedup_key)   # broker-side dedup (client_order_id)
     if b is None:
         return {"action": "shadow", "ticker": sym, "qty": qty, "note": f"logged, not transmitted (mode={_state['mode']})"}
     ev = b.submit(order)

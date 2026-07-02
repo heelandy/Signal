@@ -63,10 +63,24 @@ class OMS:
         self._emit(oid, OrderState.ACCEPTED)
 
     def on_fill(self, oid: str, qty: int, price: float) -> OrderEvent:
-        """Partial or full fill. On full fill, OCO-cancel the sibling and update the position."""
+        """Partial or full fill. On full fill, OCO-cancel the sibling and update the position.
+        Fail-closed guards (review 2026-07): non-positive qty is rejected; a fill on an already
+        FILLED/CANCELLED order (duplicate broker event) is rejected; an overfill beyond the order
+        qty is clamped to the remaining quantity so the internal position can't exceed the order."""
         t = self.orders.get(oid)
         if t is None:
             return OrderEvent(order_id=oid, state=OrderState.ERROR, message="unknown order")
+        if qty <= 0:
+            return OrderEvent(order_id=oid, state=OrderState.ERROR, message=f"bad fill qty {qty}")
+        if t.state in (OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED,
+                       OrderState.EXPIRED, OrderState.ERROR):
+            ev = OrderEvent(order_id=oid, state=OrderState.ERROR,
+                            message=f"duplicate/late fill ignored (order already {t.state.value})")
+            self.events.append(ev)
+            return ev
+        qty = min(qty, t.order.qty - t.filled)      # overfill clamp
+        if qty <= 0:
+            return OrderEvent(order_id=oid, state=OrderState.ERROR, message="overfill ignored")
         t.avg_price = (t.avg_price * t.filled + price * qty) / (t.filled + qty)
         t.filled += qty
         full = t.filled >= t.order.qty

@@ -30,3 +30,14 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# runtime logs + PID files (bot review 2026-07: were committed by accident)
+*.log
+*.log.*
+webull_data_sdk.log*
+BOT/config/server.pid
+
+# broker/SDK token caches — NEVER commit (bot review 2026-07: BOT/conf/token.txt held a live
+# Webull access token; it was untracked and MUST be rotated in the Webull portal)
+BOT/conf/
+token.txt

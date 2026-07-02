@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS decisions(
 
 
 def _con():
+    DB.parent.mkdir(parents=True, exist_ok=True)   # fresh checkout has no data/ (it's git-ignored)
     c = sqlite3.connect(str(DB), check_same_thread=False)
     c.executescript(_SCHEMA); c.commit()
     for col in ("mfe_r", "mae_r"):                    # study: max favorable / adverse excursion (R) — best-effort migrate
@@ -88,14 +89,16 @@ def _walk(bars: pd.DataFrame, signal_at: str, side: str, entry, stop, tp1, tp2, 
         # NOTE: validated exit is FULL-to-TP2 (no BE/trail). Trailing the stop to TP1/BE after TP1 was TESTED
         # and it HURTS equities (QQQ +0.419->+0.291, SPY +0.312->+0.241) by cutting runners that dip to TP1
         # before reaching TP2 — the give-back protection is outweighed. Kept full-to-TP2.
+        # SAME-BAR AMBIGUITY (review 2026-07): when the stop AND a target are both inside one bar
+        # the intrabar sequence is unknown — score the STOP first (conservative), never the target.
         if hit_stop and not tp1_hit:
             return "stop", -1.0, round(mfe, 2), round(mae, 2)
+        if hit_stop and tp1_hit:                      # came back to stop after TP1 (give-back)
+            return "tp1_then_stop", round(sign * (stop - entry) / risk, 2), round(mfe, 2), round(mae, 2)
         if hit_tp2:
             return "tp2", sign * (tp2 - entry) / risk, round(mfe, 2), round(mae, 2)
         if hit_tp1 and not tp1_hit:
             tp1_hit = True
-        if hit_stop and tp1_hit:                      # came back to stop after TP1 (give-back)
-            return "tp1_then_stop", round(sign * (stop - entry) / risk, 2), round(mfe, 2), round(mae, 2)
     if tp1_hit:
         return "tp1_open", round(sign * (tp1 - entry) / risk, 2), round(mfe, 2), round(mae, 2)
     return "open", 0.0, round(mfe, 2), round(mae, 2)
@@ -259,7 +262,7 @@ if __name__ == "__main__":   # self-test with a synthetic long that hits TP1 the
     ts = pd.date_range("2026-06-29 14:00", periods=10, freq="5min", tz="UTC").tz_convert("America/New_York")
     bars = pd.DataFrame({"ts_et": ts, "open": 100, "high": [100, 101, 102, 104, 104, 104, 104, 104, 104, 104],
                          "low": [99.5] * 10, "close": 102})
-    out, r = _walk(bars, "2026-06-29T14:00:00+00:00", "long", 100, 99, 101.5, 104)
+    out, r, _mfe, _mae = _walk(bars, "2026-06-29T14:00:00+00:00", "long", 100, 99, 101.5, 104)
     assert out == "tp2" and abs(r - 4.0) < 1e-6, (out, r)
     print(f"walk: synthetic long -> {out} ({r:+.1f}R)  | decision {rid['id'][:8]} recorded")
     print("tracker OK")

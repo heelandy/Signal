@@ -61,6 +61,27 @@ def pivots(values, left, right, kind, tie="strict"):
     Returns a Series: at the confirm bar (right bars after the pivot) the pivot price, else NaN."""
     v = values.to_numpy(); n = len(v); out = np.full(n, np.nan)
     lb = (left.to_numpy() if hasattr(left, "to_numpy") else np.full(n, left)).astype(int)
+    # FAST PATH (perf review 2026-07): constant lookback -> vectorized rolling max/min. Identical
+    # output to the bar loop below (regression-tested); the loop remains for the adaptive case.
+    if n and (lb == lb[0]).all():
+        L = int(lb[0])
+        s = pd.Series(v)
+        lm = (s.rolling(L).max() if kind == "high" else s.rolling(L).min()).shift(1).to_numpy()
+        rrev = pd.Series(v[::-1])
+        rm = ((rrev.rolling(L).max() if kind == "high" else rrev.rolling(L).min())
+              .shift(1).to_numpy()[::-1])
+        valid = ~np.isnan(lm) & ~np.isnan(rm)
+        if kind == "high":
+            okL = (v >= lm) if tie == "tv" else (v > lm)
+            hit = valid & okL & (v > rm)
+        else:
+            okL = (v <= lm) if tie == "tv" else (v < lm)
+            hit = valid & okL & (v < rm)
+        centers = np.where(hit)[0]
+        confirms = centers + L                      # pivot confirms L bars after the center
+        keep = confirms < n
+        out[confirms[keep]] = v[centers[keep]]
+        return pd.Series(out, index=values.index)
     for i in range(n):
         L = lb[i]
         ci = i - L                      # candidate (center) index
@@ -272,14 +293,16 @@ def _macro_regime(d, p):
     vix = d["vix_sma5"]; vix_prev = d["vix_prev5"]
     chg = np.where(vix_prev.notna() & (vix_prev > 0), (vix - vix_prev) / vix_prev * 100.0, 0.0)
     raw = np.full(len(d), "—", dtype=object)
+    vix_v = vix.to_numpy(float)                 # numpy views: the per-bar .iloc[] lookups were the
+    st_v = spy_trend.to_numpy()                 # hottest line in compute_state (perf review 2026-07)
     for i in range(len(d)):
-        v = vix.iloc[i]
-        if pd.isna(v): continue
+        v = vix_v[i]
+        if v != v: continue
         if v >= p.vix_extreme: raw[i] = "D"
         elif v >= p.vix_volatile or chg[i] >= 30.0: raw[i] = "C"
-        elif v < p.vix_calm and spy_trend.iloc[i]: raw[i] = "A"
-        elif v < p.vix_volatile and not spy_trend.iloc[i]: raw[i] = "B"
-        elif spy_trend.iloc[i]: raw[i] = "A"
+        elif v < p.vix_calm and st_v[i]: raw[i] = "A"
+        elif v < p.vix_volatile and not st_v[i]: raw[i] = "B"
+        elif st_v[i]: raw[i] = "A"
         else: raw[i] = "B"
     conf = "—"; pend = "—"; cnt = 0; out = []
     for i in range(len(d)):
@@ -310,6 +333,14 @@ def _zones_sweep_patterns(d, p, sph, spl, slo, sso):
     bsa = np.zeros(n, bool); ssa = np.zeros(n, bool)
     bull_obs = []; bear_obs = []; bull_fvg = []; bear_fvg = []
     bsweep_b = bsweep2 = -9999; brsweep_b = -9999
+    # precomputed rolling extremes (perf review 2026-07): replaces per-bar np.max/np.min slices.
+    # roll_hi[i] == max(h[i-L:i]) when i >= L+1 (the loop's guard), NaN otherwise — L constant here
+    # in practice (struct_lb fixed); recompute per-bar only if lb varies.
+    lb_const = n and (lb == lb[0]).all()
+    if lb_const:
+        L0 = int(lb[0])
+        _rh = pd.Series(h).rolling(L0).max().shift(1).to_numpy()
+        _rl = pd.Series(l).rolling(L0).min().shift(1).to_numpy()
     for i in range(n):
         ai = atr[i] if not np.isnan(atr[i]) else 0.0
         vm = vma[i] if not np.isnan(vma[i]) else 0.0
@@ -330,8 +361,12 @@ def _zones_sweep_patterns(d, p, sph, spl, slo, sso):
         in_sf = any(l[i] <= t and h[i] >= bt for t, bt in bear_fvg)
         at_bull[i] = in_bull_ob[i] or in_bf; at_bear[i] = in_bear_ob[i] or in_sf
         L = lb[i]
-        roll_hi = np.max(h[i-L:i]) if i >= L + 1 else np.nan
-        roll_lo = np.min(l[i-L:i]) if i >= L + 1 else np.nan
+        if lb_const:
+            roll_hi = _rh[i] if i >= L + 1 else np.nan
+            roll_lo = _rl[i] if i >= L + 1 else np.nan
+        else:
+            roll_hi = np.max(h[i-L:i]) if i >= L + 1 else np.nan
+            roll_lo = np.min(l[i-L:i]) if i >= L + 1 else np.nan
         swing_lo = spl[i] if not np.isnan(spl[i]) else roll_lo
         swing_hi = sph[i] if not np.isnan(sph[i]) else roll_hi
         smin = ai * p.sweep_depth_atr
