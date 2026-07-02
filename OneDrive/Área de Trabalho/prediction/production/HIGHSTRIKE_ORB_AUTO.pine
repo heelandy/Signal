@@ -284,7 +284,7 @@ if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
 var float or_mid  = na
-var bool  or_bull = na
+var bool  or_bull = false
 if not in_or and not na(or_high)
     if not or_set
         or_mid  := (or_high + or_low) / 2.0

@@ -63,8 +63,9 @@ dir_seq      = input.bool(true, "Direction sequence (price must be pushing the t
 // ───────────────────────── STRUCTURE GATE ─────────────────────────
 trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
-             tooltip="USER FILL RULE: a breakout fills only DURING A CLEAR TREND — a LONG needs a structure UPtrend (HH/HL, st_state=1) on ≤5m / EMA-up on ≥15m; a SHORT the mirror downtrend. Default ON (Auto). NOTE (F58): net of honest fills the gate does not ADD expectancy (pure ORB ≈ gated on NQ/QQQ/SPY) — it is kept ON as the entry SETUP (only take clean-trend breakouts), not for a statistical edge. 'Off — plain ORB' trades every breakout. Macro + local-regime filters are separate (Regime group).")
-struct_lb  = input.int(5, "Structure pivot lookback (L=R)", group="Structure gate", minval=2)
+             tooltip="KEEP ON — Auto (2026-07 fast-direction study, corrects F58): the confirmed HH/HL swing-structure gate ROUGHLY DOUBLES expectancy by selecting trending days (RTH NQ +0.16->+0.29, QQQ +0.26->+0.46, SPY +0.37->+0.56 R, CIlo up on all) and NO fast price-derived read replaces it — VWAP-side, EMA-slope, 2-bar momentum AND a rolling price-array regression slope ALL land on plain-ORB (they show where price WAS, not where it's GOING). The edge costs latency: structure confirms ~50-60 min after the OR. Tune the speed/edge tradeoff with the pivot lookback below (lb=3 keeps NQ's full edge with more/earlier entries). 'Off' trades every breakout (OR-mid + dir-seq still gate direction) but gives up ~0.13-0.20R. The DIR·fast dashboard row is the early AWARENESS read; THIS gate is the confirmed EDGE.")
+struct_lb  = input.int(3, "Structure pivot lookback (L=R)", group="Structure gate", minval=2,
+            tooltip="FASTER STRUCTURE (2026-07, per user): lower = pivots confirm in fewer bars (a swing is confirmed L bars after it forms). Reduced 5->3 so st_state / BOS flip sooner — the swing gate was too slow to confirm a fresh breakout's direction (lb=5 on 5m = 25 min of lag; lb=3 = 15 min; lb=2 = fastest/noisiest). Direction speed matters more than pivot purity here.")
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 ormid_bias = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate",
             tooltip="GRADUATED (2026-07): a 2nd DIRECTIONAL filter on top of the trend gate — the OPENING RANGE sets the day's bias: if the OR CLOSED in its UPPER half (close > OR mid) the day is biased LONG so SHORTS are blocked; lower half = biased SHORT so LONGS blocked. ADDITIVE + robust: bias-aligned lifts exp NQ +0.169->+0.290, QQQ +0.392->+0.478, SPY +0.351->+0.563 (all PASS the gauntlet); the DROPPED counter-bias trades are the LOSERS (NQ -0.10, SPY -0.05, ES -0.14); survives 2x/3x slip. Fixes NQ year-consistency (10/17->13/17). Turn OFF to trade both breakouts regardless of the OR's bias.")
@@ -146,6 +147,9 @@ emaS = ta.ema(close, trend_ema_s)
 bool trend_up   = close > emaS and emaF > emaS
 bool trend_down = close < emaS and emaF < emaS
 float vwap_c = ta.vwap
+// rolling price-array direction read (user idea): slope of the 12-bar linear regression = "which way is price going NOW"
+// (a fast AWARENESS read — research: standalone it ≈ plain ORB, but it's the continuous direction the dashboard shows)
+float dir_slope = ta.linreg(close, 12, 0) - ta.linreg(close, 12, 1)
 // TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so a session crossing midnight stays contiguous.
 int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
 int o_now  = (et_min - 1080 + 1440) % 1440
@@ -296,7 +300,7 @@ if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
 var float or_mid  = na
-var bool  or_bull = na
+var bool  or_bull = false
 if not in_or and not na(or_high)
     if not or_set
         or_close_o := o_now                                        // first bar after the OR closes
@@ -652,15 +656,16 @@ f_t(tt) => na(tt) ? "" : "  " + str.format_time(tt, "HH:mm", sess_tz)
 f_sz(dist) => na(dist) or dist <= 0 or syminfo.pointvalue <= 0 ? "" : "  " + str.tostring(math.max(1.0, math.round(risk_dlr / (dist * syminfo.pointvalue)))) + "ct"
 f_q(x)  => na(x) ? "—" : (x <= cap_k ? "NEAR " : "EXT ⚠ ") + str.tostring(x, "#.#") + "x"
 f_qc(x) => na(x) ? color.gray : x <= cap_k ? color.lime : color.orange
-var table dash = table.new(position.top_right, 3, 13, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+f_ar(x) => x > 0 ? "▲" : x < 0 ? "▼" : "—"
+var table dash = table.new(position.top_right, 3, 14, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     string sess_lbl = is_auto ? ("Auto: " + (phase_rth ? "RTH" : phase_london ? "London" : "Asia")) : sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
-    bool   dispUp = gate_off ? (st_state == 1) : eff_up        // F58: when gate is off, show the true structure (info only), not a forced both-sided trend
-    bool   dispDn = gate_off ? (st_state == 2) : eff_down
+    bool   dispUp = gate_off ? (ormid_bias ? or_bull : st_state == 1) : eff_up        // gate off: OR-mid bias is the directional driver (not the lagging structure)
+    bool   dispDn = gate_off ? (ormid_bias ? not or_bull : st_state == 2) : eff_down
     string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_state == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
     string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_state == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
-    string grL = f_grade(eff_up, gate_long, cap_long_ok, vol_exp)
-    string grS = f_grade(eff_down, gate_short, cap_short_ok, vol_exp)
+    string grL = (gate_long or in_long) ? f_grade(eff_up, gate_long, cap_long_ok, vol_exp) : "—"
+    string grS = (gate_short or in_short) ? f_grade(eff_down, gate_short, cap_short_ok, vol_exp) : "—"
     string etagL = in_long ? "FILLED" : traded_l ? "DONE" : armL ? "ARMED" : "WAIT"
     string etagS = in_short ? "FILLED" : traded_s ? "DONE" : armS ? "ARMED" : "WAIT"
     color etcL = etagL == "FILLED" ? color.rgb(41, 121, 255) : etagL == "ARMED" ? color.yellow : color.gray
@@ -668,12 +673,22 @@ if barstate.islast and show_dash
     string stop_tag = stop_mode == "Structure swing (HH/HL)" ? " [STRUCT]" : " [OR]"
     string rr_txt = is_trail ? "1R stop · trail " + str.tostring(trail_atr, "#.#") + "ATR" : is_full ? "FULL → 1:" + str.tostring(tp2_rr, "#.#") + " cap" : "1 : " + str.tostring(tp2_rr, "#.#")
     string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE block" : "clear ✓"
+    // per-side "why not firing" (first failing gate) — makes a WAIT explainable (esp. the OR-mid / narrow-OR blocks)
+    string whyL = in_long or traded_l ? "" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (ormid_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
+    string whyS = in_short or traded_s ? "" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (ormid_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
+    // FAST DIRECTION read (the user's core ask: how fast does the system know which way?) — 0-2 bar lag reads vs the slow structure
+    int dir_or  = (ormid_bias and or_set) ? (or_bull ? 1 : -1) : 0
+    int dir_vw  = close > vwap_c ? 1 : close < vwap_c ? -1 : 0
+    int dir_slp = dir_slope > 0 ? 1 : dir_slope < 0 ? -1 : 0        // rolling 12-bar regression slope (price-array read)
+    int dir_st  = st_state == 1 ? 1 : st_state == 2 ? -1 : 0
+    int dir_fast = dir_or + dir_vw + dir_slp
+    string dirV = dir_fast >= 2 ? "▲ UP" : dir_fast <= -2 ? "▼ DOWN" : "◆ mixed"
     table.cell(dash,0,0,"STACK " + syminfo.ticker + " " + timeframe.period, text_color=color.yellow, text_size=size.small)
     table.cell(dash,1,0,"LONG",  text_color=color.lime, text_size=size.small)
     table.cell(dash,2,0,"SHORT", text_color=color.red,  text_size=size.small)
     table.cell(dash,0,1,"REGIME", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,1, regL, text_color=eff_up ? color.lime : color.gray, text_size=size.tiny)
-    table.cell(dash,2,1, regS, text_color=eff_down ? color.red : color.gray, text_size=size.tiny)
+    table.cell(dash,1,1, regL, text_color=dispUp ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(dash,2,1, regS, text_color=dispDn ? color.red : color.gray, text_size=size.tiny)
     table.cell(dash,0,2,"GRADE", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,2, grL, text_color=grL == "A+" or grL == "A" ? color.lime : grL == "B" ? color.orange : color.gray, text_size=size.tiny)
     table.cell(dash,2,2, grS, text_color=grS == "A+" or grS == "A" ? color.lime : grS == "B" ? color.orange : color.gray, text_size=size.tiny)
@@ -693,11 +708,11 @@ if barstate.islast and show_dash
     table.cell(dash,1,7, rr_txt, text_color=color.silver, text_size=size.tiny)
     table.cell(dash,2,7, rr_txt, text_color=color.silver, text_size=size.tiny)
     table.cell(dash,0,8,"STATE", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,8, stL, text_color=f_stc(stL), text_size=size.tiny)
-    table.cell(dash,2,8, stS, text_color=f_stc(stS), text_size=size.tiny)
+    table.cell(dash,1,8, stL + (stL == "WAIT" and whyL != "" ? " · " + whyL : ""), text_color=f_stc(stL), text_size=size.tiny)
+    table.cell(dash,2,8, stS + (stS == "WAIT" and whyS != "" ? " · " + whyS : ""), text_color=f_stc(stS), text_size=size.tiny)
     table.cell(dash,0,9,"Session", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,9, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
-    table.cell(dash,2,9, or_set ? "OR " + str.tostring(or_low, "#.#") + " / " + str.tostring(or_high, "#.#") : "OR forming…", text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,2,9, or_set ? "OR " + str.tostring(or_low, "#.#") + "/" + str.tostring(or_high, "#.#") + (ormid_bias ? (or_bull ? " · long½" : " · short½") : "") : "OR forming…", text_color=or_set and ormid_bias ? (or_bull ? color.lime : color.red) : color.aqua, text_size=size.tiny)
     table.cell(dash,0,10,"Macro", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,10, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=regime == "A" ? color.lime : regime == "D" ? color.red : color.aqua, text_size=size.tiny)
     table.cell(dash,2,10, greason, text_color=greason == "clear ✓" ? color.lime : color.orange, text_size=size.tiny)
@@ -712,3 +727,6 @@ if barstate.islast and show_dash
          (eval_target > 0 ? " · tgt " + str.tostring(ev_eq, "#") + "/" + str.tostring(eval_target, "#") : "")
     table.cell(dash,1,12, evtxt, text_color=not eval_on ? color.gray : ev_passed ? color.lime : ev_halt ? color.red : ev_throttle ? color.orange : color.silver, text_size=size.tiny)
     table.cell(dash,2,12, eval_on ? "1R $" + str.tostring(eval_risk, "#") : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,13, dirV + " (" + str.tostring(dir_fast) + ")", text_color=dir_fast >= 2 ? color.lime : dir_fast <= -2 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " · Struct" + f_ar(dir_st) + " (edge)", text_color=color.aqua, text_size=size.tiny)
