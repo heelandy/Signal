@@ -68,6 +68,8 @@ trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", gro
 struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
 auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="FASTER STRUCTURE (2026-07 fast-direction study): NQ/futures keep the FULL structure edge at lb=3 (pivots confirm 2 bars sooner = MORE + EARLIER breakout entries, same exp on NQ); QQQ needs lb=5 (lb=3 fails its gauntlet); SPY ~tied. ON = futures 3 / equity 5. OFF = the manual value above for every instrument.")
 int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
+fast_dir   = input.bool(true, "1-MINUTE direction feed (structure + slope at 1m speed on ANY chart TF)", group="Structure gate",
+             tooltip="STALENESS FIX (user 2026-07): on a 5m chart the swing structure confirms pivots 15-25 MINUTES late, so st_state still read 'Bullish Trend' while price had already dumped below the OR low — while the 1m chart flipped within minutes. ON = the DIRECTION reads (trend-gate st_state + the DIR-fast Struct/Slope arrows) come from 1-MINUTE bars via request.security, so EVERY chart timeframe reacts at 1m speed; each context keeps its own AUTOMATIC pivot lookback (futures 3 / equity 5 — on 1m bars that is a 3-5 MINUTE pivot confirm). STOP ANCHORS stay on the chart-TF swings (validated risk geometry unchanged). On a 1m chart this is a no-op. OFF = the old chart-TF-only read. NOTE: gating entries by 1m structure is a behavior change vs the chart-TF backtest — forward-verify before sizing.")
 struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
 ormid_bias = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate",
             tooltip="GRADUATED (2026-07): a 2nd DIRECTIONAL filter on top of the trend gate — the OPENING RANGE sets the day's bias: if the OR CLOSED in its UPPER half (close > OR mid) the day is biased LONG so SHORTS are blocked; lower half = biased SHORT so LONGS blocked. ADDITIVE + robust: bias-aligned lifts exp NQ +0.169->+0.290, QQQ +0.392->+0.478, SPY +0.351->+0.563 (all PASS the gauntlet); the DROPPED counter-bias trades are the LOSERS (NQ -0.10, SPY -0.05, ES -0.14); survives 2x/3x slip. Fixes NQ year-consistency (10/17->13/17). Turn OFF to trade both breakouts regardless of the OR's bias.")
@@ -241,11 +243,52 @@ if array.size(obBearT) > 0
         if low <= array.get(obBearT, i) and high >= array.get(obBearB, i)
             in_bear_ob := true
 
+// ───────────────────────── 1-MINUTE DIRECTION FEED (fast_dir — structure + slope at 1m speed on any TF) ─────────────────────────
+// The SAME swing-structure machine as above, executed in the 1-MINUTE context via request.security:
+// pivots confirm in eff_lb MINUTES instead of eff_lb chart bars, so a 5m/15m chart flips direction as
+// fast as the 1m chart did in the user's screenshots. Keep the two machines in lockstep when editing.
+f_struct_1m() =>
+    float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+    float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
+    var float _phL = na
+    var float _phP = na
+    var float _plL = na
+    var float _plP = na
+    var int _st = 0
+    int _stp = _st
+    if not na(_ph)
+        if na(_phL) or math.abs(_ph - _phL) / _phL * 100.0 >= struct_tol
+            _phP := _phL
+            _phL := _ph
+    if not na(_pl)
+        if na(_plL) or math.abs(_pl - _plL) / _plL * 100.0 >= struct_tol
+            _plP := _plL
+            _plL := _pl
+    bool _hh = not na(_phL) and not na(_phP) and _phL > _phP
+    bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
+    bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
+    bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
+    if _hh and _hl
+        _st := 1
+    else if _ll and _lh
+        _st := 2
+    else if (_hh and _ll) or (_hl and _lh)
+        _st := 3
+    if _stp == 2 and not na(_phL) and close > _phL and close[1] <= _phL
+        _st := 0
+    if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
+        _st := 0
+    [_st, ta.linreg(close, 12, 0) - ta.linreg(close, 12, 1)]      // + the 12-bar slope in 1m units (12-MINUTE window)
+[st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+bool use_fast_dir = fast_dir and tf_s > 60                        // a 1m chart already reads at 1m speed
+int   st_dir    = use_fast_dir ? st_1m : st_state                 // DIRECTION state (1m speed) — gates + DIR-fast
+float slope_dir = use_fast_dir ? slope_1m : dir_slope             // slope read at 1m speed (12-min window)
+
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
 bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
-bool eff_up   = gate_off ? true : use_struct ? (st_state == 1) : trend_up
-bool eff_down = gate_off ? true : use_struct ? (st_state == 2) : trend_down
+bool eff_up   = gate_off ? true : use_struct ? (st_dir == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_dir == 2) : trend_down
 
 // ───────────────────────── MACRO REGIME ─────────────────────────
 spy_b() =>
@@ -702,10 +745,10 @@ f_ar(x) => x > 0 ? "▲" : x < 0 ? "▼" : "—"
 var table dash = table.new(position.top_right, 3, 14, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     string sess_lbl = is_auto ? ("Auto: " + (phase_rth ? "RTH" : phase_london ? "London" : "Asia")) : sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
-    bool   dispUp = gate_off ? (ormid_bias ? or_bull : st_state == 1) : eff_up        // gate off: OR-mid bias is the directional driver (not the lagging structure)
-    bool   dispDn = gate_off ? (ormid_bias ? not or_bull : st_state == 2) : eff_down
-    string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_state == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
-    string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_state == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
+    bool   dispUp = gate_off ? (ormid_bias ? or_bull : st_dir == 1) : eff_up        // gate off: OR-mid bias is the directional driver (not the lagging structure)
+    bool   dispDn = gate_off ? (ormid_bias ? not or_bull : st_dir == 2) : eff_down
+    string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_dir == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
+    string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_dir == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
     string grL = (gate_long or in_long) ? f_grade(eff_up, gate_long, cap_long_ok, vol_exp) : "—"
     string grS = (gate_short or in_short) ? f_grade(eff_down, gate_short, cap_short_ok, vol_exp) : "—"
     string etagL = in_long ? "FILLED" : traded_l ? "DONE" : armL ? "ARMED" : "WAIT"
@@ -719,10 +762,13 @@ if barstate.islast and show_dash
     string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (ormid_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_below_mid ? "below OR mid — needs fresh break" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
     string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (ormid_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_above_mid ? "above OR mid — needs fresh break" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
     // FAST DIRECTION read (the user's core ask: how fast does the system know which way?) — 0-2 bar lag reads vs the slow structure
-    int dir_or  = (ormid_bias and or_set) ? (or_bull ? 1 : -1) : 0
+    // STALENESS FIX (user 2026-07): OR arrow = where price is NOW vs the OR (live zone), not the
+    // frozen 10:00 day bias (which kept showing ▲ with price under the OR low). Slope + Struct come
+    // from the 1-MINUTE feed when fast_dir is on, so every TF reads like the 1m chart.
+    int dir_or  = not or_set ? 0 : close > or_high ? 1 : close < or_low ? -1 : close > or_mid ? 1 : -1
     int dir_vw  = close > vwap_c ? 1 : close < vwap_c ? -1 : 0
-    int dir_slp = dir_slope > 0 ? 1 : dir_slope < 0 ? -1 : 0        // rolling 12-bar regression slope (price-array read)
-    int dir_st  = st_state == 1 ? 1 : st_state == 2 ? -1 : 0
+    int dir_slp = slope_dir > 0 ? 1 : slope_dir < 0 ? -1 : 0        // 12-bar regression slope (1m feed = 12-MINUTE window)
+    int dir_st  = st_dir == 1 ? 1 : st_dir == 2 ? -1 : 0
     int dir_fast = dir_or + dir_vw + dir_slp
     string dirV = dir_fast >= 2 ? "▲ UP" : dir_fast <= -2 ? "▼ DOWN" : "◆ mixed"
     table.cell(dash,0,0,"STACK " + syminfo.ticker + " " + timeframe.period, text_color=color.yellow, text_size=size.small)
@@ -771,4 +817,4 @@ if barstate.islast and show_dash
     table.cell(dash,2,12, eval_on ? "1R $" + str.tostring(eval_risk, "#") : "", text_color=color.gray, text_size=size.tiny)
     table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,13, dirV + " (" + str.tostring(dir_fast) + ")", text_color=dir_fast >= 2 ? color.lime : dir_fast <= -2 ? color.red : color.gray, text_size=size.tiny)
-    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " · Struct" + f_ar(dir_st) + " (edge)", text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m feed)" : " (edge)"), text_color=color.aqua, text_size=size.tiny)

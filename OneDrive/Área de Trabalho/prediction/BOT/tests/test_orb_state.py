@@ -185,3 +185,61 @@ def test_bad_geometry_rejected():
         sm.arm(entry=730.0, stop=731.0, close=730.5)       # long stop above entry
     with pytest.raises(ValueError):
         OrbSideState("long", or_high=100.0, or_low=101.0)  # inverted OR
+
+
+# ---- 1-minute direction feed (fast_direction + flip-speed vs chart-TF structure) ----
+
+def test_fast_direction_votes_down_when_price_dumps_below_or_low():
+    from bot.strategy.orb_state import fast_direction
+    closes = list(np.linspace(730.0, 719.0, 40))           # steady 1m dump into the screenshot price
+    d = fast_direction(closes, or_high=OR_H, or_low=OR_L, vwap=726.0, st_state_1m=2)
+    assert d["zone"] == -1 and d["slope"] == -1 and d["vwap"] == -1 and d["struct_1m"] == -1
+    assert d["read"] == "down" and d["score"] == -4
+
+
+def test_fast_direction_up_and_mixed_and_missing_inputs():
+    from bot.strategy.orb_state import fast_direction
+    up = list(np.linspace(724.0, 731.0, 40))
+    d = fast_direction(up, or_high=OR_H, or_low=OR_L, vwap=725.0, st_state_1m=1)
+    assert d["read"] == "up" and d["score"] == 4
+    m = fast_direction(up, or_high=OR_H, or_low=OR_L, vwap=732.0, st_state_1m=2)   # conflicting votes
+    assert m["read"] in ("mixed", "up")
+    n = fast_direction(up)                                  # no OR/vwap/struct -> slope-only, never crashes
+    assert n["zone"] == 0 and n["vwap"] == 0 and n["read"] == "mixed"
+
+
+def test_1m_structure_flips_down_earlier_than_5m_on_the_same_tape():
+    """The screenshot bug, end-to-end: after a rally then a downtrend, the 1m swing structure must
+    read DOWN materially EARLIER (wall-clock minutes) than the 5m structure computed on the same
+    tape — the property the fast_dir 1m feed exploits. Same machine, same lb=5, only the bar size
+    differs (pivot confirm = lb MINUTES on 1m vs lb x 5 minutes on 5m)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine"))
+    import hs_harness as H
+    import pandas as pd
+    rng = np.random.default_rng(11)
+    n_up, n_dn = 190, 150
+    t_up = np.arange(n_up); t_dn = np.arange(n_dn)
+    up = 700 + 0.10 * t_up + 2.5 * np.sin(t_up / 5.0)        # rising zigzag (prints HH/HL swings)
+    dn = up[-1] - 0.20 * t_dn + 2.5 * np.sin(t_dn / 5.0)     # falling zigzag (prints LL/LH swings)
+    c1 = np.concatenate([up, dn]) + rng.normal(0, 0.03, n_up + n_dn)
+    ts1 = pd.date_range("2026-06-01 09:30", periods=len(c1), freq="1min",
+                        tz="America/New_York").tz_convert("UTC")
+    f1 = pd.DataFrame({"ts": ts1, "open": c1 - 0.03, "high": c1 + 0.30, "low": c1 - 0.30,
+                       "close": c1, "volume": 1000.0})
+    d1 = H.compute_state(f1, H.P())                          # 1m context
+    f5 = (f1.set_index(pd.to_datetime(f1["ts"]))             # the 5m chart's view of the same tape
+             .resample("5min").agg({"open": "first", "high": "max", "low": "min",
+                                    "close": "last", "volume": "sum"}).dropna().reset_index()
+             .rename(columns={"index": "ts"}))
+    d5 = H.compute_state(f5, H.P())
+    st1 = d1["st_state"].to_numpy(); st5 = d5["st_state"].to_numpy()
+    assert (st1[:n_up] == 1).any(), "premise: the rally must register as UP structure"
+    assert (st1 == 2).any(), "1m structure must flip DOWN during the downtrend"
+    first_dn_1m_min = int(np.argmax(st1 == 2))               # minutes from open (1 bar = 1 min)
+    if (st5 == 2).any():
+        first_dn_5m_min = int(np.argmax(st5 == 2)) * 5
+        assert first_dn_1m_min < first_dn_5m_min, (first_dn_1m_min, first_dn_5m_min)
+    else:
+        first_dn_5m_min = None                               # 5m never flipped at all — max lag
+    # the 1m read must lead by a material margin (>= 10 wall-clock minutes) or the 5m never flips
+    assert first_dn_5m_min is None or first_dn_5m_min - first_dn_1m_min >= 10

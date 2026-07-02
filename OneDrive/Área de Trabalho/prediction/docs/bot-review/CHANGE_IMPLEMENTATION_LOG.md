@@ -177,3 +177,25 @@ stop-first same-bar, exact long/short mirror via reflected prices, zones, ER/per
 invariants, monotonic sequences, bad-geometry rejection) — suite 60/60 PASS.
 Residual: Pine edits need a TradingView compile + forward check (no compiler here).
 Rollback: restore the four edited files; delete the two new files.
+
+---
+
+**2026-07-02 · HS-H9 · 1-minute direction feed (structure + slope at 1m speed on any chart TF)**
+Files: `production/HIGHSTRIKE_ORB_STACK.pine`, `production/HIGHSTRIKE_ORB_AUTO.pine`,
+`BOT/bot/strategy/orb_state.py` (fast_direction), `BOT/bot/live.py`, `BOT/tests/test_orb_state.py`
+Reason: user screenshots — 5m structure read "Bullish Trend" (and DIR-fast OR/Slope arrows read UP)
+while price had dumped below the OR low; the 1m chart's structure followed price correctly. Bar-based
+pivot confirmation scales with the timeframe (lb=5 -> 25 min on 5m vs 5 min on 1m).
+Before: st_state, the DIR-fast Struct/Slope arrows, and the trend gate were chart-TF only; the
+DIR-fast OR arrow displayed the FROZEN 10:00 day bias as if it were a live read.
+After: new `fast_dir` input (default ON) runs the identical structure machine in the 1-MINUTE
+context via request.security (lookahead_off) — the trend gate + DIR-fast read at 1m speed on every
+chart timeframe, each context keeping its own automatic pivot lookback (futures 3 / equity 5);
+slope likewise from the 1m context (12-minute window). DIR-fast OR arrow now shows the LIVE zone
+(price vs OR high/mid/low). Stop anchors unchanged (chart-TF swings — validated risk geometry).
+Bot proposals gain `dir_fast` votes from a best-effort 1m fetch.
+Tests: fast_direction vote tests + a timing regression proving the 1m structure flips DOWN >=10
+wall-clock minutes before the 5m structure on the same tape — suite 63/63 PASS.
+Residual: needs TradingView compile + the standard gauntlet run for the 1m-fed GATE (behavior
+change vs the chart-TF backtest); revert toggle provided (`fast_dir` OFF).
+Rollback: restore the four edited files.

@@ -244,6 +244,32 @@ class OrbSideState:
         return s     # STOPPED / COMPLETED are terminal for the setup (block immediate re-entry)
 
 
+def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None = None,
+                   vwap: float | None = None, st_state_1m: int | None = None,
+                   slope_n: int = 12) -> dict:
+    """DIR-fast read at 1-MINUTE speed (Python twin of the STACK dashboard row, post staleness fix):
+    four symmetric votes — live OR zone (price vs OR levels NOW, not the frozen 10:00 bias), VWAP
+    side, 12×1m regression slope, and the 1m swing-structure state. score = sum of votes;
+    read = 'up' (score ≥ 2) / 'down' (≤ −2) / 'mixed'. All inputs causal (last closed 1m bars)."""
+    c = np.asarray(closes_1m, float)
+    px = float(c[-1]) if len(c) else float("nan")
+    slope = norm_slope(c[-slope_n:]) if len(c) >= 3 else 0.0
+    v_slope = 1 if slope > 0 else (-1 if slope < 0 else 0)
+    v_zone = 0
+    if or_high is not None and or_low is not None and np.isfinite(px) \
+            and np.isfinite(or_high) and np.isfinite(or_low):
+        mid = (or_high + or_low) / 2.0
+        v_zone = 1 if px > or_high else (-1 if px < or_low else (1 if px > mid else -1))
+    v_vwap = 0
+    if vwap is not None and np.isfinite(vwap) and np.isfinite(px):
+        v_vwap = 1 if px > vwap else (-1 if px < vwap else 0)
+    v_st = {1: 1, 2: -1}.get(int(st_state_1m) if st_state_1m is not None else 0, 0)
+    score = v_zone + v_vwap + v_slope + v_st
+    read = "up" if score >= 2 else ("down" if score <= -2 else "mixed")
+    return {"zone": v_zone, "vwap": v_vwap, "slope": v_slope, "struct_1m": v_st,
+            "score": score, "read": read}
+
+
 def signal_zone_state(side: str, price: float, or_high: float | None, or_low: float | None) -> str:
     """Stateless zone verdict for a LIVE proposal (dashboard/paper-autotrade): is this signal's
     direction still structurally valid at the CURRENT price?
