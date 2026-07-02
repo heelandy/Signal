@@ -396,8 +396,13 @@ bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) 
 bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
 bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
 bool volexp_ok = not volexp_filter or vol_exp                                      // GRADUATED filter: skip the dead narrow-OR cohort
-bool sig_l = window and not traded_l and gate_long  and brk_l and near_l and seq_l and volexp_ok
-bool sig_s = window and not traded_s and gate_short and brk_s and near_s and seq_s and volexp_ok
+// LIVE==BACKTEST FIX (review 2026-07): close-confirm conditions use `close` and therefore flicker
+// INTRABAR on the realtime bar (a mid-bar pop could latch traded_l / fire the alert on a candle
+// that never confirms). Close-confirm signals now latch only on the CONFIRMED bar — identical on
+// history, honest live. Wick/touch mode keeps its intended intrabar trigger.
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+bool sig_l = window and not traded_l and gate_long  and brk_l and near_l and seq_l and volexp_ok and cc_bar_ok
+bool sig_s = window and not traded_s and gate_short and brk_s and near_s and seq_s and volexp_ok and cc_bar_ok
 bool long_fire  = sig_l and cap_long_ok
 bool short_fire = sig_s and cap_short_ok
 bool long_skip  = sig_l and not cap_long_ok

@@ -452,11 +452,17 @@ bool fill_s = wait_ft ? (qual_s[1] and close < close[1]) : qual_s
 bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire/arm while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
 bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
 bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
-if arm_l and (not conf_close or fill_l) and seq_l                                 // close-confirm = market entry on the confirmed candle; touch = resting buy-stop at Le
+// LIVE==BACKTEST FIX (review 2026-07): with calc_on_every_tick=true the close-confirm conditions
+// (fill_l/seq use `close`) evaluate INTRABAR on the realtime bar — a live entry could fire mid-bar
+// on a level the finished candle never confirms, which the backtest (final closes only) never does.
+// Close-confirm decisions now wait for the CONFIRMED bar; the wick/touch resting-stop mode keeps
+// its intended intrabar fill.
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+if arm_l and (not conf_close or fill_l) and seq_l and cc_bar_ok                   // close-confirm = market entry on the confirmed candle; touch = resting buy-stop at Le
     strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=conf_close ? na : Le, alert_message=f_entry_json("buy", Le, Ls, Ltp))
 else
     strategy.cancel("L")
-if arm_s and (not conf_close or fill_s) and seq_s
+if arm_s and (not conf_close or fill_s) and seq_s and cc_bar_ok
     strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=conf_close ? na : Se, alert_message=f_entry_json("sell", Se, Ss, Stp))
 else
     strategy.cancel("S")

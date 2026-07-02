@@ -29,6 +29,25 @@ _journal = Journal()
 _store = Store()                     # persist signals + decisions to SQLite as well
 # the standing tracked set (F62/F30): equities + index futures + GOLD
 WATCHLIST = ["SPY", "QQQ", "NQ", "GC"]
+# STALE-DATA GATE (review 2026-07): a proposal built on old bars must not pass the risk gate.
+# Max age of the LAST bar for the feed to count as healthy. 5m bars + provider lag -> 15 min
+# covers a live session; when the market is closed everything is "stale" and entries stay blocked,
+# which is the fail-closed behavior we want. Override per call via max_bar_age_min.
+MAX_BAR_AGE_MIN = 15.0
+
+
+def source_health(bars, max_bar_age_min: float = MAX_BAR_AGE_MIN,
+                  now: pd.Timestamp | None = None) -> tuple[bool, float]:
+    """Fail-closed feed check for one symbol's bar frame: market-truth issues + last-bar age.
+    Returns (healthy, age_minutes). Empty/dirty/old data -> (False, age)."""
+    from bot.market_truth import assess
+    if bars is None or not len(bars):
+        return False, float("inf")
+    now = now or pd.Timestamp.now(tz="UTC")
+    h = assess(bars, source="router", ts_col="ts_et", freq_min=5,
+               max_staleness_sec=max_bar_age_min * 60.0, now=now)
+    age_min = (h.staleness_sec or 0.0) / 60.0
+    return bool(h.healthy), age_min
 EQUITY_OPT = {"QQQ", "SPY"}          # Alpaca-tradeable options; GC options = futures-opts / GLD proxy
 
 # GRADE-WEIGHTED SIZING (research 2026-07: exp-by-grade — A+ is 2-3x A/B; B is NEGATIVE on ES/SPY).
@@ -53,6 +72,9 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
         src = bars.attrs.get("provider", "?")
         last_ts = pd.Timestamp(bars["ts_et"].iloc[-1])
         age_min = int((pd.Timestamp.now(tz="America/New_York") - last_ts).total_seconds() / 60)
+        # STALE-DATA GATE (review 2026-07): was hardcoded source_healthy=True — a stale/dirty feed
+        # could produce APPROVED proposals. Now the risk gate blocks entries when the feed fails.
+        healthy, _ = source_health(bars)
         # "now" = REAL-TIME last trade, not the last 5m bar close (which lags pre-open/after-hours).
         from bot.market_data.providers import latest_price
         lp = latest_price(sym)
@@ -73,7 +95,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             c = s["candidate"]
             conf = predict_candidate(c)                       # PREDICTIVE: P(win) from the champion (or prior)
             flow = orderflow_confirm(c)                       # order-flow confirmation (book-level; "no feed" live)
-            rd = decide(c, Account(equity=equity, source_healthy=True))   # risk gate verdict (advisory)
+            rd = decide(c, Account(equity=equity, source_healthy=healthy))  # risk gate verdict (advisory)
             if persist:
                 _journal.record(c); _store.record(c); _journal.record(rd); _store.record(rd)
             plan = (options_exit_plan(c, iv=iv_est, dte=0)
@@ -101,7 +123,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                            "C": "info only — don't trade"}).get(grade, "")
             proposals.append({
                 "symbol": sym, "source": src, "last_price": last_px, "price_source": px_src,
-                "bar_age_min": age_min,
+                "bar_age_min": age_min, "source_healthy": healthy,
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,
