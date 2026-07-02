@@ -74,7 +74,7 @@ cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="Trend", step=0.25, 
 
 local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
 local_atr_hi  = input.float(2.5,  "Volatile ATR%",         group="Local Regime", step=0.25)
-block_range   = input.bool(true,  "Block entries in RANGE regime", group="Local Regime")
+block_range   = input.bool(false,  "Block entries in RANGE regime", group="Local Regime")
 
 macro_en       = input.bool(true,  "MACRO regime filter ON", group="Macro Regime")
 macro_standdown= input.bool(true,  "Macro stand-down vs SPY trend", group="Macro Regime",
@@ -87,7 +87,7 @@ vix_ext  = input.float(35.0, "VIX extreme",  group="Macro Regime", step=1)
 spy_adx_min = input.float(25.0, "Macro ADX min", group="Macro Regime", step=1)
 persist_n   = input.int(3, "Regime persistence bars", group="Macro Regime", minval=1)
 block_d     = input.bool(true, "Block trades in REGIME D", group="Macro Regime")
-block_b     = input.bool(true, "Block trend in REGIME B",  group="Macro Regime")
+block_b     = input.bool(false, "Block trend in REGIME B",  group="Macro Regime")
 
 mtf_on   = input.bool(false, "Higher-TF trend confirmation", group="MTF Confirm",
             tooltip="Require N of {1h,4h,D} to agree (EMA50/200 stack). RESEARCH: this REDUCES expectancy/PF/win on the ORB (research/orb_mtf_research.py) — default OFF; available to experiment.")

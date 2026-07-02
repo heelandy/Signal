@@ -5,6 +5,20 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-02 — Regime blocks REMOVED (Block RANGE + Block REGIME B) across all 5 Pine (user directive)
+
+Defaults flipped OFF so the system no longer blocks those cohorts:
+- **Block RANGE regime** `block_range` true→**false** (all 5 Pine). Chop-regime days are no longer blocked at the
+  local-regime layer — note the vol-expansion filter (`min_or_width`, ON) still screens narrow-OR days, so most
+  chop is still filtered at the OR level.
+- **Block REGIME B** `block_b_ses` "London only"→**"Off"** (STACK/AUTO/OPTIONS) and `block_b` true→**false**
+  (INDICATOR/STRATEGY). Regime B now trades in ALL sessions incl. London. Tradeoff (F31/F31f): regime B carries a
+  validated edge (~2.4× trades, OOS ≥ IS) but London gets riskier unblocked at TIGHT daily limits (eval blow-up
+  0→13% on the tight profile) — watch the daily-loss guard on London days.
+- BOT: already permissive (`families.prepare` sets macro_allow_trades=True, local_regime=0) — no change needed.
+- Toggles kept (reversible); still needs the standard TV compile-check. (Engine research backtest still models the
+  gate via `local_regime != 2` — flip that too only if you want research baselines to match the unblocked live config.)
+
 ## 2026-07-02 — Fast-direction study: auto structure speed (lb 3/5) + OR-mid chart line, all 5 Pine + BOT
 
 ⚠️ Needs a **TradingView compile-check** on all 5 (mechanical edits; `var bool or_bull = na` bool-na fix already applied).

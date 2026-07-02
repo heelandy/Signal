@@ -4,6 +4,57 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
+## F66 — SIZING LADDER policy: act on direction sooner via tranches (equity WIN / futures NEUTRAL) (2026-07-02)
+`orb_sizing_ladder.py`. NOT a new signal — a POLICY over two existing cohorts: **starter** = break+OR-mid+dir-seq
+(the 'none' cohort, independently PASS) at 0.4×; **add** = when st_state(lb3) confirms (struct3, fires ~30–60m
+later at a worse price) at 0.6×. Risk-based sizing (1.0 = full budget; maps to GRADE_MULT B=0.4/A=1.0). BINARY =
+current (wait; full size on confirmed only). Reentry off (1:1 day/side match). v1 does NOT model the
+'exit starter on opposite structure' cut.
+
+| sym | BINARY PnL / maxDD (PnL/|DD|) | LADDER 0.4/0.6 (PnL/|DD|) | unconf-only cohort (BINARY skips) | verdict |
+|---|---|---|---|---|
+| QQQ | +47.5R / −15.4 (3.08) | **+60.6R / −13.3 (4.57)** | **+0.344R** | LADDER WINS (+28% PnL, lower DD) |
+| SPY | +112.0R / −8.1 (13.84) | **+114.4R / −7.4 (15.40)** | +0.163R | LADDER Pareto WIN (more PnL, less DD) |
+| NQ  | +90.5R / −19.0 (4.76) | +90.8R / −21.4 (4.24) | +0.041R | NEUTRAL (tied PnL, slightly worse risk-adj) |
+| ES  | +45.8R / −29.4 (1.56) | +42.2R / −35.9 (1.18) | −0.031R | LADDER LOSES |
+
+DRIVER: the ladder monetizes the trades BINARY SKIPS (the unconfirmed-only cohort) at 0.4× — that cohort is
+POSITIVE on equities (QQQ +0.344 / SPY +0.163) but flat/NEG on futures (NQ +0.041 / ES −0.031). So the ladder is
+a risk-adjusted WIN on **EQUITIES**, neutral-to-worse on **futures** → per-instrument policy: LADDER for equity,
+BINARY (wait) for futures. The 'act 30–60m sooner' benefit (starter fires at the break) is real everywhere.
+NEXT (v2): model the exit-starter-on-opposite-structure cut — may rescue the futures case by cutting the bad
+unconfirmed trades early. Plumbing (grades / GRADE_MULT / struct_aligned) already exists — one policy toggle.
+
+## F65 — Direction-detector GRAVEYARD: the full specced suite is DEAD (2026-07-02)
+`orb_dir_state.py` · `orb_dirstate2.py` · `orb_efficiency.py` (+ `orb_fast_direction` / `orb_lead_lag` /
+`orb_predict` / `orb_flow_channels`). Every detector tested BOTH as a standalone direction gate AND as
+additive-confluence on the FULL stack (struct3 + OR-mid + dir-seq + vol-exp 2.4), with the dropped-cohort
+additivity control + cross-instrument (NQ/QQQ/SPY) consistency. NONE graduate — the direction edge is saturated
+by structure + OR-mid + dir-seq + vol-exp.
+
+ADDITIVE-CONFLUENCE on the full stack (NQ base exp +0.334 / CIlo +0.165):
+
+| detector | NQ B (add) | dropped-disagree | verdict |
+|---|---|---|---|
+| Theil–Sen slope | +0.205 (<base) | +0.471 (WINNERS) | flips: SPY lifts, NQ drops winners |
+| Mann–Kendall | +0.207 | +0.491 (WINNERS) | flips |
+| Kalman (α-β) velocity | +0.257 | +0.440 (WINNERS) | flips |
+| OLS slope t-significance | +0.120 | +0.483 (WINNERS) | flips |
+| persistence ±ε | +0.184 | +0.393 (WINNERS) | drops winners |
+| HH/LL candle ratio | +0.063 | +0.386 | dead both sides |
+| CUSUM (K=0.5·ATR, h=3·ATR) | n=6 | — | fires too rarely to gate |
+| regime-z (HMM proxy) | +0.181 | +0.449 | flips |
+| Kaufman efficiency (ER) | +0.341 ≈ base, CIlo↓ | not losers | REDUNDANT with vol-exp |
+
+Standalone, the trend-slope family (Theil–Sen / MK / Kalman / OLS) PASSES — but that's just trend-following,
+which structure + ORB already do; as additive confluence it either drops below base or SIGN-FLIPS across
+instruments (SPY-only "lifts" are non-monotonic across thresholds = fitted, and the NQ dropped-disagree cohort
+are WINNERS = the F44/DoW curve-fit signature). Efficiency looked additive vs a base WITHOUT vol-exp, but the
+full-stack control kills it (redundant with the wide-OR filter). See `memory/highstrike-fast-direction` for the
+full ~36-method graveyard (momentum / EMA / regression slope / microprice / cross-asset lead-lag / VPIN / Renko /
+Donchian / EHMA / Markov-predict / XGBoost-LightGBM-NN-HMM — all redundant, curve-fit-inconsistent, or
+worse-than-follow). Conclusion: direction at tradeable resolution is FOLLOWABLE, not forecastable.
+
 ## Finding 1 — Multi-timeframe confirmation HURTS the ORB (counterintuitive but consistent)
 Requiring N of {1h, 4h, Daily} to agree (EMA50>200 stack) with the breakout:
 
