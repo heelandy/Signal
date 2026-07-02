@@ -138,6 +138,10 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2) -> list[dict]:
                                 "asset_status": a.status, "asset_note": a.note, "session": sname,
                                 "bars_ago": n - 1 - i, "struct_aligned": aligned,
                                 "vol_expansion": vol_exp, "or_width_atr": round(orw, 2) if orw == orw else None,
+                                # OR levels at the signal bar — the zone state machine (orb_state)
+                                # uses these to invalidate a stale proposal at the CURRENT price
+                                "or_high": round(float(or_hi[i]), 2) if or_hi[i] == or_hi[i] else None,
+                                "or_low": round(float(or_lo[i]), 2) if or_lo[i] == or_lo[i] else None,
                                 "candidate": c})
                 except ValueError:
                     pass

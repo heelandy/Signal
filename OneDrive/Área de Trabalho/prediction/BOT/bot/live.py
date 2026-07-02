@@ -36,6 +36,14 @@ WATCHLIST = ["SPY", "QQQ", "NQ", "GC"]
 MAX_BAR_AGE_MIN = 15.0
 
 
+def _zone_state(side: str, price: float, or_high, or_low) -> str:
+    from bot.strategy.orb_state import signal_zone_state
+    try:
+        return signal_zone_state(side, price, or_high, or_low)
+    except Exception:
+        return "unknown"
+
+
 def source_health(bars, max_bar_age_min: float = MAX_BAR_AGE_MIN,
                   now: pd.Timestamp | None = None) -> tuple[bool, float]:
     """Fail-closed feed check for one symbol's bar frame: market-truth issues + last-bar age.
@@ -124,6 +132,12 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             proposals.append({
                 "symbol": sym, "source": src, "last_price": last_px, "price_source": px_src,
                 "bar_age_min": age_min, "source_healthy": healthy,
+                # ZONE STATE (staleness fix 2026-07): is the proposal still structurally valid at the
+                # CURRENT price? invalid = price beyond the opposite OR edge (e.g. long, price < OR low);
+                # watch = wrong side of OR mid; active = still on-side. UI + paper autotrade consume this.
+                "or_high": s.get("or_high"), "or_low": s.get("or_low"),
+                "signal_state": _zone_state(c.side.value, float(last_px or c.entry),
+                                            s.get("or_high"), s.get("or_low")),
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,

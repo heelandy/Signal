@@ -124,6 +124,8 @@ def _paper_autotrade():
             continue
         if s.get("source_healthy") is False:      # STALE-DATA GATE: never place an order off a stale/dirty feed
             continue
+        if s.get("signal_state") == "invalid":    # ZONE GATE: structure already broke against the signal
+            continue
         # STUDY size = grade-weighted (A+ 1.5x / A 1.0x / B 0.4x); B kept ≥1 (don't skip) to collect its live data
         qty = max(1, round(int(s.get("suggested_qty") or 1) * GRADE_MULT.get(grade, 0.4)))
         key = f"{s['symbol']}:{s['side']}:{s['entry']}:{s.get('session')}"
@@ -152,6 +154,8 @@ def _autotrack_acceptable():
     from bot.tracker import record_decision
     for s in (_latest.get("signals") or []):
         if not s.get("tradeable") or s.get("grade") not in ("A+", "A", "B"):
+            continue
+        if s.get("signal_state") == "invalid":      # ZONE GATE: don't shadow-track a structurally dead signal
             continue
         if (s.get("bars_ago") or 0) < 1:            # BUGFIX: only CONFIRMED bars — never the forming bar whose
             continue                                # close (=entry) drifts each scan and repaints the signal

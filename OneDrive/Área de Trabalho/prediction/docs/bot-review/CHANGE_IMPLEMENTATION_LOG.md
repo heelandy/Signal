@@ -146,3 +146,34 @@ Rollback: restore file (behavior identical either way).
 **2026-07-02 · TESTS · new regression suite**
 File: `BOT/tests/test_review_fixes.py` (new, 24 tests)
 Result: full suite 45 passed / 0 failed (`pytest BOT/tests -q`).
+
+---
+
+**2026-07-02 · HS-H8 · ORB zone state machine (state-staleness fix) + entries-cap 0=unlimited**
+Files: `production/HIGHSTRIKE_ORB_STACK.pine`, `production/HIGHSTRIKE_ORB_AUTO.pine`,
+`BOT/bot/strategy/orb_state.py` (new), `BOT/bot/strategy/families.py`, `BOT/bot/live.py`,
+`BOT/bot/api/server.py`, `BOT/tests/test_orb_state.py` (new, 15 tests)
+Reason: a pending side had NO invalidation path — the dashboard showed "LONG ARMED @ 730.01"
+with price at 719, below the OR low AND below the proposed stop (user screenshot, QQQ 5m).
+Before: pending state persisted regardless of structure break; AUTO's resting order kept resting.
+After (mirrored long/short, confirmed bars only):
+  * HARD INVALIDATE: confirmed close beyond the OPPOSITE OR edge, or the side's proposed stop
+    tagged pre-entry -> entry/stop/TP cleared, resting order cancelled (`strategy.cancel` via the
+    arm condition in AUTO; `pending_cancelled` flag in Python), side blocked.
+  * Reclaim of the breakout edge on a confirmed close -> WAITING; a completely NEW confirmation
+    is required to re-arm (hysteresis — no flip-flop, no same-structure re-arm).
+  * SOFT WATCH: confirmed close on the wrong side of OR mid pulls the pending entry until price
+    re-crosses the mid (fresh break still required).
+  * Dashboard: new INVALID (dark red) / WATCH (orange) states with the reclaim level in the
+    "why" text; entry lines (bright + dim) cleared while INVALID.
+  * Bot: proposals now carry `or_high/or_low` + `signal_state` (active|watch|invalid|unknown);
+    paper autotrade and the shadow tracker skip `invalid` signals.
+  * Entries cap: `0 = UNLIMITED` supported in STACK (manual mode) and AUTO (state machine still
+    forces a fresh confirmed break per entry and hard-blocks an INVALID side).
+  * `bot/strategy/orb_state.py`: mirrored FSM + spec math (Kaufman ER with zero-path guard,
+    noise-thresholded directional persistence, mean-normalized regression slope, zone_of).
+Tests: 15 new (screenshot scenario, stop-tag invalidation, soft-cancel/re-break, hysteresis,
+stop-first same-bar, exact long/short mirror via reflected prices, zones, ER/persistence/slope
+invariants, monotonic sequences, bad-geometry rejection) — suite 60/60 PASS.
+Residual: Pine edits need a TradingView compile + forward check (no compiler here).
+Rollback: restore the four edited files; delete the two new files.

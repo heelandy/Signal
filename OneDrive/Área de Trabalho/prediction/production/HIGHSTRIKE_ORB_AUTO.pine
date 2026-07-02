@@ -57,7 +57,9 @@ brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="
 auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip="<=5m -> 0.0, else 0.25 ATR. OFF = manual.")
 allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
             tooltip="OFF = one breakout per side per session (validated default). ON = re-arm when price falls back inside the OR; capped by Max entries.")
-max_entries  = input.int(2, "Max entries per side / session", group="ORB", minval=1)
+max_entries_in = input.int(2, "Max entries per side / session (0 = UNLIMITED)", group="ORB", minval=0,
+            tooltip="0 = NO cap: uncapped re-entries — the zone state machine still requires a fresh confirmed break each time and hard-blocks an INVALIDATED side (confirmed close beyond the opposite OR edge).")
+int max_entries = max_entries_in <= 0 ? 9999 : max_entries_in
 brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
             options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
             tooltip="F59: a FILL needs a FULL-BODY close beyond the level. Default close-confirm = on a bar that CLOSES above OR high (long)/below OR low (short), AUTO sends a MARKET entry (fills ~next open), in lockstep with the STACK signal. 'Wick / touch' = a resting buy/sell-STOP at the level (intrabar fill). Broker holds the SL+TP bracket either way.")
@@ -301,6 +303,16 @@ var bool  traded_l = false
 var bool  traded_s = false
 var int   n_l = 0
 var int   n_s = 0
+// ORB ZONE STATE MACHINE (staleness fix 2026-07, mirrors HIGHSTRIKE_ORB_STACK): a PENDING side is
+// HARD-INVALIDATED on a confirmed close beyond the OPPOSITE OR edge or a pre-entry tag of its own
+// proposed stop -> the resting order is CANCELLED (arm_* goes false -> strategy.cancel below) and the
+// side stays blocked until price RECLAIMS the breakout edge on a confirmed close. A confirmed close on
+// the wrong side of OR mid = WATCH: the pending entry order is pulled until price re-crosses the mid
+// (fresh break still required). Confirmed bars only — no intrabar state flips.
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false
+var bool s_above_mid = false
 if reset_now
     Le := na
     Se := na
@@ -308,6 +320,10 @@ if reset_now
     traded_s := false
     n_l := 0
     n_s := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     Le := or_high + brk_buf                                     // breakout entry levels (frozen at OR close)
     Se := or_low  - brk_buf
@@ -340,6 +356,19 @@ if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < 
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
     traded_s := false
+
+// ───────────────────────── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ─────────────────────────
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    l_below_mid := close < or_mid                       // soft WATCH latches (which side of OR mid did the bar close?)
+    s_above_mid := close > or_mid
+    if strategy.position_size <= 0 and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true                               // LONG dead: closed below OR low / tagged its stop pre-entry
+    else if l_invalid and close > or_high
+        l_invalid := false                              // reclaim -> WAITING; a completely new confirmation must re-arm
+    if strategy.position_size >= 0 and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true                               // SHORT mirror
+    else if s_invalid and close < or_low
+        s_invalid := false
 
 // ───────────────────────── EVAL guardrails (daily loss + trailing DD + profit target) ─────────────────────────
 bool ev_live = time >= eval_anchor
@@ -436,8 +465,10 @@ f_armed_json(string side, float e, float sl, float tp) =>
 // ───────────────────────── ARMED + RESTING ORDERS ─────────────────────────
 // the order rests ONLY while every gate (incl. the VWAP cap) holds — cancel pulls it the moment one breaks
 bool past_flat = o_now >= flat_min
-bool arm_l = window and not past_flat and not traded_l and gate_long  and cap_long_ok  and not eval_block and flat and not na(Ls) and (Le - Ls > 0)
-bool arm_s = window and not past_flat and not traded_s and gate_short and cap_short_ok and not eval_block and flat and not na(Ss) and (Ss - Se > 0)
+// zone state machine: INVALID hard-blocks the side; WATCH (confirmed close on the wrong side of OR
+// mid) pulls the pending entry order until price re-crosses the mid. arm_* false -> strategy.cancel.
+bool arm_l = window and not past_flat and not traded_l and not l_invalid and not l_below_mid and gate_long  and cap_long_ok  and not eval_block and flat and not na(Ls) and (Le - Ls > 0)
+bool arm_s = window and not past_flat and not traded_s and not s_invalid and not s_above_mid and gate_short and cap_short_ok and not eval_block and flat and not na(Ss) and (Ss - Se > 0)
 if arm_l and not arm_l[1]
     alert(armed_as_json ? f_armed_json("long", Le, Ls, Ltp) :
          "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] LONG ARMED — buy-stop " + f_px(Le) + " | SL " + f_px(Ls) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Ltp)), alert.freq_once_per_bar)
@@ -520,8 +551,8 @@ plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias
 plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 // dimmed entry levels while a gate BLOCKS the side (no order resting there)
-plot(show_gated and window and flat and not traded_l and not arm_l ? Le : na, "Long entry (gated)",  color=color.new(color.gray, 45), style=plot.style_linebr)
-plot(show_gated and window and flat and not traded_s and not arm_s ? Se : na, "Short entry (gated)", color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_gated and window and flat and not traded_l and not l_invalid and not arm_l ? Le : na, "Long entry (gated)",  color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_gated and window and flat and not traded_s and not s_invalid and not arm_s ? Se : na, "Short entry (gated)", color=color.new(color.gray, 45), style=plot.style_linebr)
 plot(show_plan and l_live ? l_stop_now : na, "Long stop",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
 plot(show_plan and s_live ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
 plot(show_plan and l_live and not is_trail ? (strategy.position_size > 0 ? t_tp : Ltp) : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
@@ -566,8 +597,8 @@ if barstate.islast and show_line_labels
 f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
 var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
-    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_passed ? "TARGET ✓ — done" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : "waiting (no gated setup)"
-    color stc = strategy.position_size != 0 ? color.lime : eval_passed ? color.lime : (arm_l or arm_s) ? color.aqua : eval_block ? color.red : color.orange
+    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_passed ? "TARGET ✓ — done" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : (l_invalid and s_invalid) ? "BOTH SIDES INVALID" : l_invalid ? "LONG INVALID (short gated)" : s_invalid ? "SHORT INVALID (long gated)" : (l_below_mid or s_above_mid) ? "WATCH — order pulled at OR mid" : "waiting (no gated setup)"
+    color stc = strategy.position_size != 0 ? color.lime : eval_passed ? color.lime : (arm_l or arm_s) ? color.aqua : (l_invalid or s_invalid) ? color.rgb(139, 0, 0) : eval_block ? color.red : color.orange
     string prov = wh_provider == "TradersPost" ? "TradersPost" : wh_provider == "PickMyTrade / Tradovate" ? "PickMyTrade" : wh_provider == "Generic JSON (relay / multi-account)" ? "Generic→relay" : "Custom"
     table.cell(t,0,0,"ORB AUTO", text_color=color.yellow, text_size=size.small)
     table.cell(t,1,0, wh_ticker + "  " + timeframe.period, text_color=color.silver, text_size=size.small)
