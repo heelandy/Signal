@@ -96,7 +96,10 @@ stop_mode = input.string("OR edge (legacy)", "Stop placement", group="Risk",
             tooltip="F25b graduated: resting the stop at the last HH/HL swing ~halves risk and lifts exp +0.74->+1.00R. Legacy OR-edge kept as this script's default.")
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk", step=0.1)
 min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk", step=0.1)
-sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk", step=0.25)
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk", tooltip="Arm-timing graduate: equities take a tight 1.5-ATR max stop; futures keep 2.5. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Trend", tooltip="GRADUATED (2026-07): OR closed UPPER half = biased LONG (block shorts); lower half = biased SHORT (block longs). ADDITIVE (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers. Matches HIGHSTRIKE_ORB_STACK.")
 tp1_rr      = input.float(1.0, "TP1 R", group="Risk", step=0.25)
 tp2_rr      = input.float(4.0, "TP2 R", group="Risk", step=0.25,
               tooltip="RESEARCH: 4R target -> exp +0.24R, PF 1.55, win 59%, maxDD -20R (beats the 3R/PF-1.48 record). Peak PF 1.63 if you also set the entry cutoff to 1130. Runner captures the trend leg; TP1 win-rate unchanged.")
@@ -248,7 +251,12 @@ if new_day
 if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = na
 if not in_or and not na(or_high)
+    if not or_set
+        or_mid  := (or_high + or_low) / 2.0
+        or_bull := close > or_mid
     or_set := true
 
 // ───────────────────────── ORB STOP-ENTRY LEVELS (frozen at OR close; rest as buy/sell-stops) ─────────────────────────
@@ -274,17 +282,17 @@ if new_day
     day_n := 0
 if or_set and na(Le) and not na(or_high) and not na(or_low)       // freeze levels at OR close
     Le := or_high + brk_buf
-    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * min_stop_atr)
     Se := or_low  - brk_buf
-    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * min_stop_atr)
 // structure stop mode (F25b): re-anchor the resting stop to the last HH/HL swing while ARMED (frozen at fill)
 if stop_mode == "Structure swing (HH/HL)"
     if not na(Le) and strategy.position_size <= 0
         float aL = not na(pl_last) ? pl_last : or_low
-        Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+        Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * min_stop_atr)
     if not na(Se) and strategy.position_size >= 0
         float aS = not na(ph_last) ? ph_last : or_high
-        Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+        Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * min_stop_atr)
 float Lt1 = Le + (Le - Ls) * tp1_rr
 float Lt2 = Le + (Le - Ls) * tp2_rr
 float St1 = Se - (Ss - Se) * tp1_rr
@@ -293,8 +301,8 @@ float St2 = Se - (Ss - Se) * tp2_rr
 bool cap_long_ok  = not cap_on or na(Le) or (Le - vwap_c) / atr14 <= cap_k
 bool cap_short_ok = not cap_on or na(Se) or (vwap_c - Se) / atr14 <= cap_k
 bool window = or_set and rth and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok and cap_long_ok
-bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok and cap_short_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok and cap_long_ok and (not ormid_bias or or_bull)
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok and cap_short_ok and (not ormid_bias or or_bull == false)
 // re-entry: re-arm once price falls back INSIDE the OR; cap entries/day. OFF => one entry per side.
 if reentry and not na(or_high) and close < or_high
     armed_l := true

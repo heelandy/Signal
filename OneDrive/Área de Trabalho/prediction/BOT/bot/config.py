@@ -56,7 +56,33 @@ class Settings:
     xnas_dir: Path          # QQQ equity MBO (downloaded)
     xnas_spy_dir: Path      # SPY equity MBO — drop the batch here when it arrives
     webhook_token: str | None
+    webull_app_key: str | None       # official Webull OpenAPI (developer.webull.com) — market data
+    webull_app_secret: str | None
+    webull_region: str               # "us" | "hk" | "jp"
+    webull_endpoint: str             # api.webull.com (prod) / us-openapi-alb.uat.webullbroker.com (test)
+    tradestation_api_key: str | None        # OAuth2 client id (TradeStation developer app)
+    tradestation_api_secret: str | None      # OAuth2 client secret
+    tradestation_refresh_token: str | None   # long-lived refresh token from the one-time auth-code flow
+    tradestation_env: str            # "live" (api.tradestation.com) | "sim" (sim-api.tradestation.com)
+    provider_order: str              # CSV data-provider priority, e.g. "alpaca,yahoo,webull" (blank = default)
     mode: str
+
+    def require_tradestation(self) -> tuple[str, str, str]:
+        bad = lambda v: (not v) or "PUT_YOUR" in str(v)
+        if bad(self.tradestation_api_key) or bad(self.tradestation_api_secret) or bad(self.tradestation_refresh_token):
+            raise RuntimeError(
+                "TradeStation not configured. Register an app at api.tradestation.com, do the one-time "
+                "OAuth (offline_access scope) to get a refresh token, then fill TRADESTATION_API_KEY / "
+                "TRADESTATION_API_SECRET / TRADESTATION_REFRESH_TOKEN in BOT/config/.env.")
+        return self.tradestation_api_key, self.tradestation_api_secret, self.tradestation_refresh_token
+
+    def require_webull(self) -> tuple[str, str]:
+        if (not self.webull_app_key or "PUT_YOUR" in self.webull_app_key
+                or not self.webull_app_secret or "PUT_YOUR" in self.webull_app_secret):
+            raise RuntimeError(
+                "Webull OpenAPI keys are not set. Register at developer.webull.com, then fill "
+                "WEBULL_APP_KEY / WEBULL_APP_SECRET in BOT/config/.env.")
+        return self.webull_app_key, self.webull_app_secret
 
     def mbo_dir_for(self, symbol: str) -> Path:
         """Resolve the MBO batch folder by symbol (QQQ vs SPY vs default)."""
@@ -101,5 +127,14 @@ settings = Settings(
     xnas_dir=Path(_get("DATABENTO_XNAS_DIR", "D:/XNAS-20260627-9JFGFERR4Y")),
     xnas_spy_dir=Path(_get("DATABENTO_XNAS_SPY_DIR", "D:/XNAS-SPY-REPLACE_WHEN_DOWNLOADED")),
     webhook_token=_get("WEBHOOK_TOKEN") or None,
+    webull_app_key=_get("WEBULL_APP_KEY") or None,
+    webull_app_secret=_get("WEBULL_APP_SECRET") or None,
+    webull_region=(_get("WEBULL_REGION", "us") or "us").lower(),
+    webull_endpoint=_get("WEBULL_ENDPOINT", "api.webull.com") or "api.webull.com",
+    tradestation_api_key=_get("TRADESTATION_API_KEY") or None,
+    tradestation_api_secret=_get("TRADESTATION_API_SECRET") or None,
+    tradestation_refresh_token=_get("TRADESTATION_REFRESH_TOKEN") or None,
+    tradestation_env=(_get("TRADESTATION_ENV", "live") or "live").lower(),
+    provider_order=(_get("PROVIDER_ORDER", "") or "").strip(),
     mode=(_get("BOT_MODE", "replay") or "replay").lower(),
 )

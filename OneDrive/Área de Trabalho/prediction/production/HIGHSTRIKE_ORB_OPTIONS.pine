@@ -73,7 +73,10 @@ stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Ris
             tooltip="F25b: stop at the last HH/HL swing ~halves the risk. The credit-spread short strike sits here.")
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
 min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
-sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk plan", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk plan", tooltip="Arm-timing graduate: equities take a tight 1.5-ATR max stop; futures keep 2.5 (tight whipsaws them). Matches HIGHSTRIKE_ORB_STACK.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate", tooltip="GRADUATED (2026-07): OR closed UPPER half = day biased LONG (block shorts); lower half = biased SHORT (block longs). Additive (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers. Matches HIGHSTRIKE_ORB_STACK.")
 trail_atr   = input.float(2.0, "Trail x ATR (chandelier — exit signal)", group="Risk plan", step=0.5, minval=0.5,
               tooltip="F27b: exit the option when the UNDERLYING crosses the trail. Spreads can also just run to their strikes.")
 tp1_rr      = input.float(1.0, "TP1 R (debit-spread cap strike)", group="Risk plan", step=0.25)
@@ -199,7 +202,12 @@ if new_day
 if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = na
 if not in_or and not na(or_high)
+    if not or_set
+        or_mid  := (or_high + or_low) / 2.0
+        or_bull := close > or_mid
     or_set := true
 float brk_buf = atr14 * eff_brk
 var float Le = na
@@ -226,9 +234,9 @@ float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? p
 var float Ls = na
 var float Ss = na
 if not na(Le) and not in_long
-    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * min_stop_atr)
 if not na(Se) and not in_short
-    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * min_stop_atr)
 float Lt1 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp1_rr
 float St1 = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp1_rr
 float Lt2 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp2_rr
@@ -240,8 +248,8 @@ float extS = na(Se) ? na : (vwap_c - Se) / atr14
 bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
 bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
 bool window = or_set and wkday and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok
-bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and (not ormid_bias or or_bull)
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and (not ormid_bias or or_bull == false)
 if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries

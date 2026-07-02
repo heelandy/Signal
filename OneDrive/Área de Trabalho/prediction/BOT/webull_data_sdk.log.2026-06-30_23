@@ -1,0 +1,53 @@
+23624 2026-06-30 23:27:49,011 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+23624 2026-06-30 23:27:49,015 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+23624 2026-06-30 23:27:49,016 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23624 2026-06-30 23:27:49,017 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23624 2026-06-30 23:27:49,018 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+23624 2026-06-30 23:27:49,020 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23624 2026-06-30 23:27:49,373 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23624 2026-06-30 23:27:49,378 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23624 2026-06-30 23:27:49,379 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23624 2026-06-30 23:27:49,380 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+23624 2026-06-30 23:27:49,381 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23624 2026-06-30 23:27:52,364 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T03:27:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "2f8cac17-fa48-5c42-8ddf-997e7f727ee1",
+    "x-signature": "Flu3bYhBWqN2YxO1XsTSoV6kDz4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 796964f9-4aca-4e07-a40e-44781d99d6f7
+23624 2026-06-30 23:27:52,370 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "796964f9-4aca-4e07-a40e-44781d99d6f7"
+}

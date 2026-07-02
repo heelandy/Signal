@@ -1,0 +1,178 @@
+4716 2026-06-30 09:42:47,012 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/config",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {},
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "J6HA4EBQRQFJD2J6NQH0F7M649",
+    "x-timestamp": "2026-06-30T13:42:46Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "bee09f86-143e-5dcd-b86a-1f272e3f97a3",
+    "x-signature": "0LjWKJnuiTDrCwLYH79JJwMTHNc=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'UNAUTHORIZED'} ServerException:HTTP Status: 401, Code: UNAUTHORIZED, Msg: , RequestID: 287bb9ed-3352-481f-a6a5-d0636fb3b2c3
+4716 2026-06-30 09:42:47,012 webull.core.client ERROR get_response exception. {
+  "error_code": "UNAUTHORIZED",
+  "error_msg": "",
+  "http_status": 401,
+  "request_id": "287bb9ed-3352-481f-a6a5-d0636fb3b2c3"
+}
+12128 2026-06-30 09:52:13,917 webull.core.http.initializer.client_initializer INFO _check_token_enable result is False
+1600 2026-06-30 09:54:55,176 webull.core.http.initializer.client_initializer INFO _check_token_enable result is False
+24368 2026-06-30 10:09:18,580 webull.core.client ERROR HttpError occurred. Host:us-openapi-alb.uat.webullbroker.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "a88f2efed4dca02b9bc1a3cecbc35dba",
+    "x-timestamp": "2026-06-30T14:09:18Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "893f72f9-78c5-54d4-8334-9cdfb1a1a45e",
+    "x-signature": "cf8E5Qqz5myU50Lys4ClJszsMvI=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "us-openapi-alb.uat.webullbroker.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='us-openapi-alb.uat.webullbroker.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='us-openapi-alb.uat.webullbroker.com', port=443): Failed to resolve 'us-openapi-alb.uat.webullbroker.com' ([Errno 11001] getaddrinfo failed)"))
+24368 2026-06-30 10:09:18,691 webull.core.client ERROR HttpError occurred. Host:us-openapi-alb.uat.webullbroker.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "a88f2efed4dca02b9bc1a3cecbc35dba",
+    "x-timestamp": "2026-06-30T14:09:18Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "18576d8c-63a1-5747-9cdc-d715b0d8af68",
+    "x-signature": "vrnxcjB1Hyms9l21EPoDXNf/t28=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "us-openapi-alb.uat.webullbroker.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='us-openapi-alb.uat.webullbroker.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='us-openapi-alb.uat.webullbroker.com', port=443): Failed to resolve 'us-openapi-alb.uat.webullbroker.com' ([Errno 11001] getaddrinfo failed)"))
+24368 2026-06-30 10:09:18,766 webull.core.client ERROR HttpError occurred. Host:us-openapi-alb.uat.webullbroker.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "NQ",
+    "category": "US_STOCK",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "a88f2efed4dca02b9bc1a3cecbc35dba",
+    "x-timestamp": "2026-06-30T14:09:18Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8123a7c2-766d-5339-9208-89284f2e761c",
+    "x-signature": "TqB83vgMuP42hlCHoOZj9/x9mtY=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "us-openapi-alb.uat.webullbroker.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='us-openapi-alb.uat.webullbroker.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=NQ&category=US_STOCK&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='us-openapi-alb.uat.webullbroker.com', port=443): Failed to resolve 'us-openapi-alb.uat.webullbroker.com' ([Errno 11001] getaddrinfo failed)"))
+24368 2026-06-30 10:09:18,813 webull.core.client ERROR HttpError occurred. Host:us-openapi-alb.uat.webullbroker.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "GC",
+    "category": "US_STOCK",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "a88f2efed4dca02b9bc1a3cecbc35dba",
+    "x-timestamp": "2026-06-30T14:09:18Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "5bd44735-8f84-57d9-b00a-dbb2b3cdcb69",
+    "x-signature": "x0zuVn0AKiSJMwhvwViHt7oLBs0=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "us-openapi-alb.uat.webullbroker.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='us-openapi-alb.uat.webullbroker.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=GC&category=US_STOCK&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='us-openapi-alb.uat.webullbroker.com', port=443): Failed to resolve 'us-openapi-alb.uat.webullbroker.com' ([Errno 11001] getaddrinfo failed)"))

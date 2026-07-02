@@ -104,7 +104,10 @@ min_stop_atr= input.float(0.5, "Min stop x ATR (manual)", group="Risk plan", ste
 auto_minstop= input.bool(true, "Auto min-stop per instrument (futures 0.5 / equity 0.75 ATR)", group="Risk plan",
             tooltip="F51 (2026-06-22): a 0.5-ATR floor is noise-tight on equities/ETFs (median QQQ structure stop ≈0.57 ATR); 0.75 ATR is expectancy-neutral and less whippy. ON = futures 0.5 / stocks-funds 0.75. OFF = manual value for all. Matches HIGHSTRIKE_ORB_STACK.")
 float eff_min_stop = auto_minstop ? (syminfo.type == "futures" ? 0.5 : 0.75) : min_stop_atr
-sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk plan", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk plan", tooltip="Arm-timing graduate: equities take a tight 1.5-ATR max stop (lifts QQQ/SPY, caps reversals sooner); futures keep 2.5 (tight whipsaws them). ON = equity/ETF 1.5, futures 2.5. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate", tooltip="GRADUATED (2026-07): the OR closed in its UPPER half (close>OR mid) = day biased LONG (block shorts); lower half = biased SHORT (block longs). Additive edge (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers; survives 3x slip. Matches HIGHSTRIKE_ORB_STACK.")
 exit_mode = input.string("Fixed TP bracket (broker-held)", "Exit", group="Risk plan",
             options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)"],
             tooltip="DEFAULT = 'Fixed TP bracket' (F34b graduate): full position to a fixed-R cap on the structure stop (set Take-profit R = 4 below) = ~2× the trail's MEDIAN $/trade, honest PF, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip, best for steady eval accumulation; also survives a dead webhook pipe (broker holds SL+TP). F50/F51 (2026-06-22): the trail's headline R/PF is TAIL-INFLATED (a few low-ATR trades) — demoted to a toggle, no longer the default. Matches HIGHSTRIKE_ORB_STACK's exit default. Toggle freely.")
@@ -280,7 +283,12 @@ if reset_now
 if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = na
 if not in_or and not na(or_high)
+    if not or_set
+        or_mid  := (or_high + or_low) / 2.0
+        or_bull := close > or_mid                                  // OR-mid bias: which half did the OR close in?
     or_set := true
 float brk_buf = atr14 * eff_brk
 
@@ -307,9 +315,9 @@ float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? p
 var float Ls = na
 var float Ss = na
 if not na(Le) and strategy.position_size <= 0
-    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * eff_min_stop)
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * eff_min_stop)
 if not na(Se) and strategy.position_size >= 0
-    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * eff_min_stop)
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * eff_min_stop)
 bool is_trail = exit_mode == "Trail (ATR chandelier)"
 float Ltp = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp_rr      // bracket-mode targets only
 float Stp = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp_rr
@@ -324,8 +332,8 @@ bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
 // auto guard: 18:00-19:00 ET (trade-day start, pre-Asia-OR) still carries yesterday's RTH levels — no orders there
 bool stale_gap = is_auto and o_now < 60
 bool window = or_set and wkday and o_now < trade_end and not na(Le) and not stale_gap
-bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok
-bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and (not ormid_bias or or_bull)
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and (not ormid_bias or or_bull == false)
 if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries

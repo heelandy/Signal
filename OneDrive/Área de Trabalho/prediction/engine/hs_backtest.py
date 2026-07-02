@@ -81,7 +81,8 @@ def attach_mtf(con, sym, d):
 
 def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False,
                  reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20, entry_delay=0, ob_l=None, ob_s=None,
-                 chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False):
+                 chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False, min_or_width=0.0, max_entries=99,
+                 or_mid_bias=False):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
@@ -111,10 +112,29 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
     vavg = pd.Series(vol).rolling(vol_len, min_periods=5).mean().to_numpy()    # relative-volume baseline
     n = len(d); lsig = np.zeros(n, bool); ssig = np.zeros(n, bool)
     lvl_l = np.full(n, np.nan); lvl_s = np.full(n, np.nan)
+    # vol-expansion filter: OR-width / ATR-at-OR-close (per day, matches the Pine which freezes it at or_set).
+    # ATR at the entry bar drifts intraday, so use the first post-OR bar's ATR as the day's reference.
+    orw_atr = np.full(n, np.nan)
+    if min_or_width > 0:
+        df_oc = pd.DataFrame({"date": date, "atr": atr, "after": (mins >= or_e)})
+        oc = df_oc[df_oc["after"]].groupby("date")["atr"].first()
+        oc_map = pd.Series(date).map(oc).to_numpy()
+        with np.errstate(invalid="ignore", divide="ignore"):
+            orw_atr = np.where((oc_map > 0), (orh - orl) / oc_map, np.nan)
+    # OR-mid BIAS (ICT premium/discount / equilibrium, GRADUATED 2026-07): the OR closed in its UPPER half
+    # (last OR-bar close > OR-mid) => day biased LONG (block shorts); lower half => biased SHORT (block longs).
+    or_bull = None
+    if or_mid_bias:
+        ocdf = pd.DataFrame({"date": date, "c": c, "in_or": in_or, "mins": mins})
+        oc_close = ocdf[ocdf["in_or"]].sort_values("mins").groupby("date")["c"].last()   # last OR-bar close
+        ocm = pd.Series(date).map(oc_close).to_numpy()
+        with np.errstate(invalid="ignore"):
+            or_bull = ocm > ((orh + orl) / 2.0)          # per-bar (day-broadcast); False where OR undefined
     cur = None; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False
+    n_l = n_s = 0                                       # re-entry counters per date (cap at max_entries)
     for i in range(n):
         if date[i] != cur:
-            cur = date[i]; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False
+            cur = date[i]; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False; n_l = n_s = 0
         if not rth[i] or mins[i] < or_e + entry_delay or np.isnan(orh[i]):   # entry_delay = F38 skip-opening-hour
             continue
         buf = (atr[i] * brk_buf_atr) if not np.isnan(atr[i]) else 0.0
@@ -152,8 +172,8 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
             else:
                 l_cross, ll_lvl = c[i] > lh, lh
                 s_cross, ls_lvl = c[i] < ll, ll
-        ok_l = armed_l if reentry else (not done_l)
-        ok_s = armed_s if reentry else (not done_s)
+        ok_l = (n_l < max_entries) and (armed_l if reentry else (not done_l))
+        ok_s = (n_s < max_entries) and (armed_s if reentry else (not done_s))
         vok = (not vol_conf) or (not np.isnan(vavg[i]) and vavg[i] > 0 and vol[i] >= vol_mult * vavg[i])
         # F57 no-chase guard: skip if price has already run > chase_atr·ATR past the level (buying exhaustion);
         # done_l NOT set, so a later PULLBACK bar near the level can still fire (waits instead of chasing)
@@ -163,10 +183,15 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         # actually pushing the trade way — long needs 101->102->103 (c>c[-1]>c[-2]) same day; short mirror
         seq_l = (not dir_seq) or (i >= 2 and date[i-1] == date[i] and date[i-2] == date[i] and c[i] > c[i-1] and c[i-1] > c[i-2])
         seq_s = (not dir_seq) or (i >= 2 and date[i-1] == date[i] and date[i-2] == date[i] and c[i] < c[i-1] and c[i-1] < c[i-2])
-        if ok_l and l_cross and near_l and seq_l and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
-            lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False
-        if ok_s and s_cross and near_s and seq_s and tdn[i] and (ob_s is None or ob_s[i]) and vok:
-            ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False
+        # vol-expansion conditioner (graduated 2026-07): require a WIDE opening range (OR-width/ATR >= min,
+        # using ATR at the OR close per the Pine); the narrow-OR third is dead. 0 = off.
+        wide_ok = min_or_width <= 0 or (not np.isnan(orw_atr[i]) and orw_atr[i] >= min_or_width)
+        bias_l = or_bull is None or bool(or_bull[i])          # OR-mid bias: long only if OR closed upper-half
+        bias_s = or_bull is None or not bool(or_bull[i])      # short only if OR closed lower-half
+        if ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
+            lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False; n_l += 1
+        if ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and tdn[i] and (ob_s is None or ob_s[i]) and vok:
+            ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False; n_s += 1
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
         if broke_s and c[i] > orl[i]: reclaimed_s = True
@@ -186,7 +211,8 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              tp1_rr=None, tp2_rr=None, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close",
              tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
              time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5,
-             entry_delay=0, ob_confluence=False, chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False):
+             entry_delay=0, ob_confluence=False, chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False,
+             min_or_width=0.0, ext_long=None, ext_short=None, or_mid_bias=False):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -206,6 +232,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                   "GOOGL", "DIA", "IWM", "AMD", "NFLX")
     pt_val_, tick_, comm_, slip_ = (1.0, 0.01, 0.0, 1) if EQ else (PT_VALUE, TICK, COMM, SLIP_TICKS)
     min_stop_atr_ = 0.75 if EQ else MIN_STOP_ATR    # F51: ticker-adaptive min-stop floor (0.5 ATR is noise-tight on equities) — matches the STACK Pine
+    sl_max_atr_ = 1.5 if EQ else SL_MAX_ATR         # reversal cap: equities take a tight 1.5-ATR max stop (arm-timing test); futures need 2.5 (tight whipsaws)
     _et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")        # for EOD-flat (match Pine)
     if tradeday:        # sessions crossing midnight (Asia/London): trade-day coords, 18:00 ET = day start
         _sd = _et + pd.Timedelta(hours=6)
@@ -224,11 +251,15 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     if entry_type == "orb":                       # Opening-Range Breakout entry
         _obl = d["in_bull_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bull_ob" in d) else None
         _obs = d["in_bear_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bear_ob" in d) else None
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq)
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq, min_or_width=min_or_width, or_mid_bias=or_mid_bias)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)
             short_ok = short_ok & (d["mtf_down"].to_numpy() >= mtf_min)
+    elif entry_type == "ext":                     # research hook: externally-supplied entry signals (SMC etc.)
+        _z = np.zeros(len(d), bool)               # fills at close, struct stop, same exit/costs as ORB
+        long_ok = (ext_long if ext_long is not None else _z) & gate_l
+        short_ok = (ext_short if ext_short is not None else _z) & gate_s
     else:                                         # V44 VWAP/EMA reclaim + grade
         long_ok  = (d["trigger_long"]  & d["grade_long_ok"]).to_numpy()  & gate_l
         short_ok = (d["trigger_short"] & d["grade_short_ok"]).to_numpy() & gate_s
@@ -265,20 +296,25 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                 ext = (entry - vs_prev[i]) / atr[i] if sig == 1 else (vs_prev[i] - entry) / atr[i]
                 if ext > vwap_cap:                 # breakout already extended beyond prior-bar VWAP -> skip (stay flat)
                     i += 1; continue
-            if entry_type == "orb":
+            if entry_type in ("orb", "ext"):
                 if stop_mode == "struct" and spl_arr is not None:        # anchor at the last HH/HL swing, not the OR edge
                     sa = spl_arr[i] if sig == 1 else sph_arr[i]
-                    anc = sa if not np.isnan(sa) else (or_low[i] if sig == 1 else or_high[i])
-                else:
+                    _fb = (or_low[i] if sig == 1 else or_high[i]) if or_low is not None else np.nan
+                    anc = sa if not np.isnan(sa) else _fb
+                elif stop_mode == "ormid" and or_low is not None:        # research: stop at the OR MIDPOINT (tighter)
+                    anc = (or_low[i] + or_high[i]) / 2.0
+                elif or_low is not None:
                     anc = (or_low[i] if sig == 1 else or_high[i])
+                else:
+                    anc = np.nan                                          # ext with no OR -> 1.5ATR fallback stop
             else:
                 anc = _nearest(entry, [vs[i], vw[i], e9[i], e20[i], e50[i]], below=(sig == 1))
             if sig == 1:
                 raw = (anc - atr[i] * SL_BUF_ATR) if not np.isnan(anc) else entry - atr[i] * 1.5
-                stop = min(max(raw, entry - atr[i] * SL_MAX_ATR), entry - atr[i] * min_stop_atr_)
+                stop = min(max(raw, entry - atr[i] * sl_max_atr_), entry - atr[i] * min_stop_atr_)
             else:
                 raw = (anc + atr[i] * SL_BUF_ATR) if not np.isnan(anc) else entry + atr[i] * 1.5
-                stop = max(min(raw, entry + atr[i] * SL_MAX_ATR), entry + atr[i] * min_stop_atr_)
+                stop = max(min(raw, entry + atr[i] * sl_max_atr_), entry + atr[i] * min_stop_atr_)
             risk = abs(entry - stop)
             if risk <= 0:
                 i += 1; continue

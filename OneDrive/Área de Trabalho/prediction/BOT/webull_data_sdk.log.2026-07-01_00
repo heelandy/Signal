@@ -1,0 +1,866 @@
+3004 2026-07-01 00:30:06,181 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+5248 2026-07-01 00:30:06,226 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+7192 2026-07-01 00:30:06,225 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+5248 2026-07-01 00:30:06,226 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+3004 2026-07-01 00:30:06,254 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+3004 2026-07-01 00:30:06,254 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,182 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+26240 2026-07-01 00:30:06,182 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+19616 2026-07-01 00:30:06,224 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+19616 2026-07-01 00:30:06,224 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+7192 2026-07-01 00:30:06,225 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+19616 2026-07-01 00:30:06,224 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+7192 2026-07-01 00:30:06,225 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+5248 2026-07-01 00:30:06,226 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+7192 2026-07-01 00:30:06,225 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+3004 2026-07-01 00:30:06,254 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+5248 2026-07-01 00:30:06,226 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+5248 2026-07-01 00:30:06,226 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+3004 2026-07-01 00:30:06,254 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+3004 2026-07-01 00:30:06,254 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,257 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,257 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,257 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,257 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,257 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+19616 2026-07-01 00:30:06,258 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+19616 2026-07-01 00:30:06,258 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+7192 2026-07-01 00:30:06,259 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+7192 2026-07-01 00:30:06,259 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+19616 2026-07-01 00:30:06,258 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+19616 2026-07-01 00:30:06,258 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+19616 2026-07-01 00:30:06,258 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+5248 2026-07-01 00:30:06,260 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+5248 2026-07-01 00:30:06,260 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+7192 2026-07-01 00:30:06,259 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+7192 2026-07-01 00:30:06,259 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+7192 2026-07-01 00:30:06,259 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+3004 2026-07-01 00:30:06,261 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,261 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,260 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+5248 2026-07-01 00:30:06,260 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+5248 2026-07-01 00:30:06,260 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+26240 2026-07-01 00:30:06,263 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,263 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,261 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,261 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,261 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,265 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,265 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,263 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,266 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,266 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,263 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,263 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,265 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,265 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,265 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,266 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,266 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,266 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,267 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,267 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,269 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,269 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,267 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,267 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,267 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,269 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,269 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,269 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+19616 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+7192 2026-07-01 00:30:06,270 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,272 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,272 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+3004 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+3004 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,272 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,272 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+5248 2026-07-01 00:30:06,272 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+26240 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+3004 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+26240 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+3004 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+3004 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+26240 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+19616 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+26240 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+26240 2026-07-01 00:30:06,273 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+19616 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+19616 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+19616 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+19616 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,274 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,276 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,276 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,276 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,276 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+5248 2026-07-01 00:30:06,276 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+7192 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:06,286 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:06,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,042 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,045 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,045 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,046 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,046 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,045 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,045 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,045 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,047 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,047 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,049 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,049 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,046 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,051 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,046 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,046 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,051 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,047 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,047 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,047 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,049 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,049 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,049 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,052 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,052 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,051 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,051 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,051 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,052 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,052 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,052 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,053 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,053 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,053 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,053 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,053 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,054 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,054 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,055 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,055 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,054 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,054 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,056 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,054 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,056 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+7192 2026-07-01 00:30:07,055 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,055 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,055 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,058 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,058 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,060 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,060 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,056 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+3004 2026-07-01 00:30:07,056 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+3004 2026-07-01 00:30:07,056 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,058 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,058 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,058 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+7192 2026-07-01 00:30:07,061 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+7192 2026-07-01 00:30:07,061 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+3004 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,060 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,060 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,061 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,061 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+3004 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,061 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+19616 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+19616 2026-07-01 00:30:07,062 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,064 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,064 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,064 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,064 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+7192 2026-07-01 00:30:07,064 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,065 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,065 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,065 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,065 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,065 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+26240 2026-07-01 00:30:07,070 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,070 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,070 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,070 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+26240 2026-07-01 00:30:07,070 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,091 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,091 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,091 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,091 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,091 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,096 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,096 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,096 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,096 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,096 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,098 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+5248 2026-07-01 00:30:07,098 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+5248 2026-07-01 00:30:07,098 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+5248 2026-07-01 00:30:07,098 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+5248 2026-07-01 00:30:07,098 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+5248 2026-07-01 00:30:07,099 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,099 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,099 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,099 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+5248 2026-07-01 00:30:07,099 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+3004 2026-07-01 00:30:07,955 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "515d907f-478d-59e2-96ee-a1bb7a69b51b",
+    "x-signature": "wSid23ZUpw1sya2EQ/zH63gDJvE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: bbe9c526-5d54-41a6-8bc3-7f9d52df4425
+3004 2026-07-01 00:30:07,955 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "515d907f-478d-59e2-96ee-a1bb7a69b51b",
+    "x-signature": "wSid23ZUpw1sya2EQ/zH63gDJvE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: bbe9c526-5d54-41a6-8bc3-7f9d52df4425
+3004 2026-07-01 00:30:07,955 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "515d907f-478d-59e2-96ee-a1bb7a69b51b",
+    "x-signature": "wSid23ZUpw1sya2EQ/zH63gDJvE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: bbe9c526-5d54-41a6-8bc3-7f9d52df4425
+3004 2026-07-01 00:30:07,955 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "515d907f-478d-59e2-96ee-a1bb7a69b51b",
+    "x-signature": "wSid23ZUpw1sya2EQ/zH63gDJvE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: bbe9c526-5d54-41a6-8bc3-7f9d52df4425
+3004 2026-07-01 00:30:07,955 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "515d907f-478d-59e2-96ee-a1bb7a69b51b",
+    "x-signature": "wSid23ZUpw1sya2EQ/zH63gDJvE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: bbe9c526-5d54-41a6-8bc3-7f9d52df4425
+3004 2026-07-01 00:30:07,960 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "bbe9c526-5d54-41a6-8bc3-7f9d52df4425"
+}
+7192 2026-07-01 00:30:07,961 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "186f2754-609f-5008-b735-bdf0c9e53254",
+    "x-signature": "XSXLsIBRxizHRZNIi9l1N9ORkU4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 90878acc-f746-4146-8969-f386baac0fec
+3004 2026-07-01 00:30:07,960 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "bbe9c526-5d54-41a6-8bc3-7f9d52df4425"
+}
+7192 2026-07-01 00:30:07,961 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "186f2754-609f-5008-b735-bdf0c9e53254",
+    "x-signature": "XSXLsIBRxizHRZNIi9l1N9ORkU4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 90878acc-f746-4146-8969-f386baac0fec
+3004 2026-07-01 00:30:07,960 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "bbe9c526-5d54-41a6-8bc3-7f9d52df4425"
+}
+3004 2026-07-01 00:30:07,960 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "bbe9c526-5d54-41a6-8bc3-7f9d52df4425"
+}
+3004 2026-07-01 00:30:07,960 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "bbe9c526-5d54-41a6-8bc3-7f9d52df4425"
+}
+7192 2026-07-01 00:30:07,961 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "186f2754-609f-5008-b735-bdf0c9e53254",
+    "x-signature": "XSXLsIBRxizHRZNIi9l1N9ORkU4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 90878acc-f746-4146-8969-f386baac0fec
+7192 2026-07-01 00:30:07,961 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "186f2754-609f-5008-b735-bdf0c9e53254",
+    "x-signature": "XSXLsIBRxizHRZNIi9l1N9ORkU4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 90878acc-f746-4146-8969-f386baac0fec
+7192 2026-07-01 00:30:07,961 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:30:07Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "186f2754-609f-5008-b735-bdf0c9e53254",
+    "x-signature": "XSXLsIBRxizHRZNIi9l1N9ORkU4=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 90878acc-f746-4146-8969-f386baac0fec
+7192 2026-07-01 00:30:07,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "90878acc-f746-4146-8969-f386baac0fec"
+}
+7192 2026-07-01 00:30:07,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "90878acc-f746-4146-8969-f386baac0fec"
+}
+7192 2026-07-01 00:30:07,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "90878acc-f746-4146-8969-f386baac0fec"
+}
+7192 2026-07-01 00:30:07,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "90878acc-f746-4146-8969-f386baac0fec"
+}
+7192 2026-07-01 00:30:07,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "90878acc-f746-4146-8969-f386baac0fec"
+}
+12724 2026-07-01 00:35:16,801 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+12724 2026-07-01 00:35:16,803 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+12724 2026-07-01 00:35:16,804 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+12724 2026-07-01 00:35:16,805 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+12724 2026-07-01 00:35:16,806 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+12724 2026-07-01 00:35:16,808 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+12724 2026-07-01 00:35:17,299 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+12724 2026-07-01 00:35:17,304 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+12724 2026-07-01 00:35:17,305 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+12724 2026-07-01 00:35:17,306 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+12724 2026-07-01 00:35:17,307 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+12724 2026-07-01 00:35:19,774 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:35:19Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "7ff523cd-0098-5efe-a365-056a4dfbb017",
+    "x-signature": "zyzurvbb/6SDPcRzg8KpDY12P+k=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 4aa3c282-8f1f-4b00-b14b-cd285ec9f826
+12724 2026-07-01 00:35:19,775 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "4aa3c282-8f1f-4b00-b14b-cd285ec9f826"
+}
+27508 2026-07-01 00:38:28,946 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+27508 2026-07-01 00:38:28,946 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+23868 2026-07-01 00:38:28,947 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+23868 2026-07-01 00:38:28,947 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+27508 2026-07-01 00:38:28,949 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+27508 2026-07-01 00:38:28,949 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+23868 2026-07-01 00:38:28,950 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+23868 2026-07-01 00:38:28,950 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+27508 2026-07-01 00:38:28,950 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+27508 2026-07-01 00:38:28,950 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23868 2026-07-01 00:38:28,951 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23868 2026-07-01 00:38:28,951 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+27508 2026-07-01 00:38:28,951 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+27508 2026-07-01 00:38:28,951 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23868 2026-07-01 00:38:28,952 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+23868 2026-07-01 00:38:28,952 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+27508 2026-07-01 00:38:28,953 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+27508 2026-07-01 00:38:28,953 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+23868 2026-07-01 00:38:28,953 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+23868 2026-07-01 00:38:28,953 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+27508 2026-07-01 00:38:28,955 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:28,955 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:28,955 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:28,955 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,424 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,424 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,425 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,425 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,426 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,426 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,427 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+27508 2026-07-01 00:38:29,427 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+27508 2026-07-01 00:38:29,427 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+27508 2026-07-01 00:38:29,427 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,429 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,429 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,430 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,430 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,431 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,431 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,432 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+23868 2026-07-01 00:38:29,432 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+23868 2026-07-01 00:38:29,432 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,432 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+23868 2026-07-01 00:38:29,939 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:38:29Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "4a353aa5-2b1c-5a94-93c8-185338f7f444",
+    "x-signature": "F2DrMKrlF35pgCV08/jQxEojhr0=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 482bfd2c-e30b-4efa-bc39-eee5aa7828ee
+23868 2026-07-01 00:38:29,939 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T04:38:29Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "4a353aa5-2b1c-5a94-93c8-185338f7f444",
+    "x-signature": "F2DrMKrlF35pgCV08/jQxEojhr0=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 482bfd2c-e30b-4efa-bc39-eee5aa7828ee
+23868 2026-07-01 00:38:29,940 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "482bfd2c-e30b-4efa-bc39-eee5aa7828ee"
+}
+23868 2026-07-01 00:38:29,940 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "482bfd2c-e30b-4efa-bc39-eee5aa7828ee"
+}

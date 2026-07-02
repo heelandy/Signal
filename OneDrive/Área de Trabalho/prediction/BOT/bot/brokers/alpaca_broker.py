@@ -18,6 +18,31 @@ from bot.contracts import (OrderRequest, OrderEvent, OrderState, OrderType, Side
                            TimeInForce, PositionState, PositionPhase, Mode)
 from bot.brokers.base import Broker, AccountInfo
 
+import time as _time
+
+_CONN_HINTS = ("max retries", "connection", "timed out", "timeout", "temporary failure",
+               "nameresolution", "reset by peer", "read timed out", "connectionpool")
+
+
+def _is_conn_err(e: Exception) -> bool:
+    """A transient network failure (worth retrying) vs a real API/auth error (not)."""
+    s = str(e).lower()
+    return any(h in s for h in _CONN_HINTS)
+
+
+def _retry(fn, tries: int = 3, backoff: float = 0.5):
+    """Retry a network call on transient connection errors only; re-raise anything else immediately."""
+    last = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if not _is_conn_err(e):
+                raise
+            _time.sleep(backoff * (i + 1))
+    raise last
+
 
 class AlpacaBroker(Broker):
     name = "alpaca"
@@ -32,11 +57,12 @@ class AlpacaBroker(Broker):
         except ImportError as e:
             raise RuntimeError("alpaca-py not installed: pip install alpaca-py") from e
         self._client = TradingClient(key, secret, paper=self.is_paper)
+        self._clock_cache: tuple[float, bool] | None = None    # (ts, is_open) — avoid hammering /v2/clock
 
     # --- read-only ---------------------------------------------------------
     def account(self) -> AccountInfo:
-        a = self._client.get_account()
-        pos = self._client.get_all_positions()
+        a = _retry(self._client.get_account)
+        pos = _retry(self._client.get_all_positions)
         return AccountInfo(equity=float(a.equity), buying_power=float(a.buying_power),
                            cash=float(a.cash), open_position_count=len(pos),
                            is_paper=self.is_paper, detail=f"status={a.status}")
@@ -53,7 +79,19 @@ class AlpacaBroker(Broker):
         return out
 
     def is_market_open(self) -> bool:
-        return bool(self._client.get_clock().is_open)
+        """Cached ~45s (scan runs every 60s) + retried; on a transient blip reuse the last known
+        state instead of raising, so the paper scan loop never breaks on a momentary hiccup."""
+        now = _time.time()
+        if self._clock_cache and now - self._clock_cache[0] < 45:
+            return self._clock_cache[1]
+        try:
+            val = bool(_retry(lambda: self._client.get_clock().is_open))
+            self._clock_cache = (now, val)
+            return val
+        except Exception:
+            if self._clock_cache:                    # network down -> fall back to last known
+                return self._clock_cache[1]
+            raise
 
     # --- mutating ----------------------------------------------------------
     def submit(self, order: OrderRequest) -> OrderEvent:
@@ -73,8 +111,8 @@ class AlpacaBroker(Broker):
         req = (LimitOrderRequest(limit_price=round(order.limit_price, 2), **common)
                if order.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT)
                else MarketOrderRequest(**common))
-        try:
-            r = self._client.submit_order(req)
+        try:                                          # client_order_id makes retries idempotent (Alpaca dedupes)
+            r = _retry(lambda: self._client.submit_order(req))
             return OrderEvent(order_id=order.order_id, state=OrderState.SUBMITTED,
                               broker_order_id=str(r.id), message=f"alpaca {r.status}")
         except Exception as e:                       # fail closed — surface the broker error

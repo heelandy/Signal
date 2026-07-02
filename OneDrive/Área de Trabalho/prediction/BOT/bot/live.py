@@ -31,6 +31,11 @@ _store = Store()                     # persist signals + decisions to SQLite as 
 WATCHLIST = ["SPY", "QQQ", "NQ", "GC"]
 EQUITY_OPT = {"QQQ", "SPY"}          # Alpaca-tradeable options; GC options = futures-opts / GLD proxy
 
+# GRADE-WEIGHTED SIZING (research 2026-07: exp-by-grade — A+ is 2-3x A/B; B is NEGATIVE on ES/SPY).
+# Kelly-lite multipliers on the base 0.25%-risk budget: bet more where the graded edge is higher.
+GRADE_MULT = {"A+": 1.5, "A": 1.0, "B": 0.4, "C": 0.0}
+B_SKIP_SYMBOLS = {"ES", "SPY"}       # grade-B expectancy is negative on these -> recommend SKIP
+
 
 def scan_watchlist(symbols: list[str], provider: str | None = None, equity: float = 100_000.0,
                    bars_back: int = 2, with_options: bool = True, persist: bool = True) -> list[dict]:
@@ -46,15 +51,24 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
         if not len(bars):
             continue
         src = bars.attrs.get("provider", "?")
-        last_px = round(float(bars["close"].iloc[-1]), 2)             # current price (last bar)
         last_ts = pd.Timestamp(bars["ts_et"].iloc[-1])
         age_min = int((pd.Timestamp.now(tz="America/New_York") - last_ts).total_seconds() / 60)
+        # "now" = REAL-TIME last trade, not the last 5m bar close (which lags pre-open/after-hours).
+        from bot.market_data.providers import latest_price
+        lp = latest_price(sym)
+        last_px = lp.get("price") or round(float(bars["close"].iloc[-1]), 2)
+        px_src = lp.get("source") or src
         a = asset_config(sym)
         try:
             from bot.features import feature_snapshot
             feats = feature_snapshot(bars)                            # FEE-001 context (RSI/ADX/vol/...)
         except Exception:
             feats = {}
+        # IV estimate from realized vol (5m log-returns annualized) so options price WITHOUT manual input
+        import numpy as _np
+        _cl = bars["close"].to_numpy(float)[-120:]
+        _ret = _np.diff(_np.log(_cl)) if len(_cl) > 6 else _np.array([0.0])
+        iv_est = round(float(_np.clip(_np.std(_ret) * (252 * 78) ** 0.5, 0.10, 0.80)), 3) if len(_ret) > 5 else 0.20
         for s in families.scan(bars, sym, bars_back=bars_back):
             c = s["candidate"]
             conf = predict_candidate(c)                       # PREDICTIVE: P(win) from the champion (or prior)
@@ -62,23 +76,46 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             rd = decide(c, Account(equity=equity, source_healthy=True))   # risk gate verdict (advisory)
             if persist:
                 _journal.record(c); _store.record(c); _journal.record(rd); _store.record(rd)
-            plan = (options_exit_plan(c, iv=0.20, dte=0)
+            plan = (options_exit_plan(c, iv=iv_est, dte=0)
                     if (with_options and sym in EQUITY_OPT) else None)
             # ADVISORY sizing: how many units the risk budget buys (>=1 so futures show a real number)
             risk_per_unit = c.risk * a.point_value
             budget = equity * 0.0025
             qty = max(1, int(budget / risk_per_unit)) if risk_per_unit > 0 else 1
+            # GRADE = 2-D quality on the two validated, ADDITIVE conditioners (F20 structure + vol-expansion).
+            #   A+ = core breakout, HH/HL structure-aligned AND wide opening range (vol-expansion) — the best
+            #        cohort (+0.45-0.51R: aligned&wide on QQQ/SPY). A = one of the two. B = neither (narrow &
+            #        unaligned = the dead cohort). C = info-only family or unverified asset.
+            aligned = s.get("struct_aligned", False)
+            wide = s.get("vol_expansion", False)
+            if s["family"] == "breakout" and s["tradeable"] and s.get("asset_status") == "validated":
+                grade = "A+" if (aligned and wide) else ("A" if (aligned or wide) else "B")
+            else:
+                grade = "C"
+            # GRADE-WEIGHTED SIZING: scale the base qty by conviction; skip B where its edge is negative.
+            size_mult = GRADE_MULT.get(grade, 0.4)
+            skip_reco = (grade == "B" and sym in B_SKIP_SYMBOLS) or grade == "C"
+            sized_qty = 0 if skip_reco else (max(1, round(qty * size_mult)) if size_mult > 0 else 0)
+            conviction = ({"A+": "HIGHEST — size up (1.5x)", "A": "standard (1.0x)",
+                           "B": ("SKIP — grade-B is negative on " + sym) if skip_reco else "low — size down (0.4x)",
+                           "C": "info only — don't trade"}).get(grade, "")
             proposals.append({
-                "symbol": sym, "source": src, "last_price": last_px, "bar_age_min": age_min,
+                "symbol": sym, "source": src, "last_price": last_px, "price_source": px_src,
+                "bar_age_min": age_min,
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
+                "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,
+                "or_width_atr": s.get("or_width_atr"),
                 "session": s.get("session"), "bars_ago": s["bars_ago"],
                 "side": c.side.value, "entry": c.entry, "stop": c.stop,
                 "tp1": (plan["underlying"]["tp1"] if plan else round(c.entry + c.side.sign * 1.5 * c.risk, 2)),
                 "tp2": (plan["underlying"]["tp2"] if plan else round(c.entry + c.side.sign * 4.0 * c.risk, 2)),
-                "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats,
+                "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats, "iv_est": iv_est,
                 "suggested_qty": qty, "risk_per_unit": round(risk_per_unit, 2),
                 "risk_pct": round(100 * qty * risk_per_unit / equity, 2),
+                "size_mult": size_mult, "sized_qty": sized_qty, "conviction": conviction,
+                "skip_reco": skip_reco,
+                "risk_pct_sized": round(100 * sized_qty * risk_per_unit / equity, 2),
                 "risk_ok": rd.approved, "risk_reason": rd.reason_code.value,
                 "options": plan})
     return proposals

@@ -59,9 +59,94 @@ def _broker():
 import threading as _threading
 import time as _time
 from bot.contracts import utcnow_iso as _now
+_START = _time.time()                          # process start — for the status-bar uptime
 _WATCH = ["SPY", "QQQ", "NQ", "GC"]
 _latest = {"signals": [], "ts": None, "error": None, "scanning": False, "market": {}}
 _mkt_tick = {"n": 0}
+
+
+# ── PAPER auto-trade (STUDY MODE) — opt-in toggle; places bracket orders on the ALPACA PAPER account
+#    only (hardcoded paper=True → can NEVER go live). Collects real fills to compare vs the backtest. ──
+_state["paper_autotrade"] = False
+_paper = {"placed": set(), "log": [], "last_err": None}   # dedup keys + study log + last broker error (throttle)
+
+
+def _paper_broker():
+    """Alpaca broker FORCED to paper (paper=True) — independent of the run mode, never touches live."""
+    if "pb" not in _broker_cache:
+        from bot.brokers.alpaca_broker import AlpacaBroker
+        _broker_cache["pb"] = AlpacaBroker(paper=True)
+    return _broker_cache["pb"]
+
+
+def _paper_autotrade():
+    """When the toggle is ON: for EVERY NEW breakout signal (grade B → A → A+), place a grade-sized
+    bracket order on the PAPER account, simultaneously as the scan detects them. Study ALL grades (incl.
+    B) to confirm the live exp-by-grade — B is kept a small NON-zero size so it collects data. Equities
+    only (Alpaca can't trade futures). Dedup'd. PAPER only — for study/data collection."""
+    if not _state.get("paper_autotrade") or not settings.alpaca_paper:
+        return
+    from bot.contracts import OrderRequest, OrderType, Side, TimeInForce
+    from bot.live import GRADE_MULT
+    try:
+        b = _paper_broker()
+        mkt_open = b.is_market_open()
+        _paper["last_err"] = None                 # broker reachable — clear any prior error state
+    except Exception as e:
+        msg = "broker: " + str(e)[:100]
+        if msg != _paper.get("last_err"):         # throttle: log a transient blip ONCE, not every 60s cycle
+            _paper["log"].append({"ts": _now(), "error": msg}); _paper["last_err"] = msg
+        return
+    if not mkt_open:
+        return
+    for s in (_latest.get("signals") or []):
+        if s.get("symbol") not in ("QQQ", "SPY"):                 # Alpaca-tradeable equities only
+            continue
+        grade = s.get("grade")
+        if not s.get("tradeable") or grade not in ("A+", "A", "B"):   # B → A+ (skip C = info-only/unverified)
+            continue
+        # STUDY size = grade-weighted (A+ 1.5x / A 1.0x / B 0.4x); B kept ≥1 (don't skip) to collect its live data
+        qty = max(1, round(int(s.get("suggested_qty") or 1) * GRADE_MULT.get(grade, 0.4)))
+        key = f"{s['symbol']}:{s['side']}:{s['entry']}:{s.get('session')}"
+        if key in _paper["placed"]:
+            continue
+        try:
+            order = OrderRequest(candidate_id=key, symbol=s["symbol"],
+                                 side=Side.LONG if s["side"] == "long" else Side.SHORT, qty=qty,
+                                 order_type=OrderType.MARKET, stop_price=s["stop"], take_profit=s["tp2"],
+                                 tif=TimeInForce.DAY, idempotency_key=key)
+            ev = b.submit(order)
+            _paper["placed"].add(key)
+            _paper["log"].append({"ts": _now(), "symbol": s["symbol"], "side": s["side"], "qty": qty,
+                                  "grade": s["grade"], "entry": s["entry"], "stop": s["stop"], "tp2": s["tp2"],
+                                  "order": str(getattr(ev, "broker_order_id", "") or getattr(ev, "status", "submitted"))})
+            _paper["log"] = _paper["log"][-200:]
+        except Exception as e:
+            _paper["log"].append({"ts": _now(), "symbol": s.get("symbol"), "error": str(e)[:120]})
+
+
+def _autotrack_acceptable():
+    """Shadow-track every ACCEPTABLE live signal (tradeable + grade A+/A/B) as a what-if decision, so the
+    Recent-Candidates / Performance / Live-vs-Backtest panels update from the engine's own signal flow —
+    no manual Take needed and no order placed. Dedup'd by a stable per-bar key; never clobbers a manual
+    decision. track_outcomes() then walks bars to resolve stop/TP1/TP2 first-touch."""
+    from bot.tracker import record_decision
+    for s in (_latest.get("signals") or []):
+        if not s.get("tradeable") or s.get("grade") not in ("A+", "A", "B"):
+            continue
+        if (s.get("bars_ago") or 0) < 1:            # BUGFIX: only CONFIRMED bars — never the forming bar whose
+            continue                                # close (=entry) drifts each scan and repaints the signal
+        c = s.get("candidate") or {}
+        # dedup by BAR (generated_at), NOT the entry price — one tracked signal per bar/side/session, not one
+        # per price tick. (The old key put s['entry'] in it, so a drifting live close made 6 rows for 1 breakout.)
+        key = f"{s['symbol']}:{s.get('family')}:{s.get('session')}:{s['side']}:{c.get('generated_at') or ''}"
+        try:
+            record_decision({"candidate_id": key, "symbol": s["symbol"], "side": s["side"],
+                             "family": s.get("family"), "session": s.get("session"), "entry": s["entry"],
+                             "stop": s["stop"], "tp1": s.get("tp1"), "tp2": s.get("tp2"),
+                             "grade": s.get("grade"), "generated_at": c.get("generated_at")}, taken=True, auto=True)
+        except Exception:
+            pass
 
 
 def _scan_loop():
@@ -75,7 +160,9 @@ def _scan_loop():
             try:
                 _latest["signals"] = scan_watchlist(_WATCH, bars_back=4, persist=False)
                 _latest["ts"] = _now(); _latest["error"] = None
-                track_outcomes()                 # update outcomes of taken trades each cycle
+                _autotrack_acceptable()          # shadow-track ACCEPTABLE signals -> Candidates/Performance/scorecard update
+                _paper_autotrade()               # STUDY: place paper orders when the toggle is on
+                track_outcomes()                 # resolve first-touch outcomes of tracked signals each cycle
                 if _mkt_tick["n"] % 10 == 0:      # market context every ~10 cycles (slow daily data)
                     _latest["market"] = market_context()
                 _mkt_tick["n"] += 1
@@ -109,11 +196,59 @@ def market():
     return _latest.get("market") or market_context()
 
 
+_QUOTE_GROUPS = {
+    "indices": [("SPY", "SPY"), ("QQQ", "QQQ"), ("DIA", "DIA"), ("IWM", "IWM"), ("VIX", "^VIX")],
+    "futures": [("ES", "ES=F"), ("NQ", "NQ=F"), ("YM", "YM=F"), ("RTY", "RTY=F"), ("GC", "GC=F"), ("CL", "CL=F")],
+    "forex":   [("EURUSD", "EURUSD=X"), ("GBPUSD", "GBPUSD=X"), ("USDJPY", "JPY=X"), ("DXY", "DX-Y.NYB")],
+    "crypto":  [("BTC", "BTC-USD"), ("ETH", "ETH-USD"), ("SOL", "SOL-USD"), ("XRP", "XRP-USD")],
+}
+_QUOTE_CACHE: dict = {}                                   # group -> (ts, quotes)
+
+
+@app.get("/api/quotes")
+def quotes(group: str = "indices"):
+    """Live Market tabs — last price + intraday change for a group of REAL securities (yfinance).
+    Cached ~30s so tab-switching is instant."""
+    group = group.lower()
+    if group not in _QUOTE_GROUPS:
+        return {"group": group, "quotes": [], "error": "unknown group"}
+    hit = _QUOTE_CACHE.get(group)
+    if hit and _time.time() - hit[0] < 30:
+        return {"group": group, "quotes": hit[1], "cached": True}
+    import yfinance as yf
+    labels = {sym: lab for lab, sym in _QUOTE_GROUPS[group]}
+    out = []
+    try:
+        df = yf.download(list(labels), period="2d", interval="1d", progress=False, group_by="ticker", threads=True)
+        for sym, lab in ((s, l) for l, s in _QUOTE_GROUPS[group]):
+            try:
+                closes = df[sym]["Close"].dropna() if sym in df.columns.get_level_values(0) else df["Close"].dropna()
+                if len(closes) < 1:
+                    continue
+                last = float(closes.iloc[-1]); prev = float(closes.iloc[-2]) if len(closes) > 1 else last
+                chg = last - prev; pct = 100 * chg / prev if prev else 0.0
+                out.append({"symbol": lab, "price": round(last, 2), "change": round(chg, 2), "pct": round(pct, 2)})
+            except Exception:
+                pass
+    except Exception as e:
+        return {"group": group, "quotes": [], "error": str(e)[:80]}
+    _QUOTE_CACHE[group] = (_time.time(), out)
+    return {"group": group, "quotes": out}
+
+
 @app.get("/api/system")
 def system():
     from bot.platform import registry
     from bot.security import keys_status
     return {"capabilities": registry.health(), "keys": keys_status()}
+
+
+@app.get("/api/datasources")
+def datasources(probe: int = 0):
+    """Readiness of every data provider (configured / SDK / auth) + the active priority order.
+    ?probe=1 actively hits Webull so you SEE it authenticate the moment you paste production keys."""
+    from bot.market_data.providers import provider_status
+    return provider_status(probe=bool(probe))
 
 
 @app.on_event("startup")
@@ -127,7 +262,88 @@ def health():
     broker = "n/a"
     return {"mode": _state["mode"], "kill_switch": _state["kill_switch"],
             "live_allowed": settings.live_allowed, "alpaca_paper": settings.alpaca_paper,
-            "source_healthy": True, "broker": broker, "healthy": not _state["kill_switch"]}
+            "source_healthy": True, "broker": broker, "healthy": not _state["kill_switch"],
+            "uptime_sec": int(_time.time() - _START), "scanning": _latest["scanning"],
+            "paper_autotrade": _state.get("paper_autotrade", False)}
+
+
+@app.get("/api/contract")
+def contract(symbol: str, spot: float, side: str = "long", iv: float = 0.20, dte: int = 0, otm: float = 0.0,
+             tp1: float = 0.0, tp2: float = 0.0, stop: float = 0.0):
+    """Greeks + bid/mid/ask for the ATM(-ish) option a signal would use, PLUS what the contract is worth
+    if the underlying reaches TP1 / TP2 / stop (Black-Scholes repriced at each level, same IV) — powers the
+    Selected Contract panel. bid/ask from a ~4% spread estimate (Pine/BOT have no live chain)."""
+    from bot.options import pricing as P
+    right = "C" if side.lower() in ("long", "call", "c") else "P"
+    S = float(spot)
+    K = round(S * (1 + (otm / 100.0) * (1 if right == "C" else -1)))
+    T = P.year_frac(max(int(dte), 0) * 390 + 195)          # 0DTE ~ half a session of clock left
+    g = P.greeks(S, K, T, 0.045, float(iv), right)
+    mid = g.price
+    spread = max(0.02, round(mid * 0.04, 2))
+
+    def proj(level):                                        # option value if the underlying reaches `level`
+        if not level or mid <= 0:
+            return None
+        v = P.price(float(level), K, T, 0.045, float(iv), right)
+        return {"px": round(v, 2), "pct": round(100 * (v - mid) / mid, 0)}
+
+    return {"symbol": symbol.upper(), "right": right, "strike": K, "dte": int(dte), "iv": round(float(iv), 3),
+            "bid": round(mid - spread / 2, 2), "mid": round(mid, 2), "ask": round(mid + spread / 2, 2),
+            "delta": g.delta, "gamma": g.gamma, "theta": g.theta, "vega": g.vega,
+            "implied_move_pct": round(100 * float(iv) * (T ** 0.5), 2),
+            "at_tp1": proj(tp1), "at_tp2": proj(tp2), "at_stop": proj(stop)}
+
+
+@app.get("/api/orb_levels")
+def orb_levels(symbol: str = "SPY"):
+    """Per-session opening-range hi/lo + live clock status for the ORB Manager panel. One 5m fetch,
+    sliced by ET time into the NY / Asia / London OR windows + the prior-day RTH OR."""
+    from bot.market_data.providers import get_bars
+    import pandas as pd
+    sym = symbol.upper()
+    try:
+        b = get_bars(sym, "5m", period="5d")
+    except Exception as e:
+        return {"symbol": sym, "sessions": [], "error": str(e)[:100]}
+    if b is None or not len(b):
+        return {"symbol": sym, "sessions": [], "error": "no bars"}
+    b = b.copy()
+    et = pd.to_datetime(b["ts_et"])                           # provider returns bars already in ET
+    if getattr(et.dt, "tz", None) is not None:
+        et = et.dt.tz_convert("America/New_York")
+    b["d"] = et.dt.date; b["hm"] = (et.dt.hour * 60 + et.dt.minute)
+    now = pd.Timestamp.now(tz="America/New_York"); now_hm = now.hour * 60 + now.minute
+
+    def orng(lo, hi, back=0):
+        w = b[(b["hm"] >= lo) & (b["hm"] < hi)]
+        days = sorted(w["d"].unique())
+        if len(days) <= back:
+            return None
+        ww = w[w["d"] == days[-1 - back]]
+        return {"high": round(float(ww["high"].max()), 2), "low": round(float(ww["low"].min()), 2)}
+
+    # (name, label, or_lo_min, or_hi_min, trade_end_min, back)
+    specs = [("NY ORB", "09:30-10:00", 570, 600, 900, 0),
+             ("Asia ORB", "19:00-19:30", 1140, 1170, 210, 0),
+             ("London ORB", "03:00-03:30", 180, 210, 480, 0),
+             ("Prev Day ORB", "09:30-10:00", 570, 600, 900, 1)]
+    def _in(a, b):                                            # now_hm in [a,b), wrap-aware (Asia/London cross midnight)
+        return (a <= now_hm < b) if a <= b else (now_hm >= a or now_hm < b)
+    out = []
+    for name, lab, olo, ohi, tend, back in specs:
+        lv = orng(olo, ohi, back)
+        if back:                                              # prior day = reference only
+            st = "REF"
+        elif _in(olo, ohi):
+            st = "BUILDING"
+        elif _in(ohi, tend):
+            st = "ACTIVE"
+        else:
+            st = "CLOSED"
+        out.append({"session": name, "time": lab, "high": lv["high"] if lv else None,
+                    "low": lv["low"] if lv else None, "status": st})
+    return {"symbol": sym, "sessions": out, "now_et": now.strftime("%H:%M")}
 
 
 @app.get("/api/journal/metrics")
@@ -137,7 +353,18 @@ def journal_metrics():
 
 @app.get("/api/performance")
 def performance():
-    return perf.summary(_journal)
+    """Live tracked record (auto-shadow + manual taken signals, first-touch R). Falls back to the
+    replay journal if nothing is tracked yet."""
+    from bot.tracker import perf_summary
+    p = perf_summary()
+    return p if p.get("trades") else perf.summary(_journal)
+
+
+@app.get("/api/study")
+def study():
+    """First-touch study: what hit first (stop vs TP) + MFE/MAE + tuning hints for stop/target accuracy."""
+    from bot.tracker import study as _study
+    return _study()
 
 
 @app.get("/api/attribution")
@@ -165,6 +392,34 @@ def signals(force: int = 0):
             "error": _latest["error"], "watchlist": _WATCH}
 
 
+@app.get("/api/asset_levels")
+def asset_levels(symbol: str):
+    """Levels to auto-fill the options calculator for a SELECTED asset (even when no signal is firing):
+    a live signal's levels if one exists, else current price + an ATR-based default setup."""
+    sym = symbol.upper()
+    for s in (_latest.get("signals") or []):                 # 1) a live signal for this asset?
+        if s.get("symbol") == sym and s.get("side"):
+            return {"symbol": sym, "side": s["side"], "entry": s["entry"], "stop": s["stop"],
+                    "tp1": s.get("tp1"), "tp2": s["tp2"], "iv_est": s.get("iv_est"), "source": "live signal"}
+    import numpy as np                                        # 2) current price + ATR default
+    from bot.market_data.providers import get_bars, latest_price
+    try:
+        bars = get_bars(sym, "5m", period="3d")
+    except Exception as e:
+        return {"error": f"{sym}: {e}"}
+    if not len(bars):
+        return {"error": f"no data for {sym}"}
+    px = latest_price(sym).get("price") or round(float(bars["close"].iloc[-1]), 2)
+    hi, lo, cl = (bars[c].to_numpy(float) for c in ("high", "low", "close"))
+    atr = float(np.nanmean((hi - lo)[-50:])) or px * 0.002
+    ret = np.diff(np.log(cl[-120:]))
+    iv = round(float(np.clip(np.std(ret) * (252 * 78) ** 0.5, 0.10, 0.80)), 3) if len(ret) > 5 else 0.20
+    risk = 1.5 * atr
+    return {"symbol": sym, "side": "long", "entry": round(px, 2), "stop": round(px - risk, 2),
+            "tp1": round(px + 1.5 * risk, 2), "tp2": round(px + 4 * risk, 2), "iv_est": iv,
+            "source": "current price + ATR default (no live signal — adjust side/levels as needed)"}
+
+
 class DecisionReq(BaseModel):
     signal: dict
     taken: bool
@@ -188,10 +443,31 @@ def decisions():
     return {"decisions": list_decisions(50), "summary": summary()}
 
 
+@app.get("/api/scorecard")
+def scorecard():
+    """LIVE-vs-BACKTEST gate: do taken signals realise the backtested edge (by grade)? The check that
+    must pass before sizing up — proves the edge survives live fills, not just the backtest."""
+    from bot.tracker import scorecard as _sc, track_outcomes
+    try:
+        track_outcomes()
+    except Exception:
+        pass
+    return _sc()
+
+
 @app.get("/api/candidates")
 def candidates(limit: int = 50):
-    rows = _journal.read("TradeCandidate")[-limit:]
-    return {"candidates": rows}
+    """Recent ACCEPTABLE signals the engine tracked (auto-shadow + manual), newest first, with the
+    resolved first-touch outcome. Updates live off the same tracker the scorecard/Performance use."""
+    from bot.tracker import list_decisions
+    out = []
+    for x in list_decisions(limit):
+        risk = abs((x.get("entry") or 0) - (x.get("stop") or 0))
+        rr = round(abs((x.get("tp2") or 0) - (x.get("entry") or 0)) / risk, 1) if risk else None
+        out.append({"symbol": x["symbol"], "side": x["side"], "setup": x.get("family"), "entry": x["entry"],
+                    "expected_r": rr, "generated_at": x.get("signal_at") or x.get("decided_at"),
+                    "outcome": x.get("outcome")})
+    return {"candidates": out}
 
 
 @app.get("/api/positions")
@@ -205,6 +481,24 @@ def positions():
 def kill(on: bool = True):
     _state["kill_switch"] = bool(on)        # consulted by the orchestrator before any submit
     return {"kill_switch": _state["kill_switch"]}
+
+
+@app.post("/api/control/paper_autotrade")
+def paper_autotrade_toggle(on: int = 0):
+    """STUDY toggle: when ON, the bot auto-places PAPER bracket orders on Alpaca for A+/A equity
+    signals (grade-sized). PAPER ACCOUNT ONLY (hardcoded paper=True) — it can NEVER place a live trade.
+    Requires Alpaca keys + market hours. Data is for study/comparison vs the backtest."""
+    if on and not settings.alpaca_paper:
+        return {"error": "Alpaca is not in paper mode (set ALPACA_PAPER=true + keys)", "paper_autotrade": False}
+    _state["paper_autotrade"] = bool(on)
+    return {"paper_autotrade": _state["paper_autotrade"], "placed": len(_paper["placed"])}
+
+
+@app.get("/api/paper_log")
+def paper_log():
+    """Study log — what the paper-autotrade placed (and any errors)."""
+    return {"on": _state.get("paper_autotrade", False), "alpaca_paper": settings.alpaca_paper,
+            "placed": len(_paper["placed"]), "log": _paper["log"][-40:]}
 
 
 @app.post("/api/control/mode")
@@ -390,16 +684,44 @@ def flatten(_=Depends(auth)):
     return b.flatten()
 
 
+def _flow_score(b, n: int = 20) -> float:
+    """REAL order-flow pressure from recent bars (Webull feed): net volume-weighted direction of the last
+    n 5m bars → 0-100 (50 = balanced, >50 = net buying, <50 = net selling). Uptick/downtick volume proxy —
+    a bar closing up counts its volume as buy pressure, down as sell. Not tick-level, but real, not random."""
+    try:
+        import numpy as np
+        t = b.tail(n)
+        delta = (t["close"].astype(float) - t["open"].astype(float)).to_numpy()
+        vol = t["volume"].astype(float).clip(lower=1.0).to_numpy()
+        total = float(vol.sum())
+        if total <= 0:
+            return 50.0
+        signed = float((np.sign(delta) * vol).sum())          # net buy vs sell volume, in [-total, total]
+        return round(max(0.0, min(100.0, 50.0 + 50.0 * signed / total)), 0)
+    except Exception:
+        return 50.0
+
+
 @app.websocket("/ws/tape")
 async def tape(ws: WebSocket):
-    """Live tape stub — streams the (demo) order-flow direction score until the live loop is wired."""
+    """LIVE order-flow pressure — volume-weighted directional flow from the latest Webull 5m SPY bars
+    (falls back through the provider chain). Refetched ~8s off-thread; streamed every 2s."""
     await ws.accept()
+    from bot.market_data.providers import get_bars
+    loop = asyncio.get_event_loop()
+    score, sym, last = 50.0, "SPY", 0.0
     try:
-        score = 50.0
         while True:
-            score = max(0, min(100, score + random.uniform(-8, 8)))
-            await ws.send_text(json.dumps({"score": round(score, 0), "ts": asyncio.get_event_loop().time()}))
-            await asyncio.sleep(1)
+            now = loop.time()
+            if now - last > 8:                                 # refetch bars off the event loop
+                last = now
+                try:
+                    b = await loop.run_in_executor(None, lambda: get_bars(sym, "5m", "1d"))
+                    score = _flow_score(b)
+                except Exception:
+                    pass
+            await ws.send_text(json.dumps({"score": score, "sym": sym, "live": True, "ts": now}))
+            await asyncio.sleep(2)
     except WebSocketDisconnect:
         return
 

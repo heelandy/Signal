@@ -52,7 +52,7 @@ class OpportunityQueue:
 @dataclass
 class ExitPolicy:
     mode: str = "cap4"                 # cap4 (full->4R) | trail | scale
-    tp1_rr: float = 1.0
+    tp1_rr: float = 1.5                # F64: 1.5R is the validated scale point (beats 1.0R)
     tp2_rr: float = 4.0
     trail_atr: float = 2.5
     early_exit_score: float = 80.0     # opposite order-flow score that triggers an early bail

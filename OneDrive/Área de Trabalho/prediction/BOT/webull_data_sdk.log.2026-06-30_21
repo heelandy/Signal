@@ -1,0 +1,75 @@
+17388 2026-06-30 21:02:00,439 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+17388 2026-06-30 21:02:00,476 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+17388 2026-06-30 21:02:00,487 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+17388 2026-06-30 21:02:00,493 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+17388 2026-06-30 21:02:00,496 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+17388 2026-06-30 21:02:00,510 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+17388 2026-06-30 21:02:00,999 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+17388 2026-06-30 21:02:01,012 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+17388 2026-06-30 21:02:01,018 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+17388 2026-06-30 21:02:01,035 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+17388 2026-06-30 21:02:01,036 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+14036 2026-06-30 21:07:25,197 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+14036 2026-06-30 21:07:25,240 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+14036 2026-06-30 21:07:25,244 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+14036 2026-06-30 21:07:25,246 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+14036 2026-06-30 21:07:25,248 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+14036 2026-06-30 21:07:25,254 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+14036 2026-06-30 21:07:26,697 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+14036 2026-06-30 21:07:26,702 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+14036 2026-06-30 21:07:26,704 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+14036 2026-06-30 21:07:26,709 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+14036 2026-06-30 21:07:26,710 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:08,631 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+24228 2026-06-30 21:15:08,636 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+24228 2026-06-30 21:15:08,639 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+24228 2026-06-30 21:15:08,641 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+24228 2026-06-30 21:15:08,642 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+24228 2026-06-30 21:15:08,647 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:10,174 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:10,180 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:10,181 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:10,183 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+24228 2026-06-30 21:15:10,185 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+24228 2026-06-30 21:15:18,965 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T01:15:17Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "530a8f96-4741-55e4-8d87-31996f11c584",
+    "x-signature": "qmV0UjejzFp5PQWsVe3w2wD6GJo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 41f93883-0325-4cc1-8863-7d9159aab011
+24228 2026-06-30 21:15:18,966 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "41f93883-0325-4cc1-8863-7d9159aab011"
+}

@@ -5,6 +5,47 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-01 — OR-mid BIAS (graduated) + asset-aware max-stop propagated to ALL 5 Pine + BOT
+
+⚠️ Needs a **TradingView compile-check** on INDICATOR / STRATEGY / OPTIONS / AUTO (STACK already checked).
+All-scripts-consistency: the two newest validated items are now in every Pine file and the BOT engine.
+
+- **OR-mid bias (`ormid_bias`, default ON)** — GRADUATED (`research/orb_mid_bias.py`): trade only WITH the
+  opening-range's closing-half bias — OR closed UPPER half (close > OR-mid) ⇒ day biased LONG (block
+  shorts); lower half ⇒ biased SHORT (block longs). Additive edge: NQ +0.17→+0.29, QQQ +0.39→+0.48,
+  SPY +0.35→+0.56 (all PASS the gauntlet); the dropped counter-bias trades are the LOSERS; survives 3× slip;
+  fixes NQ year-consistency (10/17→13/17). = the ICT premium/discount / equilibrium concept, done as a filter.
+  Each file captures `or_mid`/`or_bull` at OR close and gates `gate_long` (req or_bull) / `gate_short`.
+  Also wired into the engine (`_orb_signals`/`backtest` `or_mid_bias=`) + BOT breakout family (LIVE).
+- **Asset-aware max-stop (`auto_slmax`, default ON → equity 1.5 / futures 2.5 ATR)** — arm-timing graduate,
+  `eff_sl_max` now feeds every stop calc (was flat 2.5). Equities take a tighter reversal cap; futures keep room.
+- **BOT breakout family gate `none`→`trend`** (bugfix) — a LONG now fires only in an HH/HL uptrend, SHORT
+  only in a downtrend (was firing longs in clear downtrends; the Pine was already correct).
+
+NOTE: delay-0 is effectively already the V1/OPTIONS/AUTO behaviour (they never had the F38 60-min delay);
+the chase-cap + vol-expansion filter remain STACK-only for now (optional add later).
+
+## 2026-07-01 — STACK: arm-timing + tight-equity-stop propagated (user-directed)
+
+⚠️ Needs a **TradingView compile-check** on STACK. Propagated the graduated findings from the
+arm-timing test (`research/orb_arm_timing.py`, `smc_cluster.py` closed the SMC branch as
+ORB-redundant) into `HIGHSTRIKE_ORB_STACK.pine`, matching the engine + BOT:
+
+- **Arm delay 60 → 0** (`entry_delay` default). Arm at the OR close so you catch the move near the
+  level instead of waiting the hour. Arm-timing: delay-0 ≈ delay-60 per-trade on NQ (+0.170 vs
+  +0.173), slightly under 60 on QQQ/SPY, but earlier entries + more trades (user-directed trade-off).
+  Set 60 to restore the F38/F39 skip-first-hour.
+- **Chase-cap 0.0 → 1.0** (`chase_max` default). Enter within 1 ATR of the level, else the setup
+  stays live for the RETEST — early but no chasing. Keeps NQ exp (+0.169), cuts DD (−40.8→−31.4R),
+  improves QQQ (+0.266→+0.392). (A *tight* 0.25-0.5 cap is still bad — old F57; 1.0 is the loose one.)
+- **Asset-aware max-stop** (new `auto_slmax`, default ON → equity/ETF **1.5** ATR, futures **2.5**).
+  A tight 1.5-ATR cap lifts QQQ +0.266→+0.392 / SPY +0.286→+0.351 and caps reversals sooner;
+  futures keep 2.5 (tight whipsaws them — NQ 1.5 fails the CI gate). `eff_sl_max` feeds the stop calc.
+
+Vol-expansion (min_or_width 2.4, filter on), the HH/HL structure gate, grade, and asset-aware
+min-stop were already in the STACK. NOT yet propagated to the other 4 Pine files (INDICATOR /
+STRATEGY / OPTIONS / AUTO) — STACK only, per the request.
+
 ## 2026-06-29 — marker-placement fix (all event markers) + DIRECTION-SEQUENCE gate (F61, user-directed)
 
 ⚠️ Needs a **TradingView compile-check** on STACK / OPTIONS / AUTO. Two things from the user's

@@ -53,7 +53,10 @@ mtf_on   = input.bool(false, "Higher-TF trend confirmation", group="MTF Confirm"
 mtf_min  = input.int(2, "Min higher-TFs that must agree (0-3)", group="MTF Confirm", minval=0, maxval=3)
 sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk plan", step=0.1)
 min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
-sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk plan", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk plan", tooltip="Arm-timing graduate: equities take a tight 1.5-ATR max stop; futures keep 2.5. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate", tooltip="GRADUATED (2026-07): OR closed UPPER half = biased LONG (block shorts); lower half = biased SHORT (block longs). ADDITIVE (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers. Matches HIGHSTRIKE_ORB_STACK.")
 stop_mode = input.string("OR edge", "Stop placement", group="Risk plan", options=["OR edge", "Structure swing (HH/HL)"],
             tooltip="Default 'OR edge' = validated production. 'Structure swing' rests the stop at the last HH/HL swing (research F25b: ~half the risk, higher R, walk-forward-validated on the structure stack) — opt-in.")
 struct_lb = input.int(5, "Structure swing lookback (L=R)", group="Risk plan", minval=2)
@@ -151,7 +154,12 @@ if new_day
 if in_or
     or_high := na(or_high) ? high : math.max(or_high, high)
     or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = na
 if not in_or and not na(or_high)
+    if not or_set
+        or_mid  := (or_high + or_low) / 2.0
+        or_bull := close > or_mid
     or_set := true
 // resting-stop entry levels + full trade plan frozen at OR close; FILL = price TOUCHES the level
 float brk_buf = atr14 * eff_brk
@@ -187,16 +195,16 @@ if or_set and na(Le) and not na(or_high) and not na(or_low)
     float aL = (stop_mode == "Structure swing (HH/HL)" and not na(sw_lo)) ? sw_lo : or_low
     float aS = (stop_mode == "Structure swing (HH/HL)" and not na(sw_hi)) ? sw_hi : or_high
     Le := or_high + brk_buf
-    Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Ls := math.min(math.max(aL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * min_stop_atr)
     Se := or_low  - brk_buf
-    Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+    Ss := math.max(math.min(aS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * min_stop_atr)
 float Lt1 = Le + (Le - Ls) * tp1_rr
 float Lt2 = Le + (Le - Ls) * tp2_rr
 float St1 = Se - (Ss - Se) * tp1_rr
 float St2 = Se - (Ss - Se) * tp2_rr
 bool window = or_set and rth and o_now < trade_end and not na(Le)
-bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok
-bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok
+bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and mtf_long_ok and (not ormid_bias or or_bull)
+bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and mtf_short_ok and (not ormid_bias or or_bull == false)
 // re-entry: re-arm once price falls back inside the OR; cap entries/day. OFF => one signal per side.
 if reentry and not na(or_high) and close < or_high
     armed_l := true

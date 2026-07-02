@@ -1,0 +1,649 @@
+29100 2026-07-01 10:54:43,737 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:43Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "c568415a-c796-516c-8fab-87141171de11",
+    "x-signature": "Wq4LZ+BWEF6FpHDIcXvZLpHdxlE=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:47,909 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "QQQ",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:47Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "ce12f9df-d971-5714-9561-82dfbde15b7e",
+    "x-signature": "ErZARSMy48deZkJGxxpjkDoEP1A=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=QQQ&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+29100 2026-07-01 10:54:51,444 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/stock/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbol": "SPY",
+    "category": "US_ETF",
+    "timespan": "M5",
+    "count": "200"
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T14:54:51Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "8f803af2-858b-5fe8-9ce5-7c9716ff0896",
+    "x-signature": "e6HJ3zexEwWfryJDewRnfiknzjo=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/market-data/stock/bars?symbol=SPY&category=US_ETF&timespan=M5&count=200 (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 11001] getaddrinfo failed)"))
+2384 2026-07-01 11:24:39,274 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+2384 2026-07-01 11:24:39,279 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+2384 2026-07-01 11:24:39,281 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+2384 2026-07-01 11:24:39,283 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+2384 2026-07-01 11:24:39,283 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+2384 2026-07-01 11:24:39,287 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+2384 2026-07-01 11:24:40,018 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+2384 2026-07-01 11:24:40,020 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+2384 2026-07-01 11:24:40,020 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+2384 2026-07-01 11:24:40,022 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+2384 2026-07-01 11:24:40,023 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+36348 2026-07-01 11:24:42,595 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T15:24:41Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "f6ce67d8-50ee-56ef-87b3-fbd1f4443395",
+    "x-signature": "8udv8+4EX6i5a5hpRQ7a0y/VfFA=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: e48a1255-dc40-48db-9197-51e7b859437b
+36348 2026-07-01 11:24:42,597 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "e48a1255-dc40-48db-9197-51e7b859437b"
+}
+25432 2026-07-01 11:37:52,199 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+25432 2026-07-01 11:37:52,199 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+25432 2026-07-01 11:37:52,203 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+25432 2026-07-01 11:37:52,203 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+25432 2026-07-01 11:37:52,206 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+25432 2026-07-01 11:37:52,206 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,207 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+22808 2026-07-01 11:37:52,207 webull.core.http.initializer.client_initializer INFO _check_token_enable result is True
+25432 2026-07-01 11:37:52,208 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+25432 2026-07-01 11:37:52,208 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,210 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+22808 2026-07-01 11:37:52,210 webull.core.http.initializer.token.token_storage INFO storage_token uses the default configuration, conf.
+25432 2026-07-01 11:37:52,211 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+25432 2026-07-01 11:37:52,211 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+22808 2026-07-01 11:37:52,213 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,213 webull.core.http.initializer.token.token_storage INFO storage_token initialized path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,214 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,214 webull.core.http.initializer.token.token_storage WARNING storage_token Note: The token file already exists, the latest token configuration will be overwritten and written to the token file after successful 2FA verification. path:C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT\conf\token.txt.
+22808 2026-07-01 11:37:52,216 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+22808 2026-07-01 11:37:52,216 webull.core.http.initializer.token.token_manager INFO load_token_from_local reading token from file...
+25432 2026-07-01 11:37:52,217 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:52,217 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:52,217 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:52,217 webull.core.http.initializer.token.token_manager INFO load_token_from_local read local token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,094 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,095 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,095 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token result. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,098 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,098 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,101 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,101 webull.core.http.initializer.token.token_manager INFO fetch_token_from_server create_token status is verified, no further check required, returning directly. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,102 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,102 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,103 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,103 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to local file. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,107 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+22808 2026-07-01 11:37:53,107 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+25432 2026-07-01 11:37:53,109 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+25432 2026-07-01 11:37:53,109 webull.core.http.initializer.token.token_manager INFO save_token_to_local writing token to file completed.
+22808 2026-07-01 11:37:53,109 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+22808 2026-07-01 11:37:53,109 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,110 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:53,110 webull.core.http.initializer.token.token_manager INFO init_token finished. token:34bd00******d27ca4 expires:1784163631570 status:NORMAL
+25432 2026-07-01 11:37:58,196 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T15:37:57Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "2de34905-6380-505e-8283-0c84640455fe",
+    "x-signature": "noLkS7WtGd18wmcxp94WVIAT+aw=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 57cf962f-b323-41f6-95fd-04d13404e5f8
+25432 2026-07-01 11:37:58,196 webull.core.client ERROR ServerException occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/market-data/futures/bars",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {
+    "symbols": "NQmain",
+    "category": "US_FUTURES",
+    "timespan": "M5",
+    "count": 800
+  },
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "0661865629f7d2e7f06a6ab332b12de3",
+    "x-timestamp": "2026-07-01T15:37:57Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "2de34905-6380-505e-8283-0c84640455fe",
+    "x-signature": "noLkS7WtGd18wmcxp94WVIAT+aw=",
+    "User-Agent": "WebullApiSDK (Windows 11;AMD64) Python/3.13.14 Core/2.0.12 python-requests/2.34.2",
+    "x-access-token": "34bd0085401549358574c7e9e9d27ca4",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from 'C:\\\\Users\\\\heela\\\\OneDrive\\\\\u00c1rea de Trabalho\\\\prediction\\\\.venv\\\\Lib\\\\site-packages\\\\webull\\\\core\\\\auth\\\\algorithm\\\\sha_hmac1.py'>"
+} Response:{'error_code': 'Unauthorized', 'message': 'Insufficient permission, please subscribe to US_FUTURES quotes.', 'status': 401} ServerException:HTTP Status: 401, Code: Unauthorized, Msg: Insufficient permission, please subscribe to US_FUTURES quotes., RequestID: 57cf962f-b323-41f6-95fd-04d13404e5f8
+25432 2026-07-01 11:37:58,198 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "57cf962f-b323-41f6-95fd-04d13404e5f8"
+}
+25432 2026-07-01 11:37:58,198 webull.core.client ERROR get_response exception. {
+  "error_code": "Unauthorized",
+  "error_msg": "Insufficient permission, please subscribe to US_FUTURES quotes.",
+  "http_status": 401,
+  "request_id": "57cf962f-b323-41f6-95fd-04d13404e5f8"
+}
