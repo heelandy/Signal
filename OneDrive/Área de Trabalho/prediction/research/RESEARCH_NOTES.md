@@ -4,6 +4,26 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
+## F67 (numbers pending) — PROBABLE liquidity-zone engine + bounce-vs-reversal machine (user research 2026-07-03)
+
+`orb_liquidity_zones.py` — RESEARCH SIDE ONLY per user instruction (no STACK/BOT propagation yet;
+**when it graduates, STACK + BOT are the PRIMARY propagation targets** — standing user rule). From
+the single 1m array: pivot clusters, equal highs/lows, rejection/absorption bars (wick ≥ 2×body +
+vol ≥ 1.5×avg), OR H/M/L + prev-day H/L/C + session VWAP, approx volume-by-price POC/HVN — merged
+(0.25 ATR tol) and scored `L = 0.25T + 0.20V + 0.20R + 0.15S + 0.10H + 0.10A` (doc's starting
+weights; the doc lists 2 variants — WEIGHTS is a dict, tune on data). Wording rule enforced:
+PROBABLE / POTENTIAL only — 1m OHLCV can never see actual pending orders (needs L2/MBO). Reversal
+machine (mirrored): TREND → DECELERATING → POSSIBLE_TURN → REVERSAL_CANDIDATE → CONFIRMED |
+FAILED_BOUNCE on the doc's six checks (slope deceleration, no new extreme, 2-of-3 close
+persistence, micro structure break, retracement depth, recovery efficiency); candidate/confirm
+need 2-of-3 evaluations (noise control). Synthetic validation green (`--selftest`: triple-touch
+support, mirror symmetry, absorption bar, the doc's own 100→97.75→98.60 walkthrough,
+failed-bounce, bearish mirror). **Numbers: `python research/orb_liquidity_zones.py NQ ES` on the
+data drive** — zone hit-rate vs a RANDOM in-range level control (zones must beat random levels
+first), then the standard additivity gauntlet on the stack before any gating. Caution: the F65
+graveyard killed all DIRECTION detectors — zones predict LOCATION (where reactions happen), a
+different claim, but the same curve-fit discipline applies.
+
 ## F66 — SIZING LADDER policy: act on direction sooner via tranches (equity WIN / futures NEUTRAL) (2026-07-02)
 `orb_sizing_ladder.py`. NOT a new signal — a POLICY over two existing cohorts: **starter** = break+OR-mid+dir-seq
 (the 'none' cohort, independently PASS) at 0.4×; **add** = when st_state(lb3) confirms (struct3, fires ~30–60m
@@ -91,8 +111,6 @@ user: **1) OR, 2) SLOPE, 3) STRUC.**
   (futures 3 / equity 5 = 3–5 minute confirms); BOT twin `families.fast_state_1m()` aligns the 1m
   state causally onto the 5m engine frame. **Gauntlet: gate = st_state on 1m bars** vs the chart-TF
   gate (behavior change vs the validated backtest until it passes; `fast_dir` OFF reverts).
-<<<<<<< HEAD
-=======
 * **3 STRUC update (2026-07-03) — ROOT CAUSE FOUND + FIXED: gap-aware CHoCH.** Even on 1m the
   machine needed ~15 closed bars to flip because the old CHoCH rule required a CROSSING bar
   (previous close still on the old side of the last swing) — in a fast move the swing reference
@@ -116,7 +134,6 @@ user: **1) OR, 2) SLOPE, 3) STRUC.**
   Shipped: `bot/strategy/direction_engine.py`, `mtf_direction` on every proposal, `/api/direction`
   poll endpoint. **DETECTION only — the confirmed swing st_state + dir_fast 1m feed remain the
   backup/validated gate until this passes a gauntlet.** Entries stay on the 2-bar cadence.
->>>>>>> 42290b3f9d7eaed98051e385142871168d8b3c23
 
 ## Finding 1 — Multi-timeframe confirmation HURTS the ORB (counterintuitive but consistent)
 Requiring N of {1h, 4h, Daily} to agree (EMA50>200 stack) with the breakout:

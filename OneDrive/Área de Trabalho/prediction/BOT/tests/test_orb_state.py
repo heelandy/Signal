@@ -136,6 +136,44 @@ def test_signal_zone_state_matches_screenshot():
     assert signal_zone_state("long", 719.0, None, None) == "unknown"   # missing levels never = invalid
 
 
+# ---- WATCH promotion (user spec 2026-07-03): price must PASS the OR mid before ARMED ----
+
+def test_waiting_promotes_to_watch_on_confirmed_midcross_with_direction():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    assert sm.state is SideState.WAITING
+    sm.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)   # full-body close above mid
+    assert sm.state is SideState.WATCH
+    # a confirmed breakout can then arm from WATCH
+    assert sm.arm(entry=730.01, stop=726.76, close=730.5) is SideState.ARMED
+
+
+def test_waiting_promotion_requires_clear_direction_when_open_given():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    sm.on_bar(high=728.0, low=726.5, close=727.2, open_px=727.8)   # above mid but DOWN body
+    assert sm.state is SideState.WAITING                           # no clear direction — no watch
+    sm.on_bar(high=728.0, low=726.8, close=727.6)                  # no open supplied: mid-cross alone
+    assert sm.state is SideState.WATCH
+
+
+def test_watch_follows_live_mid_bias_and_sides_mirror():
+    lm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    sh = OrbSideState("short", or_high=OR_H, or_low=OR_L)
+    lm.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)   # cross UP: long watches...
+    sh.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)
+    assert lm.state is SideState.WATCH and sh.state is SideState.WAITING
+    lm.on_bar(high=727.0, low=725.5, close=725.8, open_px=726.9)   # cross DOWN: bias flips...
+    sh.on_bar(high=727.0, low=725.5, close=725.8, open_px=726.9)
+    assert lm.state is SideState.WAITING and sh.state is SideState.WATCH
+
+
+def test_promotion_never_overrides_hard_invalidation():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    sm.on_bar(high=724.0, low=719.0, close=719.5)                  # close < OR low -> INVALIDATED
+    assert sm.state is SideState.INVALIDATED
+    sm.on_bar(high=728.0, low=726.0, close=727.5, open_px=726.2)   # above mid, but NOT reclaimed
+    assert sm.state is SideState.INVALIDATED                       # OR-high reclaim still required
+
+
 # ---- direction math invariants (spec) ----
 
 def test_efficiency_ratio_bounds_and_zero_path():

@@ -5,8 +5,6 @@ for the F-number research behind each item.
 
 ---
 
-<<<<<<< HEAD
-=======
 ## 2026-07-03 — STRUC velocity: gap-aware CHoCH (all 8 structure machines) + multi-TF rolling direction engine (BOT)
 
 ⚠️ Needs a **TradingView compile-check** on STACK/AUTO/OPTIONS/V1_STRATEGY + a forward session
@@ -36,10 +34,19 @@ leftover HH/HL pairs re-claimed UP.
   entries stay on the 2-bar cadence. 84/84 tests pass (13 new: stale-tape reproduction, gap-aware
   equivalence + invariants, the research file's pullback example, mirror symmetry, RANGE
   override, live-price scope, clock-aligned confirmation).
+* **WATCH-before-ARMED promotion** (user spec follow-up): price must PASS the OR mid with clear
+  direction before a side can arm — a confirmed FULL-BODY close beyond the mid toward a side puts
+  that side on **WATCH** (the visible stage between WAIT and ARMED), and the watch follows the
+  LIVE mid bias (cross back = that side drops to WAIT, the mirror side promotes). Shipped: BOT FSM
+  (`OrbSideState`: WAITING→WATCH promotion + live-bias demotion, `on_bar(open_px=…)` directional-
+  body check) and the STACK + OPTIONS dashboards (`l_watch`/`s_watch` latches; OPTIONS gained the
+  WATCH label + orange color). AUTO/V1_STRATEGY have no state display but already enforce the
+  mid-pass in their arm conditions (`not l_below_mid`). The mid GATE itself was already in place —
+  arming always required the confirmed close beyond the mid. Entry behavior unchanged (display +
+  FSM stage only). Suite 88/88.
 
 ---
 
->>>>>>> 42290b3f9d7eaed98051e385142871168d8b3c23
 ## 2026-07-02 — Regime blocks REMOVED (Block RANGE + Block REGIME B) across all 5 Pine (user directive)
 
 Defaults flipped OFF so the system no longer blocks those cohorts:
@@ -53,10 +60,7 @@ Defaults flipped OFF so the system no longer blocks those cohorts:
 - BOT: already permissive (`families.prepare` sets macro_allow_trades=True, local_regime=0) — no change needed.
 - Toggles kept (reversible); still needs the standard TV compile-check. (Engine research backtest still models the
   gate via `local_regime != 2` — flip that too only if you want research baselines to match the unblocked live config.)
-<<<<<<< HEAD
 
-=======
->>>>>>> 42290b3f9d7eaed98051e385142871168d8b3c23
 ## 2026-07-02 — Zone state machine + 1-minute direction feed, ALL 5 production Pine + BOT (staleness fix)
 
 ⚠️ Needs a **TradingView compile-check** on all 5 + a forward session before sizing (mechanical, mirrored edits).
