@@ -4,11 +4,16 @@ Fixes the state-staleness bug: a pending LONG stayed "ARMED" while price had alr
 opposite OR edge / tagged its own stop. This module is the Python twin of the Pine state machine
 (HIGHSTRIKE_ORB_STACK / _AUTO): a finite state machine per side —
 
-    WAITING -> ARMED -> FILLED -> TP1_HIT -> COMPLETED
-        |        |         `-> STOPPED
-        |        `-> WATCH        (soft: confirmed close on the wrong side of OR mid — pull the order)
-        `-> INVALIDATED           (hard: confirmed close beyond the OPPOSITE OR edge, or the side's
-                                   proposed stop tagged before entry — cancel + clear levels)
+    WAITING -> WATCH -> ARMED -> FILLED -> TP1_HIT -> COMPLETED
+        |        |        |         `-> STOPPED
+        |        |        `-> WATCH  (soft: confirmed close on the wrong side of OR mid — pull the order)
+        |        `-> WAITING         (mid bias lost on a confirmed close — the mirror side promotes)
+        `-> INVALIDATED              (hard: confirmed close beyond the OPPOSITE OR edge, or the side's
+                                      proposed stop tagged before entry — cancel + clear levels)
+    WAITING -> WATCH (promotion, user spec 2026-07-03): price must PASS the OR mid with clear
+    direction before a side can arm — a confirmed close beyond the mid toward the side (with a
+    directional body when the bar's open is supplied) puts that side on WATCH, the visible stage
+    between WAITING and ARMED. Arming additionally requires the confirmed breakout close.
     INVALIDATED -> WAITING only when price RECLAIMS the side's breakout edge on a confirmed close;
     a completely new confirmation is then required to re-arm (hysteresis — no flip-flop).
 
@@ -207,7 +212,8 @@ class OrbSideState:
         return self.state
 
     # ---- one CONFIRMED bar (never intrabar values) ----
-    def on_bar(self, high: float, low: float, close: float) -> SideState:
+    def on_bar(self, high: float, low: float, close: float,
+               open_px: float | None = None) -> SideState:
         s, sign = self.state, self.sign
         adverse_extreme = low if sign == 1 else high     # how far the bar went AGAINST the side
         favor_extreme = high if sign == 1 else low       # how far it went WITH the side
@@ -223,6 +229,16 @@ class OrbSideState:
             if s is SideState.ARMED and self._beyond(self.or_mid, close):
                 self._clear_pending()
                 return self._set(SideState.WATCH)
+            # WATCH promotion (user spec 2026-07-03): price must PASS the OR mid with clear
+            # direction before the side can arm — confirmed close beyond the mid toward this side
+            # (directional body when open_px is given) = the visible stage between WAITING/ARMED.
+            if s is SideState.WAITING and self._beyond(close, self.or_mid) and \
+                    (open_px is None or sign * (close - open_px) > 0):
+                return self._set(SideState.WATCH)
+            # WATCH tracks the LIVE mid bias: a confirmed close back on the wrong side drops the
+            # side to WAITING (the mirror side promotes on the same bar — exact symmetry).
+            if s is SideState.WATCH and self._beyond(self.or_mid, close):
+                return self._set(SideState.WAITING)
             return s
 
         if s is SideState.INVALIDATED:

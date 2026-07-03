@@ -240,3 +240,24 @@ Residual: TradingView compile (4 scripts); gauntlet A/B `choch_gap_aware=False` 
 drive (gate behavior change); rolling engine has NO edge numbers yet — do not gate on it.
 Rollback: `choch_gap_aware=False` (engine) / restore the 4 Pine; delete direction_engine.py +
 the live.py/server.py hooks.
+
+---
+
+**2026-07-03 · HS-H12 · WATCH-before-ARMED promotion (OR-mid pass with clear direction)**
+Files: `BOT/bot/strategy/orb_state.py` (WAITING→WATCH promotion, live-bias WATCH→WAITING
+demotion, `on_bar(open_px=…)`), `production/HIGHSTRIKE_ORB_STACK.pine` +
+`_OPTIONS.pine` (`l_watch`/`s_watch` confirmed full-body latches; state labels; OPTIONS WATCH
+color), `BOT/tests/test_orb_state.py` (+4), `production/CHANGELOG.md`.
+Reason: user — "price must pass the OR-mid bias… the 'watch' before the armed; price cross on
+either side with clear direction we on 'watch'". Audit found the mid-pass GATE already enforced
+(FSM arm() refuses close on the wrong side of the mid; Pine arm conditions carry
+`not l_below_mid`) and the ARMED→WATCH soft cancel present, but WATCH was reachable only by
+DEMOTION — no visible WAITING→WATCH stage when price crossed the mid toward a side.
+After: confirmed FULL-BODY close beyond the OR mid toward a side promotes it to WATCH; the
+watch follows the live mid bias (confirmed cross back = demote to WAITING, mirror side
+promotes); hard invalidation always wins; exact long/short mirror. AUTO/V1_STRATEGY: no state
+display — behavior already consistent via their arm conditions, no edit needed.
+Validation: suite 88/88 (promotion, clear-direction body requirement, live-bias mirror flip,
+promotion-never-overrides-invalidation). Entry firing logic UNCHANGED — display + FSM stage only.
+Residual: TradingView compile-check (STACK, OPTIONS).
+Rollback: restore the 2 Pine + orb_state.py.

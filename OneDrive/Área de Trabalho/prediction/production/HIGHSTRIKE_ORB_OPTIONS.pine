@@ -287,6 +287,8 @@ var bool l_invalid = false
 var bool s_invalid = false
 var bool l_below_mid = false
 var bool s_above_mid = false
+var bool l_watch = false            // WATCH promotion (user spec 2026-07-03): confirmed FULL-BODY
+var bool s_watch = false            // close beyond OR mid toward the side — the stage before ARMED
 if new_day
     Le := na
     Se := na
@@ -298,6 +300,8 @@ if new_day
     s_invalid := false
     l_below_mid := false
     s_above_mid := false
+    l_watch := false
+    s_watch := false
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     Le := or_high + brk_buf
     Se := or_low  - brk_buf
@@ -326,6 +330,10 @@ bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
 if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
     l_below_mid := close < or_mid
     s_above_mid := close > or_mid
+    // WATCH promotion latches: price PASSED the mid toward the side with clear direction (full-
+    // body confirmed close). The side shows WATCH before it can be ARMED; exact long/short mirror.
+    l_watch := close > or_mid and close > open
+    s_watch := close < or_mid and close < open
     if not in_long and (close < or_low or (not na(Ls) and low <= Ls))
         l_invalid := true
     else if l_invalid and close > or_high
@@ -427,11 +435,11 @@ float s_stop_now = in_short ? sstop : Ss
 bool armL = window and not traded_l and not l_invalid and gate_long and cap_long_ok
 bool armS = window and not traded_s and not s_invalid and gate_short and cap_short_ok
 if not in_long and not traded_l
-    stL := armL ? "ARMED" : "WAIT"
+    stL := armL ? "ARMED" : l_watch ? "WATCH" : "WAIT"
 if not in_short and not traded_s
-    stS := armS ? "ARMED" : "WAIT"
-// state colors (user legend): WAIT gray · ARMED yellow · FILLED blue · NEAR TP1 light green · TP1 HIT green · TP2 HIT dark green · STOP HIT red
-f_stc(s) => s == "WAIT" ? color.gray : s == "ARMED" ? color.yellow : s == "FILLED" ? color.rgb(41, 121, 255) :
+    stS := armS ? "ARMED" : s_watch ? "WATCH" : "WAIT"
+// state colors (user legend): WAIT gray · WATCH orange · ARMED yellow · FILLED blue · NEAR TP1 light green · TP1 HIT green · TP2 HIT dark green · STOP HIT red
+f_stc(s) => s == "WAIT" ? color.gray : s == "WATCH" ? color.orange : s == "ARMED" ? color.yellow : s == "FILLED" ? color.rgb(41, 121, 255) :
      s == "NEAR TP1" ? color.rgb(144, 238, 144) : s == "TP1 HIT" ? color.green : s == "TP2 HIT" ? color.rgb(0, 102, 0) : color.red
 
 // ───────────────────────── OPTIONS TRANSLATION (1-2 ITM/OTM · 0-4 DTE · buy-only + verticals) ─────────────────────────

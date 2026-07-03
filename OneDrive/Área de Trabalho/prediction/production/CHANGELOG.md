@@ -34,6 +34,16 @@ leftover HH/HL pairs re-claimed UP.
   entries stay on the 2-bar cadence. 84/84 tests pass (13 new: stale-tape reproduction, gap-aware
   equivalence + invariants, the research file's pullback example, mirror symmetry, RANGE
   override, live-price scope, clock-aligned confirmation).
+* **WATCH-before-ARMED promotion** (user spec follow-up): price must PASS the OR mid with clear
+  direction before a side can arm — a confirmed FULL-BODY close beyond the mid toward a side puts
+  that side on **WATCH** (the visible stage between WAIT and ARMED), and the watch follows the
+  LIVE mid bias (cross back = that side drops to WAIT, the mirror side promotes). Shipped: BOT FSM
+  (`OrbSideState`: WAITING→WATCH promotion + live-bias demotion, `on_bar(open_px=…)` directional-
+  body check) and the STACK + OPTIONS dashboards (`l_watch`/`s_watch` latches; OPTIONS gained the
+  WATCH label + orange color). AUTO/V1_STRATEGY have no state display but already enforce the
+  mid-pass in their arm conditions (`not l_below_mid`). The mid GATE itself was already in place —
+  arming always required the confirmed close beyond the mid. Entry behavior unchanged (display +
+  FSM stage only). Suite 88/88.
 
 ---
 
