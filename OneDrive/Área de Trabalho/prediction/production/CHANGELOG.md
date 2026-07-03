@@ -5,7 +5,6 @@ for the F-number research behind each item.
 
 ---
 
-<<<<<<< HEAD
 ## 2026-07-02 — Regime blocks REMOVED (Block RANGE + Block REGIME B) across all 5 Pine (user directive)
 
 Defaults flipped OFF so the system no longer blocks those cohorts:
@@ -19,7 +18,7 @@ Defaults flipped OFF so the system no longer blocks those cohorts:
 - BOT: already permissive (`families.prepare` sets macro_allow_trades=True, local_regime=0) — no change needed.
 - Toggles kept (reversible); still needs the standard TV compile-check. (Engine research backtest still models the
   gate via `local_regime != 2` — flip that too only if you want research baselines to match the unblocked live config.)
-=======
+
 ## 2026-07-02 — Zone state machine + 1-minute direction feed, ALL 5 production Pine + BOT (staleness fix)
 
 ⚠️ Needs a **TradingView compile-check** on all 5 + a forward session before sizing (mechanical, mirrored edits).
@@ -51,7 +50,6 @@ all-scripts-consistency rule to STACK, AUTO, OPTIONS, V1_STRATEGY, V1_INDICATOR 
   gauntlet (gate = st_state on 1m bars) + forward-paper before sizing; `fast_dir` OFF reverts.
 
 ---
->>>>>>> 9834a6d98bf79391678a8f82b5f7eaa05ad2013d
 
 ## 2026-07-02 — Fast-direction study: auto structure speed (lb 3/5) + OR-mid chart line, all 5 Pine + BOT
 

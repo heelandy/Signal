@@ -25,7 +25,7 @@ BINARY (wait) for futures. The 'act 30–60m sooner' benefit (starter fires at t
 NEXT (v2): model the exit-starter-on-opposite-structure cut — may rescue the futures case by cutting the bad
 unconfirmed trades early. Plumbing (grades / GRADE_MULT / struct_aligned) already exists — one policy toggle.
 
-## F65 — Direction-detector GRAVEYARD: the full specced suite is DEAD (2026-07-02)
+## F67 — Direction-detector GRAVEYARD: the full specced suite is DEAD (2026-07-02)
 `orb_dir_state.py` · `orb_dirstate2.py` · `orb_efficiency.py` (+ `orb_fast_direction` / `orb_lead_lag` /
 `orb_predict` / `orb_flow_channels`). Every detector tested BOTH as a standalone direction gate AND as
 additive-confluence on the FULL stack (struct3 + OR-mid + dir-seq + vol-exp 2.4), with the dropped-cohort
@@ -54,7 +54,7 @@ full-stack control kills it (redundant with the wide-OR filter). See `memory/hig
 full ~36-method graveyard (momentum / EMA / regression slope / microprice / cross-asset lead-lag / VPIN / Renko /
 Donchian / EHMA / Markov-predict / XGBoost-LightGBM-NN-HMM — all redundant, curve-fit-inconsistent, or
 worse-than-follow). Conclusion: direction at tradeable resolution is FOLLOWABLE, not forecastable.
-=======
+
 ## F65 (numbers pending) — DIR-fast component plan: OR → SLOPE → STRUC + the combined slope engine (user, 2026-07-02)
 
 USER OBSERVATION (screenshots, QQQ 5m vs 1m): when the three DIR-fast components AGREE —
@@ -91,7 +91,6 @@ user: **1) OR, 2) SLOPE, 3) STRUC.**
   (futures 3 / equity 5 = 3–5 minute confirms); BOT twin `families.fast_state_1m()` aligns the 1m
   state causally onto the 5m engine frame. **Gauntlet: gate = st_state on 1m bars** vs the chart-TF
   gate (behavior change vs the validated backtest until it passes; `fast_dir` OFF reverts).
->>>>>>> 9834a6d98bf79391678a8f82b5f7eaa05ad2013d
 
 ## Finding 1 — Multi-timeframe confirmation HURTS the ORB (counterintuitive but consistent)
 Requiring N of {1h, 4h, Daily} to agree (EMA50>200 stack) with the breakout:
