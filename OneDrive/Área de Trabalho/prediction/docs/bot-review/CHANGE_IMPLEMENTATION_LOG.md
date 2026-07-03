@@ -261,3 +261,22 @@ Validation: suite 88/88 (promotion, clear-direction body requirement, live-bias 
 promotion-never-overrides-invalidation). Entry firing logic UNCHANGED — display + FSM stage only.
 Residual: TradingView compile-check (STACK, OPTIONS).
 Rollback: restore the 2 Pine + orb_state.py.
+
+---
+
+**2026-07-03 · HS-H13 · probable liquidity-zone engine + reversal machine (research side only)**
+Files: `research/orb_liquidity_zones.py` (NEW), `research/RESEARCH_NOTES.md` (F67).
+Reason: user research doc 'Research over probabilistic area' — infer PROBABLE entry/stop/liquidity
+zones from 1m OHLCV (never claiming to see actual orders) + bounce-vs-reversal state machine.
+User instruction: research side ONLY, no STACK/BOT propagation yet; when it graduates, STACK +
+BOT are the PRIMARY targets (standing rule recorded in F67).
+Scope: detectors (pivot clusters, equal H/L, rejection/absorption, OR/session/prev-day levels,
+volume-by-price POC/HVN), ATR-scaled merge, L = 0.25T+0.20V+0.20R+0.15S+0.10H+0.10A scoring with
+MAJOR/STRONG/MODERATE/WEAK bands, zone dicts matching the doc's data structure, mirrored
+6-check reversal machine with 2-of-3 noise-control votes, data-drive evaluation mode (zone
+hit-rate vs random in-range control levels).
+Validation: --selftest green (support cluster, mirror, absorption, doc walkthrough, failed
+bounce, bearish mirror). Suite untouched: 88/88.
+Numbers pending: data-drive run (needs the *_continuous_1m.parquet views), then the standard
+additivity gauntlet before any gate/size use.
+Rollback: delete the research script + F67 note (no production surface touched).
