@@ -40,6 +40,29 @@ user: **1) OR, 2) SLOPE, 3) STRUC.**
   (futures 3 / equity 5 = 3–5 minute confirms); BOT twin `families.fast_state_1m()` aligns the 1m
   state causally onto the 5m engine frame. **Gauntlet: gate = st_state on 1m bars** vs the chart-TF
   gate (behavior change vs the validated backtest until it passes; `fast_dir` OFF reverts).
+* **3 STRUC update (2026-07-03) — ROOT CAUSE FOUND + FIXED: gap-aware CHoCH.** Even on 1m the
+  machine needed ~15 closed bars to flip because the old CHoCH rule required a CROSSING bar
+  (previous close still on the old side of the last swing) — in a fast move the swing reference
+  itself steps toward price via each newly confirmed pivot, so the crossing bar NEVER exists and
+  st_state stays wrong (measured: **41 stale bars** on the diagnostic dump tape, with 0↔1
+  oscillation because leftover HH/HL pairs kept re-claiming UP). Fix (engine `choch_gap_aware=True`
+  + all 8 Pine machines): flip whenever price CLOSES beyond the last swing against the trend
+  (once-only via the prev-state guard), and a claim guard — UP may only be claimed with close ≥
+  last swing low, DOWN only with close ≤ last swing high. Verified 41→0 violations; bit-identical
+  to the old rule on clean trending tapes both directions (`BOT/tests/test_structure_velocity.py`).
+  **This CHANGES the engine gate vs the validated backtest → A/B on the data drive with
+  `choch_gap_aware=False` before trusting old numbers.**
+* **3 STRUC update (2026-07-03) — multi-TF ROLLING direction engine (user research file,
+  detection layer).** One 1m array = single source of truth; every chart TF re-scored on EVERY
+  completed 1m bar from its own window (2M/5M/15M/30M/1H/4H = 2/5/15/30/60/240×1m) —
+  `D = 0.30·S + 0.20·P + 0.20·E + 0.15·B + 0.15·M`, bands ±0.12/±0.30/±0.65 → RANGE/WEAK/DIR/
+  STRONG, RANGE override on low efficiency + midpoint crossings. ROLLING vs clock-aligned
+  CONFIRMED states reported side by side ("15M ROLLING: DOWN · 15M CONFIRMED: UP" = pullback in
+  an uptrend). Immediate 2-bar read refreshed by the live last trade between minute closes (the
+  10–15 s update — true intrabar granularity needs tick data, per the research file's own note).
+  Shipped: `bot/strategy/direction_engine.py`, `mtf_direction` on every proposal, `/api/direction`
+  poll endpoint. **DETECTION only — the confirmed swing st_state + dir_fast 1m feed remain the
+  backup/validated gate until this passes a gauntlet.** Entries stay on the 2-bar cadence.
 
 ## Finding 1 — Multi-timeframe confirmation HURTS the ORB (counterintuitive but consistent)
 Requiring N of {1h, 4h, Daily} to agree (EMA50>200 stack) with the breakout:

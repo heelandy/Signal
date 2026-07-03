@@ -162,15 +162,20 @@ bool s_hh = not na(ph_last) and not na(ph_prev) and ph_last > ph_prev
 bool s_lh = not na(ph_last) and not na(ph_prev) and ph_last < ph_prev
 bool s_hl = not na(pl_last) and not na(pl_prev) and pl_last > pl_prev
 bool s_ll = not na(pl_last) and not na(pl_prev) and pl_last < pl_prev
-if s_hh and s_hl
+// GAP-AWARE claim guard (STRUC fix 2026-07): UP only while close >= last swing low; DOWN only
+// while close <= last swing high — stale HH/HL pairs from the old leg can no longer re-claim a
+// trend the price has already broken (the 'Bullish Trend while price dumped' bug).
+if s_hh and s_hl and close >= pl_last
     st_state := 1
-else if s_ll and s_lh
+else if s_ll and s_lh and close <= ph_last
     st_state := 2
 else if (s_hh and s_ll) or (s_hl and s_lh)
     st_state := 3
-if st_prev == 2 and not na(ph_last) and close > ph_last and close[1] <= ph_last
+// GAP-AWARE CHoCH: no crossing bar required — in a fast move the swing reference steps toward
+// price via new pivots, so the crossing close[1] test could never fire and the state went stale.
+if st_prev == 2 and not na(ph_last) and close > ph_last
     st_state := 0
-if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
+if st_prev == 1 and not na(pl_last) and close < pl_last
     st_state := 0
 pt_val = syminfo.pointvalue
 string asset_class = syminfo.type == "futures" ? "FUTURE" : syminfo.type == "fund" ? "ETF" : syminfo.type == "stock" ? "EQUITY" : str.upper(syminfo.type)
@@ -225,15 +230,15 @@ f_struct_1m() =>
     bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
     bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
     bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
-    if _hh and _hl
+    if _hh and _hl and close >= _plL
         _st := 1
-    else if _ll and _lh
+    else if _ll and _lh and close <= _phL
         _st := 2
     else if (_hh and _ll) or (_hl and _lh)
         _st := 3
-    if _stp == 2 and not na(_phL) and close > _phL and close[1] <= _phL
+    if _stp == 2 and not na(_phL) and close > _phL
         _st := 0
-    if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
+    if _stp == 1 and not na(_plL) and close < _plL
         _st := 0
     [_st, f_slope_comb(12)]
 [st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
