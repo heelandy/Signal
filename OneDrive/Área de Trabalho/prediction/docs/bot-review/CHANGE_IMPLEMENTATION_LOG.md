@@ -214,3 +214,29 @@ Validation here: 71/71 tests (doc worked examples: dip-still-positive, choppy≠
 arrays, mirror symmetry, scale invariance, zero-ATR/flat guards, slope-alone-never-calls-direction).
 Numbers pending: `orb_slope_state.py` gauntlet on the data drive (thresholds are per-TF).
 Rollback: restore listed files; delete the research script.
+
+---
+
+**2026-07-03 · HS-H11 · gap-aware CHoCH (8 structure machines) + multi-TF rolling direction engine**
+Files: `engine/hs_harness.py` (P.choch_gap_aware=True, relaxed CHoCH + claim guard),
+`production/HIGHSTRIKE_ORB_STACK.pine` / `_AUTO.pine` / `_OPTIONS.pine` / `_V1_STRATEGY.pine`
+(chart + f_struct_1m machines, mirrored edits), `BOT/bot/strategy/direction_engine.py` (NEW),
+`BOT/bot/live.py` (`mtf_direction` on proposals), `BOT/bot/api/server.py` (`/api/direction`),
+`BOT/tests/test_structure_velocity.py` (NEW, 13 tests), `research/RESEARCH_NOTES.md` (F65 STRUC
+updates), `production/CHANGELOG.md`.
+Reason: user — structure too slow (~15 closed 1m bars to know direction; price past the ORs by
+then); wants every-2-bars checks updated every 10–15 s; keep the current 1m feed as BACKUP.
+Root cause found: the old CHoCH required a CROSSING bar, but in fast moves the swing reference
+steps toward price via newly confirmed pivots so the crossing never exists — st_state stale 41
+bars on the diagnostic tape (0↔1 oscillation from leftover HH/HL claims).
+After: flip on any close beyond the last swing against the trend (once-only) + claim guard
+(UP needs close ≥ last swing low, mirrored); rolling engine scores every TF from the same 1m
+array each completed bar (D = 0.30S+0.20P+0.20E+0.15B+0.15M, bands ±0.12/±0.30/±0.65, RANGE
+override, ROLLING vs clock-aligned CONFIRMED, live-price IMMEDIATE read). Detection only —
+dir_fast + confirmed st_state remain the gate/backup.
+Validation: 41→0 violations; bit-identical on clean trends both directions; research-file
+pullback example reproduces; mirror symmetry; suite 84/84 PASS.
+Residual: TradingView compile (4 scripts); gauntlet A/B `choch_gap_aware=False` on the data
+drive (gate behavior change); rolling engine has NO edge numbers yet — do not gate on it.
+Rollback: `choch_gap_aware=False` (engine) / restore the 4 Pine; delete direction_engine.py +
+the live.py/server.py hooks.

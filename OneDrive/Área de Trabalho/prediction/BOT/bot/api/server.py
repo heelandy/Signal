@@ -259,6 +259,37 @@ def quotes(group: str = "indices"):
     return {"group": group, "quotes": out}
 
 
+_DIR_BARS_CACHE: dict = {}                                # symbol -> (ts, bars_1m)
+
+
+@app.get("/api/direction")
+def direction(symbol: str = "QQQ"):
+    """Multi-TF ROLLING direction (research 2026-07-02) for a 10-15s dashboard poll: every chart
+    TF re-scored from the SAME 1m array; the 2-bar IMMEDIATE read is refreshed with the live last
+    trade on EVERY call, so 'now' moves between minute closes. The 1m frame itself is cached ~45s
+    (a new completed bar only arrives once a minute). Detection layer only — never gates trades."""
+    sym = symbol.upper()
+    from bot.market_data.providers import get_bars, latest_price
+    from bot.strategy.direction_engine import update_all_directions, confirmed_states
+    hit = _DIR_BARS_CACHE.get(sym)
+    b1 = hit[1] if (hit and _time.time() - hit[0] < 45) else None
+    if b1 is None:
+        try:
+            b1 = get_bars(sym, "1m", period="2d")
+            _DIR_BARS_CACHE[sym] = (_time.time(), b1)
+        except Exception as e:
+            return {"symbol": sym, "error": str(e)[:120]}
+    try:
+        lp = latest_price(sym)
+        live = lp.get("price")
+    except Exception:
+        live = None
+    rolling = update_all_directions(b1, live_price=live)
+    return {"symbol": sym, "rolling": rolling, "confirmed": confirmed_states(b1),
+            "bars": int(len(b1)) if b1 is not None else 0,
+            "cached_bars": bool(hit and _time.time() - hit[0] < 45)}
+
+
 @app.get("/api/system")
 def system():
     from bot.platform import registry

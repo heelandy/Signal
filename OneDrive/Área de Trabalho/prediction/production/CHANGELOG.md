@@ -5,6 +5,41 @@ for the F-number research behind each item.
 
 ---
 
+<<<<<<< HEAD
+=======
+## 2026-07-03 — STRUC velocity: gap-aware CHoCH (all 8 structure machines) + multi-TF rolling direction engine (BOT)
+
+⚠️ Needs a **TradingView compile-check** on STACK/AUTO/OPTIONS/V1_STRATEGY + a forward session
+(mechanical, mirrored edits). ⚠️ The gap-aware flip CHANGES the engine trend gate vs the validated
+backtest — **A/B on the data drive (`choch_gap_aware=False` reverts) before trusting old numbers.**
+
+Root cause of the "structure needs ~15 closed 1m bars to flip" lag: the old CHoCH rule required a
+CROSSING bar (previous close still on the old side of the last swing). In a fast move the swing
+reference itself steps toward price via each newly confirmed pivot, so the crossing bar never
+exists — st_state stayed wrong for 41 bars on the diagnostic dump tape, oscillating 0↔1 as
+leftover HH/HL pairs re-claimed UP.
+
+* **Gap-aware CHoCH** (engine `hs_harness.py` `choch_gap_aware=True` + the chart AND f_struct_1m
+  machines of STACK, AUTO, OPTIONS, V1_STRATEGY = 8 machines): flip whenever price CLOSES beyond
+  the last swing against the trend (once-only via the prev-state guard) + a claim guard (UP only
+  with close ≥ last swing low; DOWN only with close ≤ last swing high — mirrored). Verified:
+  41→0 violations on the diagnostic tape; bit-identical to the old rule on clean trending
+  zigzags both directions (`BOT/tests/test_structure_velocity.py`).
+* **Multi-TF ROLLING direction engine** (`BOT/bot/strategy/direction_engine.py`, user research
+  2026-07-02): one 1m array, every TF re-scored on EVERY completed 1m bar from its own window
+  (2M/5M/15M/30M/1H/4H = 2/5/15/30/60/240×1m); `D = 0.30·S + 0.20·P + 0.20·E + 0.15·B + 0.15·M`,
+  bands ±0.12/±0.30/±0.65, RANGE override; ROLLING + clock-aligned CONFIRMED states side by side;
+  IMMEDIATE 2-bar read refreshed by the live last trade between minute closes. Wired: every
+  proposal carries `mtf_direction`; new `/api/direction?symbol=` endpoint for a 10–15 s dashboard
+  poll (1m frame cached ~45 s, live price fetched per call). **DETECTION layer only — `dir_fast`
+  + the confirmed 1m st_state stay untouched as the backup/validated gate** per user instruction;
+  entries stay on the 2-bar cadence. 84/84 tests pass (13 new: stale-tape reproduction, gap-aware
+  equivalence + invariants, the research file's pullback example, mirror symmetry, RANGE
+  override, live-price scope, clock-aligned confirmation).
+
+---
+
+>>>>>>> 42290b3f9d7eaed98051e385142871168d8b3c23
 ## 2026-07-02 — Regime blocks REMOVED (Block RANGE + Block REGIME B) across all 5 Pine (user directive)
 
 Defaults flipped OFF so the system no longer blocks those cohorts:
@@ -18,7 +53,10 @@ Defaults flipped OFF so the system no longer blocks those cohorts:
 - BOT: already permissive (`families.prepare` sets macro_allow_trades=True, local_regime=0) — no change needed.
 - Toggles kept (reversible); still needs the standard TV compile-check. (Engine research backtest still models the
   gate via `local_regime != 2` — flip that too only if you want research baselines to match the unblocked live config.)
+<<<<<<< HEAD
 
+=======
+>>>>>>> 42290b3f9d7eaed98051e385142871168d8b3c23
 ## 2026-07-02 — Zone state machine + 1-minute direction feed, ALL 5 production Pine + BOT (staleness fix)
 
 ⚠️ Needs a **TradingView compile-check** on all 5 + a forward session before sizing (mechanical, mirrored edits).

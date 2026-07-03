@@ -122,6 +122,19 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                            float(d1["atr14"].iloc[-1]) if "atr14" in d1 else None)
         except Exception:
             _df_ctx, b1 = None, None
+        # MULTI-TF ROLLING DIRECTION (research 2026-07-02): every chart TF re-scored from the SAME
+        # 1m array on every completed 1m bar (2/5/15/30/60/240 x 1m windows, D = 0.30S+0.20P+0.20E+
+        # 0.15B+0.15M), plus the 2-bar IMMEDIATE read refreshed by the live price between minute
+        # closes. DETECTION layer only — dir_fast + the confirmed 1m st_state stay as the backup /
+        # validated gate. Best-effort like the 1m feed itself.
+        mtf_dir = None
+        try:
+            if b1 is not None and len(b1) >= 2:
+                from bot.strategy.direction_engine import update_all_directions
+                _atr1 = _df_ctx[4] if _df_ctx else None
+                mtf_dir = update_all_directions(b1, atr=_atr1, live_price=lp.get("price"))
+        except Exception:
+            mtf_dir = None
         # IV estimate from realized vol (5m log-returns annualized) so options price WITHOUT manual input
         import numpy as _np
         _cl = bars["close"].to_numpy(float)[-120:]
@@ -167,6 +180,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "signal_state": _zone_state(c.side.value, float(last_px or c.entry),
                                             s.get("or_high"), s.get("or_low")),
                 "dir_fast": _dir_fast(_df_ctx, s.get("or_high"), s.get("or_low")),
+                "mtf_direction": mtf_dir,          # rolling per-TF read (1m array); dir_fast = backup
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,

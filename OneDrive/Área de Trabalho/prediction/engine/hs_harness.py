@@ -106,6 +106,13 @@ class P:
     struct_lb_fix: int = 5; struct_adaptive: bool = False   # adaptive OFF = exact reconcile baseline
     struct_tol_pct: float = 0.10
     pivot_tie: str = "strict"          # 'strict' (both sides) or 'tv' = TradingView ta.pivothigh (tie OK on left)
+    # GAP-AWARE CHoCH (STRUC fix 2026-07): the old reset required a detected CROSSING bar
+    # (close[i-1] on the other side of the swing) — in a fast move the swing reference itself steps
+    # toward price via newly confirmed pivots, so the crossing bar can never exist and st_state
+    # stayed UP below the last swing low (measured: 41 stale bars on the diagnostic tape).
+    # True (default) = flip whenever price CLOSES beyond the last swing against the trend (the
+    # st_state_prev guard keeps it once-only). False = the old crossing-only rule (research A/B).
+    choch_gap_aware: bool = True
     momo_en: bool = True; momo_thresh: float = 0.3
     trend_ema_f: int = 21; trend_ema_s: int = 50; trendfilter_en: bool = True
     livebreak_en: bool = True
@@ -186,16 +193,24 @@ def compute_state(df, p: P = P()):
         hl = not np.isnan(st_pl_last) and not np.isnan(st_pl_prev) and st_pl_last > st_pl_prev
         ll = not np.isnan(st_pl_last) and not np.isnan(st_pl_prev) and st_pl_last < st_pl_prev
         is_hh[i], is_lh[i], is_hl[i], is_ll[i] = hh, lh, hl, ll
-        if hh and hl:   st_state = 1
-        elif ll and lh: st_state = 2
+        # gap-aware claim guard (STRUC fix 2026-07): a state can only be (re)claimed while price is
+        # on the right side of its own defining swing — UP requires close >= last swing low, DOWN
+        # requires close <= last swing high. Without this, HH/HL pairs left over from the old leg
+        # kept re-claiming UP every bar of a dump (the oscillating stale state).
+        ok_up = (not p.choch_gap_aware) or np.isnan(st_pl_last) or cv[i] >= st_pl_last
+        ok_dn = (not p.choch_gap_aware) or np.isnan(st_ph_last) or cv[i] <= st_ph_last
+        if hh and hl and ok_up:   st_state = 1
+        elif ll and lh and ok_dn: st_state = 2
         elif (hh and ll) or (hl and lh): st_state = 3
         if st_state == 1 and not np.isnan(st_ph_last) and hv[i] > st_ph_last and (i == 0 or hv[i-1] <= st_ph_last):
             bos_bull[i] = True
         if st_state == 2 and not np.isnan(st_pl_last) and lv[i] < st_pl_last and (i == 0 or lv[i-1] >= st_pl_last):
             bos_bear[i] = True
-        if st_state_prev == 2 and not np.isnan(st_ph_last) and cv[i] > st_ph_last and (i == 0 or cv[i-1] <= st_ph_last):
+        if st_state_prev == 2 and not np.isnan(st_ph_last) and cv[i] > st_ph_last and \
+                (p.choch_gap_aware or i == 0 or cv[i-1] <= st_ph_last):
             choch_bull[i] = True; st_state = 0
-        if st_state_prev == 1 and not np.isnan(st_pl_last) and cv[i] < st_pl_last and (i == 0 or cv[i-1] >= st_pl_last):
+        if st_state_prev == 1 and not np.isnan(st_pl_last) and cv[i] < st_pl_last and \
+                (p.choch_gap_aware or i == 0 or cv[i-1] >= st_pl_last):
             choch_bear[i] = True; st_state = 0
         if choch_bull[i]: choch_bull_bar = i
         if choch_bear[i]: choch_bear_bar = i
