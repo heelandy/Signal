@@ -57,7 +57,7 @@ cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.2
 // ───────────────────────── REGIME ─────────────────────────
 local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
 local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Regime", step=0.25)
-block_range   = input.bool(true,  "Block RANGE regime", group="Regime")
+block_range   = input.bool(false,  "Block RANGE regime", group="Regime")
 macro_en       = input.bool(true,  "MACRO filter ON", group="Regime")
 macro_standdown= input.bool(true,  "Stand-down vs SPY trend", group="Regime")
 spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Regime")
@@ -68,7 +68,7 @@ vix_ext  = input.float(35.0, "VIX extreme",  group="Regime", step=1)
 spy_adx_min = input.float(25.0, "Macro ADX min", group="Regime", step=1)
 persist_n   = input.int(3, "Regime persistence bars", group="Regime", minval=1)
 block_d     = input.bool(true, "Block REGIME D", group="Regime")
-block_b_ses = input.string("London only", "Block REGIME B trend", group="Regime",
+block_b_ses = input.string("Off", "Block REGIME B trend", group="Regime",
               options=["Off", "London only", "All sessions"],
               tooltip="F31/F31f: regime B is a validated edge — block it only during London hours (03:00-09:30 ET). This script is RTH-only, so 'London only' never blocks B here (B trades all RTH) — matches STACK/AUTO. 'All sessions' restores the old full block. D stays blocked regardless.")
 // ───────────────────────── RISK PLAN (graduated: structure stop + trail) ─────────────────────────
