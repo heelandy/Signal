@@ -187,6 +187,23 @@ float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
 int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
 // 1-MINUTE DIRECTION FEED (fast_dir — same swing machine, 1m context; lockstep w/ STACK/AUTO)
+// COMBINED SLOPE ENGINE (user research 2026-07): S = 0.50*(closeSlope/ATR) + 0.30*(bodyMidSlope/ATR)
+// + 0.20*bodyPressure — regression over EVERY candle in the window, body midpoints, recency-weighted
+// body pressure. ATR-normalized (~ATRs/bar). |S|>=0.10 directional, >=0.30 strong (tune per TF).
+f_slope_comb(int N) =>
+    float _sc = ta.linreg(close, N, 0) - ta.linreg(close, N, 1)
+    float _mid0 = (open + close) / 2.0
+    float _sm = ta.linreg(_mid0, N, 0) - ta.linreg(_mid0, N, 1)
+    float _a = ta.atr(14)
+    float _num = 0.0
+    float _den = 0.0
+    for _i = 0 to N - 1
+        float _w = 1.0 + (N - 1 - _i) / float(math.max(N - 1, 1))
+        float _b = close[_i] - open[_i]
+        _num += _w * _b
+        _den += _w * math.abs(_b)
+    float _bp = _den > 0 ? _num / _den : 0.0
+    _a > 0 ? 0.50 * (_sc / _a) + 0.30 * (_sm / _a) + 0.20 * _bp : 0.0
 f_struct_1m() =>
     float _ph = ta.pivothigh(high, eff_lb, eff_lb)
     float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
@@ -218,10 +235,12 @@ f_struct_1m() =>
         _st := 0
     if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
         _st := 0
-    _st
-int st_1m = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+    [_st, f_slope_comb(12)]
+[st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
 bool use_fast_dir = fast_dir and tf_s > 60
 int st_dir = use_fast_dir ? st_1m : st_state                      // DIRECTION state at 1m speed (stops stay chart-TF)
+float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S (1m feed on any TF)
+int dir_slp = slope_dir >= 0.10 ? 1 : slope_dir <= -0.10 ? -1 : 0
 // TF-adaptive trend gate (legacy EMA unless the input opts into the structure state)
 bool gate_off   = trend_mode == "Off — plain ORB (F58)"                               // F58: plain breakout, no trend filter
 bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
@@ -562,7 +581,7 @@ if just_short
 bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
 bgcolor(eval_block ? color.new(color.red, 80) : na)
 
-var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+var table dash = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     table.cell(dash,0,0,"HIGHSTRIKE ORB", text_color=color.yellow, text_size=size.small)
     table.cell(dash,1,0, str.tostring(syminfo.ticker)+" · "+asset_class, text_color=color.silver, text_size=size.tiny)
@@ -576,6 +595,8 @@ if barstate.islast and show_dash
     table.cell(dash,1,4, or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming", text_color=color.aqua, text_size=size.tiny)
     table.cell(dash,0,5,"Eval", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,5, not eval_on ? "off" : eval_passed ? "TARGET ✓" : eval_block ? "HALTED" : "ok" + (eval_target > 0 ? "  " + str.tostring(strategy.equity - start_eq, "#") + "/" + str.tostring(eval_target, "#") : ""), text_color=eval_passed?color.lime:eval_block?color.red:not eval_on?color.gray:color.lime, text_size=size.tiny)
+    table.cell(dash,0,6,"DIR·slope", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,6, "S=" + str.tostring(slope_dir, "#.##") + (dir_slp > 0 ? " ▲" : dir_slp < 0 ? " ▼" : " —") + " · Struct" + (st_dir == 1 ? "▲" : st_dir == 2 ? "▼" : "—") + (use_fast_dir ? " (1m)" : ""), text_color=dir_slp > 0 ? color.lime : dir_slp < 0 ? color.red : color.gray, text_size=size.tiny)
 
 // ───────────────────────── POSITION-TOOL PANEL (labeled SL/TP boxes, like the TV long/short tool) ─────────────────────────
 bool inL = strategy.position_size > 0

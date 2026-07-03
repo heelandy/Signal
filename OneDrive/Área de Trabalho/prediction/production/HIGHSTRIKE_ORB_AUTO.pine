@@ -234,6 +234,25 @@ if st_prev == 1 and not na(pl_last) and close < pl_last and close[1] >= pl_last
     st_state := 0
 
 // ───────────────────────── 1-MINUTE DIRECTION FEED (fast_dir — same machine, 1m context; lockstep w/ STACK) ─────────────────────────
+// COMBINED SLOPE ENGINE (user research 2026-07): S = 0.50*(closeSlope/ATR) + 0.30*(bodyMidSlope/ATR)
+// + 0.20*bodyPressure. Uses EVERY candle in the window (regression, not first/last), body midpoints
+// catch open/close progression, recency-weighted body pressure kills the one-big-candle illusion.
+// ATR-normalized => comparable across instruments/TFs (~ATRs advanced per bar). Bands: |S|>=0.10
+// directional, >=0.30 strong (starting thresholds — tune per TF via the gauntlet before gating).
+f_slope_comb(int N) =>
+    float _sc = ta.linreg(close, N, 0) - ta.linreg(close, N, 1)
+    float _mid0 = (open + close) / 2.0
+    float _sm = ta.linreg(_mid0, N, 0) - ta.linreg(_mid0, N, 1)
+    float _a = ta.atr(14)
+    float _num = 0.0
+    float _den = 0.0
+    for _i = 0 to N - 1
+        float _w = 1.0 + (N - 1 - _i) / float(math.max(N - 1, 1))
+        float _b = close[_i] - open[_i]
+        _num += _w * _b
+        _den += _w * math.abs(_b)
+    float _bp = _den > 0 ? _num / _den : 0.0
+    _a > 0 ? 0.50 * (_sc / _a) + 0.30 * (_sm / _a) + 0.20 * _bp : 0.0
 f_struct_1m() =>
     float _ph = ta.pivothigh(high, eff_lb, eff_lb)
     float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
@@ -265,10 +284,12 @@ f_struct_1m() =>
         _st := 0
     if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
         _st := 0
-    _st
-int st_1m = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+    [_st, f_slope_comb(12)]
+[st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
 bool use_fast_dir = fast_dir and tf_s > 60
 int st_dir = use_fast_dir ? st_1m : st_state                      // DIRECTION state at 1m speed (stops stay chart-TF)
+float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S (1m feed on any TF)
+int dir_slp = slope_dir >= 0.10 ? 1 : slope_dir <= -0.10 ? -1 : 0
 
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
 bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
@@ -634,7 +655,7 @@ if barstate.islast and show_line_labels
 
 // ───────────────────────── DASHBOARD ─────────────────────────
 f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
-var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
+var table t = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
 if barstate.islast and show_dash
     string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_passed ? "TARGET ✓ — done" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "ARMED — order resting" : (l_invalid and s_invalid) ? "BOTH SIDES INVALID" : l_invalid ? "LONG INVALID (short gated)" : s_invalid ? "SHORT INVALID (long gated)" : (l_below_mid or s_above_mid) ? "WATCH — order pulled at OR mid" : "waiting (no gated setup)"
     color stc = strategy.position_size != 0 ? color.lime : eval_passed ? color.lime : (arm_l or arm_s) ? color.aqua : (l_invalid or s_invalid) ? color.rgb(139, 0, 0) : eval_block ? color.red : color.orange
@@ -664,3 +685,5 @@ if barstate.islast and show_dash
          " · dd " + str.tostring(strategy.equity - peak_eq, "#") + "/" + str.tostring(-trail_dd, "#") +
          (eval_target > 0 ? " · tgt " + str.tostring(strategy.equity - start_eq, "#") + "/" + str.tostring(eval_target, "#") : "")
     table.cell(t,1,9, evtxt, text_color=not eval_on ? color.gray : eval_passed ? color.lime : eval_block ? color.red : color.silver, text_size=size.tiny)
+    table.cell(t,0,10,"DIR·slope", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,10, "S=" + str.tostring(slope_dir, "#.##") + (dir_slp > 0 ? " ▲" : dir_slp < 0 ? " ▼" : " —") + " · Struct" + (st_dir == 1 ? "▲" : st_dir == 2 ? "▼" : "—") + (use_fast_dir ? " (1m)" : ""), text_color=dir_slp > 0 ? color.lime : dir_slp < 0 ? color.red : color.gray, text_size=size.tiny)

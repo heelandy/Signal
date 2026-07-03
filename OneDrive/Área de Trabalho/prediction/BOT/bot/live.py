@@ -45,13 +45,14 @@ def _zone_state(side: str, price: float, or_high, or_low) -> str:
 
 
 def _dir_fast(ctx, or_high, or_low):
-    """1m-feed DIR-fast votes for a proposal (None when the 1m fetch was unavailable)."""
+    """1m-feed DIR-fast votes + combined slope engine for a proposal (None when 1m unavailable)."""
     if not ctx:
         return None
     from bot.strategy.orb_state import fast_direction
     try:
-        closes, vwap, st1 = ctx
-        return fast_direction(closes, or_high, or_low, vwap=vwap, st_state_1m=st1)
+        closes, vwap, st1, opens, atr1 = ctx
+        return fast_direction(closes, or_high, or_low, vwap=vwap, st_state_1m=st1,
+                              opens_1m=opens, atr=atr1)
     except Exception:
         return None
 
@@ -116,7 +117,9 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 d1 = families.prepare(b1, sym)                        # same engine machine, 1m context
                 _df_ctx = (d1["close"].to_numpy(float),
                            float(d1["vwap_sess"].iloc[-1]) if "vwap_sess" in d1 else None,
-                           int(d1["st_state"].iloc[-1]) if "st_state" in d1 else None)
+                           int(d1["st_state"].iloc[-1]) if "st_state" in d1 else None,
+                           d1["open"].to_numpy(float),                # combined slope engine inputs
+                           float(d1["atr14"].iloc[-1]) if "atr14" in d1 else None)
         except Exception:
             _df_ctx, b1 = None, None
         # IV estimate from realized vol (5m log-returns annualized) so options price WITHOUT manual input

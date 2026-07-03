@@ -247,6 +247,25 @@ if array.size(obBearT) > 0
 // The SAME swing-structure machine as above, executed in the 1-MINUTE context via request.security:
 // pivots confirm in eff_lb MINUTES instead of eff_lb chart bars, so a 5m/15m chart flips direction as
 // fast as the 1m chart did in the user's screenshots. Keep the two machines in lockstep when editing.
+// COMBINED SLOPE ENGINE (user research 2026-07): S = 0.50*(closeSlope/ATR) + 0.30*(bodyMidSlope/ATR)
+// + 0.20*bodyPressure. Uses EVERY candle in the window (regression, not first/last), body midpoints
+// catch open/close progression, recency-weighted body pressure kills the one-big-candle illusion.
+// ATR-normalized => comparable across instruments/TFs (~ATRs advanced per bar). Bands: |S|>=0.10
+// directional, >=0.30 strong (starting thresholds — tune per TF via the gauntlet before gating).
+f_slope_comb(int N) =>
+    float _sc = ta.linreg(close, N, 0) - ta.linreg(close, N, 1)
+    float _mid0 = (open + close) / 2.0
+    float _sm = ta.linreg(_mid0, N, 0) - ta.linreg(_mid0, N, 1)
+    float _a = ta.atr(14)
+    float _num = 0.0
+    float _den = 0.0
+    for _i = 0 to N - 1
+        float _w = 1.0 + (N - 1 - _i) / float(math.max(N - 1, 1))
+        float _b = close[_i] - open[_i]
+        _num += _w * _b
+        _den += _w * math.abs(_b)
+    float _bp = _den > 0 ? _num / _den : 0.0
+    _a > 0 ? 0.50 * (_sc / _a) + 0.30 * (_sm / _a) + 0.20 * _bp : 0.0
 f_struct_1m() =>
     float _ph = ta.pivothigh(high, eff_lb, eff_lb)
     float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
@@ -278,11 +297,11 @@ f_struct_1m() =>
         _st := 0
     if _stp == 1 and not na(_plL) and close < _plL and close[1] >= _plL
         _st := 0
-    [_st, ta.linreg(close, 12, 0) - ta.linreg(close, 12, 1)]      // + the 12-bar slope in 1m units (12-MINUTE window)
+    [_st, f_slope_comb(12)]                                       // + the COMBINED slope S in 1m units (12-MINUTE window)
 [st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
 bool use_fast_dir = fast_dir and tf_s > 60                        // a 1m chart already reads at 1m speed
 int   st_dir    = use_fast_dir ? st_1m : st_state                 // DIRECTION state (1m speed) — gates + DIR-fast
-float slope_dir = use_fast_dir ? slope_1m : dir_slope             // slope read at 1m speed (12-min window)
+float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S, 1m feed (12-min window) or chart TF
 
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
 bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
@@ -767,7 +786,7 @@ if barstate.islast and show_dash
     // from the 1-MINUTE feed when fast_dir is on, so every TF reads like the 1m chart.
     int dir_or  = not or_set ? 0 : close > or_high ? 1 : close < or_low ? -1 : close > or_mid ? 1 : -1
     int dir_vw  = close > vwap_c ? 1 : close < vwap_c ? -1 : 0
-    int dir_slp = slope_dir > 0 ? 1 : slope_dir < 0 ? -1 : 0        // 12-bar regression slope (1m feed = 12-MINUTE window)
+    int dir_slp = slope_dir >= 0.10 ? 1 : slope_dir <= -0.10 ? -1 : 0   // combined S w/ the ±0.10 neutral band
     int dir_st  = st_dir == 1 ? 1 : st_dir == 2 ? -1 : 0
     int dir_fast = dir_or + dir_vw + dir_slp
     string dirV = dir_fast >= 2 ? "▲ UP" : dir_fast <= -2 ? "▼ DOWN" : "◆ mixed"
@@ -817,4 +836,4 @@ if barstate.islast and show_dash
     table.cell(dash,2,12, eval_on ? "1R $" + str.tostring(eval_risk, "#") : "", text_color=color.gray, text_size=size.tiny)
     table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,13, dirV + " (" + str.tostring(dir_fast) + ")", text_color=dir_fast >= 2 ? color.lime : dir_fast <= -2 ? color.red : color.gray, text_size=size.tiny)
-    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m feed)" : " (edge)"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " S=" + str.tostring(slope_dir, "#.##") + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m feed)" : " (edge)") + (dir_or != 0 and dir_or == dir_slp and dir_or == dir_st ? " ALIGNED" : ""), text_color=(dir_or != 0 and dir_or == dir_slp and dir_or == dir_st) ? color.lime : color.aqua, text_size=size.tiny)
