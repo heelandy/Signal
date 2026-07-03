@@ -44,6 +44,19 @@ def _zone_state(side: str, price: float, or_high, or_low) -> str:
         return "unknown"
 
 
+def _dir_fast(ctx, or_high, or_low):
+    """1m-feed DIR-fast votes + combined slope engine for a proposal (None when 1m unavailable)."""
+    if not ctx:
+        return None
+    from bot.strategy.orb_state import fast_direction
+    try:
+        closes, vwap, st1, opens, atr1 = ctx
+        return fast_direction(closes, or_high, or_low, vwap=vwap, st_state_1m=st1,
+                              opens_1m=opens, atr=atr1)
+    except Exception:
+        return None
+
+
 def source_health(bars, max_bar_age_min: float = MAX_BAR_AGE_MIN,
                   now: pd.Timestamp | None = None) -> tuple[bool, float]:
     """Fail-closed feed check for one symbol's bar frame: market-truth issues + last-bar age.
@@ -94,12 +107,27 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             feats = feature_snapshot(bars)                            # FEE-001 context (RSI/ADX/vol/...)
         except Exception:
             feats = {}
+        # 1-MINUTE DIRECTION FEED (staleness fix 2026-07, mirrors the Pine fast_dir input): structure
+        # + slope + vwap computed on 1m bars so the direction read flips at 1m speed regardless of the
+        # 5m signal timeframe. Best-effort: a failed 1m fetch just leaves dir_fast unavailable.
+        _df_ctx, b1 = None, None
+        try:
+            b1 = get_bars(sym, "1m", period="2d", provider=provider)
+            if len(b1) >= 30:
+                d1 = families.prepare(b1, sym)                        # same engine machine, 1m context
+                _df_ctx = (d1["close"].to_numpy(float),
+                           float(d1["vwap_sess"].iloc[-1]) if "vwap_sess" in d1 else None,
+                           int(d1["st_state"].iloc[-1]) if "st_state" in d1 else None,
+                           d1["open"].to_numpy(float),                # combined slope engine inputs
+                           float(d1["atr14"].iloc[-1]) if "atr14" in d1 else None)
+        except Exception:
+            _df_ctx, b1 = None, None
         # IV estimate from realized vol (5m log-returns annualized) so options price WITHOUT manual input
         import numpy as _np
         _cl = bars["close"].to_numpy(float)[-120:]
         _ret = _np.diff(_np.log(_cl)) if len(_cl) > 6 else _np.array([0.0])
         iv_est = round(float(_np.clip(_np.std(_ret) * (252 * 78) ** 0.5, 0.10, 0.80)), 3) if len(_ret) > 5 else 0.20
-        for s in families.scan(bars, sym, bars_back=bars_back):
+        for s in families.scan(bars, sym, bars_back=bars_back, bars_1m=b1):   # 1m feed -> gate + grade at 1m speed
             c = s["candidate"]
             conf = predict_candidate(c)                       # PREDICTIVE: P(win) from the champion (or prior)
             flow = orderflow_confirm(c)                       # order-flow confirmation (book-level; "no feed" live)
@@ -138,6 +166,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "or_high": s.get("or_high"), "or_low": s.get("or_low"),
                 "signal_state": _zone_state(c.side.value, float(last_px or c.entry),
                                             s.get("or_high"), s.get("or_low")),
+                "dir_fast": _dir_fast(_df_ctx, s.get("or_high"), s.get("or_low")),
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,

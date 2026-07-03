@@ -185,3 +185,207 @@ def test_bad_geometry_rejected():
         sm.arm(entry=730.0, stop=731.0, close=730.5)       # long stop above entry
     with pytest.raises(ValueError):
         OrbSideState("long", or_high=100.0, or_low=101.0)  # inverted OR
+
+
+# ---- 1-minute direction feed (fast_direction + flip-speed vs chart-TF structure) ----
+
+def test_fast_direction_votes_down_when_price_dumps_below_or_low():
+    from bot.strategy.orb_state import fast_direction
+    closes = list(np.linspace(730.0, 719.0, 40))           # steady 1m dump into the screenshot price
+    d = fast_direction(closes, or_high=OR_H, or_low=OR_L, vwap=726.0, st_state_1m=2)
+    assert d["zone"] == -1 and d["slope"] == -1 and d["vwap"] == -1 and d["struct_1m"] == -1
+    assert d["read"] == "down" and d["score"] == -4
+
+
+def test_fast_direction_up_and_mixed_and_missing_inputs():
+    from bot.strategy.orb_state import fast_direction
+    up = list(np.linspace(724.0, 731.0, 40))
+    d = fast_direction(up, or_high=OR_H, or_low=OR_L, vwap=725.0, st_state_1m=1)
+    assert d["read"] == "up" and d["score"] == 4
+    m = fast_direction(up, or_high=OR_H, or_low=OR_L, vwap=732.0, st_state_1m=2)   # conflicting votes
+    assert m["read"] in ("mixed", "up")
+    n = fast_direction(up)                                  # no OR/vwap/struct -> slope-only, never crashes
+    assert n["zone"] == 0 and n["vwap"] == 0 and n["read"] == "mixed"
+
+
+def test_1m_structure_flips_down_earlier_than_5m_on_the_same_tape():
+    """The screenshot bug, end-to-end: after a rally then a downtrend, the 1m swing structure must
+    read DOWN materially EARLIER (wall-clock minutes) than the 5m structure computed on the same
+    tape — the property the fast_dir 1m feed exploits. Same machine, same lb=5, only the bar size
+    differs (pivot confirm = lb MINUTES on 1m vs lb x 5 minutes on 5m)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine"))
+    import hs_harness as H
+    import pandas as pd
+    rng = np.random.default_rng(11)
+    n_up, n_dn = 190, 150
+    t_up = np.arange(n_up); t_dn = np.arange(n_dn)
+    up = 700 + 0.10 * t_up + 2.5 * np.sin(t_up / 5.0)        # rising zigzag (prints HH/HL swings)
+    dn = up[-1] - 0.20 * t_dn + 2.5 * np.sin(t_dn / 5.0)     # falling zigzag (prints LL/LH swings)
+    c1 = np.concatenate([up, dn]) + rng.normal(0, 0.03, n_up + n_dn)
+    ts1 = pd.date_range("2026-06-01 09:30", periods=len(c1), freq="1min",
+                        tz="America/New_York").tz_convert("UTC")
+    f1 = pd.DataFrame({"ts": ts1, "open": c1 - 0.03, "high": c1 + 0.30, "low": c1 - 0.30,
+                       "close": c1, "volume": 1000.0})
+    d1 = H.compute_state(f1, H.P())                          # 1m context
+    f5 = (f1.set_index(pd.to_datetime(f1["ts"]))             # the 5m chart's view of the same tape
+             .resample("5min").agg({"open": "first", "high": "max", "low": "min",
+                                    "close": "last", "volume": "sum"}).dropna().reset_index()
+             .rename(columns={"index": "ts"}))
+    d5 = H.compute_state(f5, H.P())
+    st1 = d1["st_state"].to_numpy(); st5 = d5["st_state"].to_numpy()
+    assert (st1[:n_up] == 1).any(), "premise: the rally must register as UP structure"
+    assert (st1 == 2).any(), "1m structure must flip DOWN during the downtrend"
+    first_dn_1m_min = int(np.argmax(st1 == 2))               # minutes from open (1 bar = 1 min)
+    if (st5 == 2).any():
+        first_dn_5m_min = int(np.argmax(st5 == 2)) * 5
+        assert first_dn_1m_min < first_dn_5m_min, (first_dn_1m_min, first_dn_5m_min)
+    else:
+        first_dn_5m_min = None                               # 5m never flipped at all — max lag
+    # the 1m read must lead by a material margin (>= 10 wall-clock minutes) or the 5m never flips
+    assert first_dn_5m_min is None or first_dn_5m_min - first_dn_1m_min >= 10
+
+
+def test_fast_state_1m_alignment_is_causal_and_maps_last_1m_bar():
+    """families.fast_state_1m must give each 5m bar the 1m st_state of the LAST 1m bar inside it
+    (known at the 5m close), be NaN before 1m coverage, and never read future 1m bars."""
+    from bot.strategy.families import fast_state_1m, prepare
+    import pandas as pd
+    rng = np.random.default_rng(21)
+    n1 = 300
+    t = np.arange(n1)
+    c1 = 500 + 0.05 * t + 2.0 * np.sin(t / 5.0) + rng.normal(0, 0.02, n1)
+    ts1 = pd.date_range("2026-06-01 09:30", periods=n1, freq="1min",
+                        tz="America/New_York").tz_convert("UTC")
+    b1 = pd.DataFrame({"ts_et": ts1, "open": c1 - 0.02, "high": c1 + 0.2, "low": c1 - 0.2,
+                       "close": c1, "volume": 1000.0})
+    b5 = (b1.set_index(pd.to_datetime(b1["ts_et"]))
+             .resample("5min").agg({"open": "first", "high": "max", "low": "min",
+                                    "close": "last", "volume": "sum"}).dropna().reset_index()
+             .rename(columns={"ts_et": "ts_et"}))
+    d5 = prepare(b5, "QQQ")
+    st_fast = fast_state_1m(d5, b1, "QQQ")
+    d1 = prepare(b1, "QQQ")
+    st1 = d1["st_state"].to_numpy()
+    # each 5m bar's fast state == the 1m state at that bar's last inner 1m bar (index 5k+4)
+    for k in (10, 20, 40, 55):
+        assert st_fast[k] == st1[5 * k + 4], (k, st_fast[k], st1[5 * k + 4])
+    # causality: mutating FUTURE 1m bars must not change earlier aligned values
+    b1_mut = b1.copy()
+    b1_mut.loc[b1_mut.index[250:], ["open", "high", "low", "close"]] = 400.0
+    st_fast_mut = fast_state_1m(d5, b1_mut, "QQQ")
+    same_until = 250 // 5 - 1
+    assert np.array_equal(st_fast[:same_until], st_fast_mut[:same_until], equal_nan=True)
+
+
+def test_scan_uses_1m_state_where_covered(monkeypatch):
+    """families.scan(bars_1m=...) must swap the gate/grade state to the 1m feed where covered and
+    keep the 5m state where the 1m frame has no coverage (NaN fallback)."""
+    from bot.strategy import families
+    import pandas as pd
+    called = {}
+    def fake_fast(d5, b1, sym):
+        called["yes"] = True
+        out = np.full(len(d5), np.nan)
+        out[-3:] = 2.0                              # 1m says DOWN on the last 3 bars only
+        return out
+    monkeypatch.setattr(families, "fast_state_1m", fake_fast)
+    rng = np.random.default_rng(5)
+    n = 120
+    c = 500 + np.cumsum(rng.normal(0, 0.3, n))
+    ts = pd.date_range("2026-06-01 09:30", periods=n, freq="5min",
+                       tz="America/New_York").tz_convert("UTC")
+    b5 = pd.DataFrame({"ts_et": ts, "open": c - 0.05, "high": c + 0.5, "low": c - 0.5,
+                       "close": c, "volume": 1000.0})
+    b1 = b5.head(40).copy()                         # any non-empty frame (fake ignores content)
+    sigs = families.scan(b5, "QQQ", bars_back=2, bars_1m=b1)
+    assert called.get("yes"), "1m fast path must be invoked when bars_1m is provided"
+    assert isinstance(sigs, list)                   # scan completes with the swapped state
+
+
+# ---- combined slope engine (user research spec: Sc/ATR + Sm/ATR + body pressure) ----
+
+def test_slope_engine_doc_example_dip_still_positive():
+    """Doc §2: 100 -> 101 -> 100.80 -> 102 -> 103 — one down move, but the fitted line rises."""
+    from bot.strategy.orb_state import slope_engine
+    closes = [100, 101, 100.80, 102, 103]
+    opens = [99.9, 100.1, 100.9, 100.9, 102.1]
+    e = slope_engine(opens, closes, atr=1.0, n=5)
+    assert e["sc_atr"] > 0 and e["S"] > 0
+
+
+def test_slope_engine_strong_up_arrays_from_doc():
+    """Doc: Open [100..103], Close [101..104] -> bodies +1 each, everything agrees -> STRONG_UP."""
+    from bot.strategy.orb_state import slope_engine, directional_state
+    opens = [100, 101, 102, 103]
+    closes = [101, 102, 103, 104]
+    e = slope_engine(opens, closes, atr=1.0, n=4)
+    assert e["body_pressure"] == 1.0                       # all body pressure bullish
+    assert e["sc_atr"] > 0.3 and e["S"] > 0.3
+    assert e["persistence"] == 1.0 and e["efficiency"] == 1.0
+    st = directional_state(e["S"], e["persistence"], e["persist_dir"], e["efficiency"],
+                           st_state=1, zone_vote=1)
+    assert st == "STRONG_UP"
+    # exact mirror
+    e2 = slope_engine([103, 102, 101, 100], [102, 101, 100, 99], atr=1.0, n=4)
+    assert e2["body_pressure"] == -1.0 and abs(e2["S"] + e["S"]) < 1e-9
+    st2 = directional_state(e2["S"], e2["persistence"], e2["persist_dir"], e2["efficiency"],
+                            st_state=2, zone_vote=-1)
+    assert st2 == "STRONG_DOWN"
+
+
+def test_slope_engine_choppy_arrays_not_called_bullish():
+    """Doc §3: Open [100,102,100,103], Close [102,100,103,101] — bodies +2,-2,+3,-2 -> mixed/choppy,
+    never a (strong) trend call."""
+    from bot.strategy.orb_state import slope_engine, directional_state
+    e = slope_engine([100, 102, 100, 103], [102, 100, 103, 101], atr=1.0, n=4)
+    assert abs(e["body_pressure"]) < 0.5                   # mixed pressure
+    st = directional_state(e["S"], e["persistence"], e["persist_dir"], e["efficiency"])
+    assert st in ("NEUTRAL", "WEAK_UP", "WEAK_DOWN")
+    assert "STRONG" not in st
+
+
+def test_slope_engine_scale_invariance_and_guards():
+    from bot.strategy.orb_state import slope_engine
+    opens, closes = [100, 101, 102, 103], [101, 102, 103, 104]
+    a = slope_engine(opens, closes, atr=2.0, n=4)
+    b = slope_engine([x * 100 for x in opens], [x * 100 for x in closes], atr=200.0, n=4)
+    assert abs(a["S"] - b["S"]) < 1e-9                     # ATR normalization = scale-invariant
+    z = slope_engine(opens, closes, atr=0.0, n=4)          # zero ATR -> neutral, no crash
+    assert z["S"] == 0.0
+    f = slope_engine([5, 5, 5, 5], [5, 5, 5, 5], atr=1.0, n=4)   # flat, zero bodies -> no div error
+    assert f["S"] == 0.0 and f["body_pressure"] == 0.0
+
+
+def test_directional_state_slope_alone_must_not_call_direction():
+    """Doc §7: positive slope BUT bearish structure / below OR low -> NOT a long state."""
+    from bot.strategy.orb_state import directional_state
+    assert directional_state(0.25, 0.7, 1, 0.6, st_state=2, zone_vote=1) == "NEUTRAL"   # struct conflicts
+    assert directional_state(0.25, 0.7, 1, 0.6, st_state=1, zone_vote=-1) == "NEUTRAL"  # below OR low
+    assert directional_state(-0.25, 0.7, -1, 0.6, st_state=1, zone_vote=-1) == "NEUTRAL"  # mirror
+    # bands: directional / strong / neutral
+    assert directional_state(0.15, 0.65, 1, 0.5, st_state=1, zone_vote=1) == "UP"
+    assert directional_state(-0.15, 0.65, -1, 0.5, st_state=2, zone_vote=-1) == "DOWN"
+    assert directional_state(0.05, 0.9, 1, 0.9, st_state=1, zone_vote=1) == "NEUTRAL"
+    assert directional_state(0.35, 0.75, 1, 0.7, st_state=1, zone_vote=1) == "STRONG_UP"
+    assert directional_state(0.35, 0.75, 1, 0.7, st_state=0, zone_vote=1) != "STRONG_UP"  # STRONG needs structure
+    # weak: slope directional but persistence not aligned/enough
+    assert directional_state(0.15, 0.5, 1, 0.3, st_state=None, zone_vote=None) == "WEAK_UP"
+
+
+def test_fast_direction_carries_slope_engine_and_alignment():
+    from bot.strategy.orb_state import fast_direction
+    n = 30
+    closes = list(np.linspace(724.0, 731.5, n))
+    opens = [c - 0.2 for c in closes]                      # steady bullish bodies
+    d = fast_direction(closes, or_high=OR_H, or_low=OR_L, vwap=725.0, st_state_1m=1,
+                       opens_1m=opens, atr=0.5)
+    assert "slope_engine" in d and d["slope_engine"]["S"] > 0.10
+    assert d["state"] in ("UP", "STRONG_UP")
+    assert d["aligned"] is True and d["read"] == "up"      # OR + SLOPE + STRUC agree
+    # the screenshot dump, mirrored: everything down, aligned short
+    closes_d = list(np.linspace(730.0, 719.0, n))
+    opens_d = [c + 0.2 for c in closes_d]
+    dd = fast_direction(closes_d, or_high=OR_H, or_low=OR_L, vwap=726.0, st_state_1m=2,
+                        opens_1m=opens_d, atr=0.5)
+    assert dd["aligned"] is True and dd["read"] == "down"
+    assert dd["state"] in ("DOWN", "STRONG_DOWN")

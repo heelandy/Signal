@@ -90,8 +90,26 @@ def _levels(d, i, sign, min_stop_atr=0.75, sl_max_atr=2.5):
     return round(entry, 2), round(stop, 2), round(entry + sign * risk * T1_RR, 2), round(entry + sign * risk * T2_RR, 2)
 
 
-def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2) -> list[dict]:
-    """Run all 4 families with the symbol's PER-ASSET config; signals active in the last `bars_back` bars."""
+def fast_state_1m(d5: pd.DataFrame, bars_1m: pd.DataFrame, sym: str) -> np.ndarray:
+    """1-MINUTE structure state CAUSALLY aligned onto the 5m frame (Python twin of the Pine
+    `fast_dir` request.security feed): for each 5m bar, take the st_state of the LAST 1m bar
+    INSIDE that 5m bar — known exactly at the 5m bar's close, never later (no look-ahead).
+    Bars before 1m coverage return NaN (caller falls back to the chart-TF state there)."""
+    d1 = prepare(bars_1m, sym)
+    t1 = pd.to_datetime(d1["ts"], utc=True)
+    # 5m ts = bar OPEN; the last 1m bar inside opens at +4 min and closes AT the 5m close
+    t5 = pd.to_datetime(d5["ts"], utc=True) + pd.Timedelta(minutes=4)
+    m = pd.merge_asof(pd.DataFrame({"ts": t5.to_numpy()}),
+                      pd.DataFrame({"ts": t1.to_numpy(), "st": d1["st_state"].to_numpy(float)}),
+                      on="ts", direction="backward")
+    return m["st"].to_numpy(float)
+
+
+def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFrame | None = None) -> list[dict]:
+    """Run all 4 families with the symbol's PER-ASSET config; signals active in the last `bars_back` bars.
+    bars_1m (optional): 1m frame for the SAME symbol — the trend gate + struct_aligned grade then read
+    the 1-MINUTE structure (staleness fix 2026-07, mirrors the Pine fast_dir input); stop geometry
+    stays on the 5m swings. Without it, behavior is unchanged (chart-TF structure)."""
     import hs_backtest as B
     from bot.contracts import TradeCandidate
     from bot.strategy.asset_config import asset_config
@@ -99,6 +117,12 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2) -> list[dict]:
     d = prepare(bars, symbol)                       # futures lb=3 / equity lb=5 structure speed
     n = len(d)
     st = d["st_state"].to_numpy() if "st_state" in d else np.zeros(n)
+    if bars_1m is not None and len(bars_1m) >= 30:
+        try:
+            _fast = fast_state_1m(d, bars_1m, symbol)
+            st = np.where(np.isnan(_fast), st, _fast).astype(int)   # 1m state where covered, else 5m
+        except Exception:
+            pass                                    # 1m feed is best-effort — never break the scan
     atr = d["atr14"].to_numpy()
     out = []
     sess_enum = {"rth": Session.RTH, "asia": Session.ASIA, "london": Session.LONDON}

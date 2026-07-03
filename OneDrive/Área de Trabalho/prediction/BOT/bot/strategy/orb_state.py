@@ -244,6 +244,123 @@ class OrbSideState:
         return s     # STOPPED / COMPLETED are terminal for the setup (block immediate re-entry)
 
 
+# ─────────────────────────── combined slope engine (user research spec 2026-07) ───────────────────────────
+# S = 0.50·(Sc/ATR) + 0.30·(Sm/ATR) + 0.20·BP   over the last N candles, where
+#   Sc = regression slope of CLOSES, Sm = regression slope of BODY MIDPOINTS (open+close)/2,
+#   BP = recency-weighted body pressure  Σw·(C−O) / Σw·|C−O|  ∈ [−1, +1],  w_i = 1 + i/(N−1)
+# ATR normalization makes S comparable across instruments/timeframes (≈ ATRs advanced per bar).
+
+SLOPE_STRONG = 0.30      # |S| ≥ 0.30 → STRONG (spec starting thresholds — per-TF tuning required)
+SLOPE_DIR = 0.10         # |S| ≥ 0.10 → directional; below → neutral band
+PERSIST_STRONG, PERSIST_DIR = 0.70, 0.60
+ER_STRONG, ER_DIR = 0.60, 0.40
+
+
+def _reg_slope(y: np.ndarray) -> float:
+    """Least-squares slope of y vs bar index (uses every point, not just first/last)."""
+    n = len(y)
+    if n < 3:
+        return 0.0
+    x = np.arange(n, dtype=float)
+    xm = x - x.mean()
+    denom = float((xm * xm).sum())
+    return float((xm * (y - y.mean())).sum() / denom) if denom > 0 else 0.0
+
+
+def slope_engine(opens, closes, atr: float, n: int = 12) -> dict:
+    """Combined slope read over the last n candles (causal, symmetric, div-by-zero safe).
+    Returns Sc_atr, Sm_atr, body_pressure, S (combined), plus persistence + efficiency of the
+    same window — the doc's four calculations in one call."""
+    o = np.asarray(opens, float)[-n:]
+    c = np.asarray(closes, float)[-n:]
+    m = min(len(o), len(c))
+    o, c = o[-m:], c[-m:]
+    if m < 3 or not np.isfinite(atr) or atr <= 0:
+        return {"sc_atr": 0.0, "sm_atr": 0.0, "body_pressure": 0.0, "S": 0.0,
+                "persist_dir": 0, "persistence": 0.0, "efficiency": 0.0}
+    sc = _reg_slope(c) / atr
+    sm = _reg_slope((o + c) / 2.0) / atr
+    w = 1.0 + np.arange(m, dtype=float) / max(m - 1, 1)          # recent candles weigh ~2x the oldest
+    body = c - o
+    denom = float((w * np.abs(body)).sum())
+    bp = float((w * body).sum() / denom) if denom > 0 else 0.0
+    S = 0.50 * sc + 0.30 * sm + 0.20 * bp
+    pdir, pers = directional_persistence(c, noise=0.0)
+    return {"sc_atr": round(sc, 4), "sm_atr": round(sm, 4), "body_pressure": round(bp, 4),
+            "S": round(S, 4), "persist_dir": pdir, "persistence": round(pers, 3),
+            "efficiency": round(efficiency_ratio(c), 3)}
+
+
+def directional_state(S: float, persistence: float, persist_dir: int, efficiency: float,
+                      st_state: int | None = None, zone_vote: int | None = None) -> str:
+    """The spec's 7 directional states. STRONG requires slope + persistence + efficiency AND
+    structure/location agreement; a conflicting structure or location demotes toward NEUTRAL.
+    Symmetric up/down by construction (evaluated on sign·S)."""
+    sign = 1 if S > 0 else (-1 if S < 0 else 0)
+    if sign == 0:
+        return "NEUTRAL"
+    a = abs(S)
+    aligned_p = persist_dir == sign and persistence >= PERSIST_DIR
+    strong_p = persist_dir == sign and persistence >= PERSIST_STRONG
+    st_agree = st_state is None or st_state == 0 or st_state == 3 or \
+        (st_state == 1 and sign == 1) or (st_state == 2 and sign == -1)
+    st_conflict = st_state in (1, 2) and not st_agree
+    loc_agree = zone_vote is None or zone_vote == 0 or zone_vote == sign
+    lab = "UP" if sign == 1 else "DOWN"
+    if a >= SLOPE_STRONG and strong_p and efficiency >= ER_STRONG and st_agree and loc_agree \
+            and st_state in (1, 2):                       # STRONG needs confirmed structure too
+        return f"STRONG_{lab}"
+    if a >= SLOPE_DIR and aligned_p and efficiency >= ER_DIR and not st_conflict and loc_agree:
+        return lab
+    if a >= SLOPE_DIR and (st_conflict or not loc_agree):
+        return "NEUTRAL"                                  # spec §7: slope alone must NOT call direction
+    if a >= SLOPE_DIR:
+        return f"WEAK_{lab}"
+    return "NEUTRAL"
+
+
+def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None = None,
+                   vwap: float | None = None, st_state_1m: int | None = None,
+                   slope_n: int = 12, opens_1m=None, atr: float | None = None) -> dict:
+    """DIR-fast read at 1-MINUTE speed (Python twin of the STACK dashboard row, post staleness fix):
+    four symmetric votes — live OR zone (price vs OR levels NOW: above OR-high = long, above OR-mid
+    = watch/lean long, mirror short), VWAP side, the COMBINED SLOPE ENGINE (close-slope + body-
+    midpoint slope + weighted body pressure, ATR-normalized — user research spec), and the 1m
+    swing-structure state. When opens+ATR are supplied the slope vote uses the combined S with the
+    ±0.10 neutral band and the dict carries the full engine + the 7-level `state`
+    (STRONG_UP…STRONG_DOWN). ALIGNMENT is the point: when zone+slope+struct agree, price is moving
+    that way. All inputs causal (last closed 1m bars)."""
+    c = np.asarray(closes_1m, float)
+    px = float(c[-1]) if len(c) else float("nan")
+    eng = None
+    if opens_1m is not None and atr is not None and np.isfinite(atr) and atr > 0 and len(c) >= 3:
+        eng = slope_engine(opens_1m, c, atr, n=slope_n)
+        S = eng["S"]
+        v_slope = 1 if S >= SLOPE_DIR else (-1 if S <= -SLOPE_DIR else 0)
+    else:
+        slope = norm_slope(c[-slope_n:]) if len(c) >= 3 else 0.0
+        v_slope = 1 if slope > 0 else (-1 if slope < 0 else 0)
+    v_zone = 0
+    if or_high is not None and or_low is not None and np.isfinite(px) \
+            and np.isfinite(or_high) and np.isfinite(or_low):
+        mid = (or_high + or_low) / 2.0
+        v_zone = 1 if px > or_high else (-1 if px < or_low else (1 if px > mid else -1))
+    v_vwap = 0
+    if vwap is not None and np.isfinite(vwap) and np.isfinite(px):
+        v_vwap = 1 if px > vwap else (-1 if px < vwap else 0)
+    v_st = {1: 1, 2: -1}.get(int(st_state_1m) if st_state_1m is not None else 0, 0)
+    score = v_zone + v_vwap + v_slope + v_st
+    read = "up" if score >= 2 else ("down" if score <= -2 else "mixed")
+    out = {"zone": v_zone, "vwap": v_vwap, "slope": v_slope, "struct_1m": v_st,
+           "score": score, "read": read,
+           "aligned": v_zone != 0 and v_zone == v_slope == v_st}   # OR+SLOPE+STRUC agree
+    if eng is not None:
+        out["slope_engine"] = eng
+        out["state"] = directional_state(eng["S"], eng["persistence"], eng["persist_dir"],
+                                         eng["efficiency"], st_state=st_state_1m, zone_vote=v_zone)
+    return out
+
+
 def signal_zone_state(side: str, price: float, or_high: float | None, or_low: float | None) -> str:
     """Stateless zone verdict for a LIVE proposal (dashboard/paper-autotrade): is this signal's
     direction still structurally valid at the CURRENT price?

@@ -54,6 +54,44 @@ full-stack control kills it (redundant with the wide-OR filter). See `memory/hig
 full ~36-method graveyard (momentum / EMA / regression slope / microprice / cross-asset lead-lag / VPIN / Renko /
 Donchian / EHMA / Markov-predict / XGBoost-LightGBM-NN-HMM — all redundant, curve-fit-inconsistent, or
 worse-than-follow). Conclusion: direction at tradeable resolution is FOLLOWABLE, not forecastable.
+=======
+## F65 (numbers pending) — DIR-fast component plan: OR → SLOPE → STRUC + the combined slope engine (user, 2026-07-02)
+
+USER OBSERVATION (screenshots, QQQ 5m vs 1m): when the three DIR-fast components AGREE —
+OR zone + SLOPE + STRUCTURE — price is moving in that direction; the 1m read is ON-SPOT while the
+higher-TF read lags (the velocity of the calculation scales with bar size). Attack order set by the
+user: **1) OR, 2) SLOPE, 3) STRUC.**
+
+* **1 OR — DONE (shipped, all 5 production Pine + BOT).** Works as specified: price above OR-mid =
+  WATCH (mirror short below); a strong FULL-BODY candle close beyond OR-high = automatic fill when
+  the other gated conditions align; confirmed close beyond the OPPOSITE edge / pre-entry stop tag =
+  INVALIDATED (orders cancelled, levels cleared) until the breakout edge is reclaimed. The DIR-fast
+  OR arrow now shows the LIVE zone, not the frozen 10:00 bias.
+* **2 SLOPE — ENGINE SHIPPED, GAUNTLET PENDING.** Combined slope per the user's research doc:
+  `S = 0.50·(closeSlope/ATR) + 0.30·(bodyMidSlope/ATR) + 0.20·bodyPressure` over N=12 candles —
+  regression over EVERY candle (not first/last), body midpoints catch open/close progression,
+  recency-weighted (newest ≈ 2×) body pressure kills the one-big-candle illusion; ATR
+  normalization = comparable across instruments/TFs (≈ ATRs advanced per bar). Bands (STARTING
+  values, must be tuned per TF): |S| ≥ 0.10 directional, ≥ 0.30 strong. 7-state classifier
+  (STRONG_UP…STRONG_DOWN) adds persistence ≥ 60/70 %, ER ≥ 40/60 %, and REQUIRES structure +
+  price-location agreement — slope alone must never call direction (doc §7). Computed EVERYWHERE:
+  `bot/strategy/orb_state.slope_engine()` + `directional_state()` (in every proposal's `dir_fast`,
+  with `aligned` = OR+SLOPE+STRUC agreement), and `f_slope_comb()` inside the 1-minute
+  request.security feed of all 5 production Pine (dashboard S value + arrow). Synthetic validation
+  green (the doc's own worked examples, mirror symmetry, scale invariance, zero-ATR/flat guards —
+  `BOT/tests/test_orb_state.py`). **Numbers: run `research/orb_slope_state.py NQ QQQ SPY` on the
+  data drive** — standalone gate sweep, additivity on the stack, alignment cohorts, latency.
+  Prior context: raw regression slope landed at plain-ORB (fast-direction study) — the OPEN
+  question is whether the COMBINED S (bodies + pressure) with per-TF thresholds does better, and
+  whether ALIGNMENT is a usable sizing/skip conditioner even if the gate is not.
+* **3 STRUC — 1m FEED SHIPPED, GAUNTLET PENDING.** The struggle is confirmation VELOCITY: lb=5
+  pivots confirm in lb×TF minutes (25+ on 5m, 5 on 1m) — the 1m chart is right first because the
+  same machine runs on smaller bars. Shipped: `fast_dir` (all gate scripts) computes st_state in
+  the 1-MINUTE context on any chart TF, each context keeping its own auto pivot lookback
+  (futures 3 / equity 5 = 3–5 minute confirms); BOT twin `families.fast_state_1m()` aligns the 1m
+  state causally onto the 5m engine frame. **Gauntlet: gate = st_state on 1m bars** vs the chart-TF
+  gate (behavior change vs the validated backtest until it passes; `fast_dir` OFF reverts).
+>>>>>>> 9834a6d98bf79391678a8f82b5f7eaa05ad2013d
 
 ## Finding 1 — Multi-timeframe confirmation HURTS the ORB (counterintuitive but consistent)
 Requiring N of {1h, 4h, Daily} to agree (EMA50>200 stack) with the breakout:

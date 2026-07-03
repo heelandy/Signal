@@ -150,3 +150,55 @@ Shorter EMAs / faster oscillators / kernel bands (F36/F37/F49), MTF agreement (F
 | 4. Two-tranche sizing ladder (B=early, add on A) | policy backtest + small bot/Pine change | bounded (both legs individually validated) | **30–60 min of acting time** |
 | 5. Order-flow EARLY_FAILURE wiring | medium (live feed) | none to entries | faster wrong-exit |
 | 6. Archive detector verdicts | rerun + notes | none | keeps the graveyard honest |
+
+---
+
+## 5. State-machine diagrams — implementation review (2026-07-02, follow-up)
+
+The two diagrams supplied (the OR-zone ladder and the WAITING/ARMING/WATCH/FILLED/INVALID/STOPPED/
+TP1_HIT/COMPLETED flow) are now fully implemented. Mapping of every edge to code + test:
+
+| Diagram edge | Pine (STACK + AUTO) | Python (`bot/strategy/orb_state.py`) | Test |
+|---|---|---|---|
+| WAITING → ARMING (breakout ✓) | `armL/arm_l` (gates + zone + not invalid) | `arm()` from WAITING | `test_pending_long_soft_cancel…` (re-arm leg) |
+| ARMING → WATCH (pullback < OR mid) | `l_below_mid` confirmed-close latch pulls the order (`strategy.cancel` in AUTO), STATE=WATCH | `on_bar` ARMED→WATCH + `pending_cancelled` | `test_pending_long_soft_cancel_below_or_mid_then_rearm_on_rebreak` |
+| WATCH → ARMING (re-breakout) | zone latch clears on a confirmed close back over the mid; fresh break still required | `arm(close=…)` refused under the mid, allowed over it | same test |
+| ARMING/WATCH → INVALID (confirmed close beyond opposite edge) | `l_invalid/s_invalid` latch, entry lines cleared, order cancelled | `on_bar` → INVALIDATED, levels cleared | `test_pending_long_invalidated_when_price_closes_below_or_low`, short mirror test |
+| ARMING → INVALID (stop tagged pre-entry) | `low <= Ls` / `high >= Ss` in the confirmed-bar block | `stop_tagged` branch | `test_pending_long_invalidated_when_proposed_stop_tagged_before_entry` |
+| INVALID → WAITING (reclaim of the breakout edge) | confirmed close back over OR high (long) / under OR low (short) clears the latch; new confirmation required | `on_bar` INVALIDATED→WAITING; `arm()` refused until then | `test_no_rearm_after_invalidation_until_or_high_reclaimed`, `test_short_invalidated…` |
+| ARMING → FILLED (order triggered) | `long_fire`/`strategy.entry` fill | `fill()` | lifecycle tests |
+| FILLED → STOPPED / TP1_HIT / COMPLETED | position-management block (unchanged, validated) | `on_bar` with stop-first same-bar priority | `test_filled_long_lifecycle_stop_first_on_same_bar`, `test_filled_long_tp1_then_tp2` |
+| STOPPED blocks immediate re-entry | `traded_*` latch + invalid rules | STOPPED terminal; `arm()` refused | lifecycle test |
+| Long/short exact mirror | one code path, comparisons flipped | single implementation, `sign` flips every comparison | `test_short_side_is_exact_mirror` (reflected price series) |
+
+All transitions run on **confirmed bars only** (`barstate.isconfirmed` in Pine; `on_bar` receives
+closed bars in Python) — no intrabar state flips, per the hysteresis requirement.
+
+## 6. 1-minute direction feed (structure + slope at 1m speed on every timeframe)
+
+Implemented per the user's requirement ("each timeframe must compute like the 1-minute chart did"):
+
+* **Pine (STACK + AUTO)** — new `fast_dir` input (default ON): the identical swing-structure machine
+  now also runs in the **1-minute context** via `request.security(…, "1", f_struct_1m(), lookahead_off)`.
+  The trend gate (`eff_up/eff_down`) and the DIR-fast Struct arrow read this 1m state on any chart
+  TF, so pivots confirm in `eff_lb` **minutes** (futures 3 / equity 5) instead of `eff_lb` chart
+  bars — the per-instrument automatic lookback is preserved *per context* ("each timeframe its own
+  pivot, automatic"). The slope read likewise comes from the 1m context (12×1m ≈ 12-minute window)
+  instead of 12 chart bars. **Stop anchors intentionally stay on chart-TF swings** — the validated
+  risk geometry is unchanged; only direction detection got faster.
+* **DIR-fast OR arrow fixed**: now the **live zone** (price vs OR high/mid/low right now), not the
+  frozen 10:00 day bias — the arrow the screenshot showed as ▲ with price under the OR low now
+  reads ▼. (The `ormid_bias` entry gate keeps the frozen day-bias — that is the gauntlet-validated
+  filter; only the awareness display changed.)
+* **Python** — `orb_state.fast_direction()` (zone/vwap/slope/1m-struct votes → up/down/mixed) and a
+  best-effort 1m fetch in `live.scan_watchlist` attach `dir_fast` to every proposal, mirroring the
+  Pine row for the bot dashboard.
+* **Proof of the latency claim** (regression test): the same rally-then-downtrend tape, same
+  machine, same lb — the 1m structure flips DOWN ≥10 wall-clock minutes before the 5m structure
+  (which in the test never flips at all before the tape ends), reproducing and closing the
+  screenshot's "5m says Bullish while price dumped" lag.
+
+⚠ Validation status: the 1m-fed **trend gate** is a live-behavior change vs the chart-TF backtest
+(the fast-direction study tested chart-TF lookbacks, not a 1m-sourced gate). It ships default-ON per
+the user's requirement with a revert toggle; run it through the standard gauntlet on the data drive
+(gate = 1m st_state in the engine — `struct_lb` on 1m bars) and forward-paper-verify before sizing.
