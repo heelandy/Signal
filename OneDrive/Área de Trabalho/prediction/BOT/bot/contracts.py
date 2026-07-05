@@ -65,6 +65,8 @@ class ReasonCode(str, Enum):
     MAX_OPEN_POSITIONS = "max_open_positions"
     MAX_TRADES_PER_DAY = "max_trades_per_day"
     CONSECUTIVE_LOSSES = "consecutive_losses"
+    WEEKLY_LOSS_LIMIT = "weekly_loss_limit"
+    CORRELATED_EXPOSURE = "correlated_exposure"
     SPREAD_TOO_WIDE = "spread_too_wide"
     DUPLICATE_CANDIDATE = "duplicate_candidate"
     KILL_SWITCH = "kill_switch"

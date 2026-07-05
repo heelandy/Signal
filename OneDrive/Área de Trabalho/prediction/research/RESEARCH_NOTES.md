@@ -4,7 +4,32 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
-## F67 (numbers pending) — PROBABLE liquidity-zone engine + bounce-vs-reversal machine (user research 2026-07-03)
+## F67 — PROBABLE liquidity-zone engine + bounce-vs-reversal machine (user research 2026-07-03)
+
+**NUMBERS IN (2026-07-03, steps 1+2 run): CLEAN-AIR = a VALIDATED CANDIDATE on NQ+QQQ.**
+Step 1 (`orb_liquidity_zones.py NQ ES`): scored MAJOR/STRONG zones beat random in-range levels decisively
+(NQ hit 6.3% vs 0.0%, ES 7.7% vs 0.0%; 4,087/4,092 days) — the zone engine marks real reaction levels.
+Step 2 (`orb_zones_additive.py`, additive on the CURRENT stack entry per the user protocol — zones as
+confluence, causal per-trade zone map at the entry minute):
+
+| sym | STACK base | clean-air ≥2 ATR | ≥3 ATR | DROPPED (zone-ahead) cohort |
+|---|---|---|---|---|
+| NQ  | +0.231 (CIlo +0.045) | **+0.287 (CIlo +0.097)** | **+0.303 (+0.105)** | **−0.124 / −0.185 = LOSERS** ✓ |
+| QQQ | +0.520 (CIlo +0.187) | **+0.668 (CIlo +0.304)** | +0.652 (+0.309) | n=12–18 too few (lift + CIlo jump consistent) |
+| ES  | +0.122 (base FAILS) | +0.049 ✗ | +0.064 ✗ | +0.662/+0.503 "winners" — but n=20–22, CIlo −0.14 (insignificant, S+1.97 outliers) |
+| GC  | −0.268 (base DEAD, F30 non-repro) | −0.242 | −0.222 | −0.355/−0.406 (dropped WORSE than kept = weakly consistent) |
+
+VERDICT: **GRADUATED + ADOPTED (BOT) 2026-07-03.** Clean-air (no MAJOR/STRONG zone within ~2–3 ATR ahead)
+lifts the flagships with the dropped cohort as real losers. GATES CLEARED: **2× slip** — base FAILS
+(NQ +0.168 CIlo −0.02) but the filter SURVIVES (≥2 ATR +0.230 PASS, ≥3 +0.246 PASS; WALL cohort −0.23/−0.28);
+**walk-forward thirds** — QQQ clean-air beats base in ALL 3 (+1.16/+0.12/+0.68), NQ 2-of-3 (−0.01 first third
+= wash where base +0.05, strong after); **plateau** k=2–3 ATR on NQ/QQQ. ES lone contradiction (insignificant
+n≈21 on a failing base); GC dead base; from-zone helps NOWHERE (origin irrelevant). ADOPTED as `bot/strategy/
+liquidity.clean_air_atr` + the live-scan WALL down-grade/skip (`clean_air` flag on NQ/QQQ/SPY; SPY by-twin,
+1m-data pending its own confirm). Pine CANNOT run the 1m zone engine → BOT-only; STACK shows the AIR verdict
+via the BOT (UI doc). NOT hard-wired into the engine backtest gate (discretion model — the BOT grades/skips).
+
+### original spec (pre-numbers)
 
 `orb_liquidity_zones.py` — RESEARCH SIDE ONLY per user instruction (no STACK/BOT propagation yet;
 **when it graduates, STACK + BOT are the PRIMARY propagation targets** — standing user rule). From
@@ -23,6 +48,73 @@ data drive** — zone hit-rate vs a RANDOM in-range level control (zones must be
 first), then the standard additivity gauntlet on the stack before any gating. Caution: the F65
 graveyard killed all DIRECTION detectors — zones predict LOCATION (where reactions happen), a
 different claim, but the same curve-fit discipline applies.
+
+## F71 — STRUCTURE-AS-GRADE adopted (structure OFF as a gate) + 1m-vs-5m struct latency (2026-07-03)
+`orb_struct_speed.py`. User directive (live screenshot: price ran past the OR but no entry — structure never
+aligned). LATENCY DATA confirms it hard: at bars where OR+VWAP+SLOPE all AGREE, the 5m HH/HL structure is
+aligned only **NQ 55% / QQQ 49%** of the time, and when it lags it takes a **MEDIAN 40-50 MIN (p75 200!)** to
+catch up — so a structure GATE MISSES clean breakouts. The **1m** structure is aligned **64-66%** and catches
+up in **1-2 MIN** (confirms fresh trends a median 15-20m earlier, leads 68% of trends). ADOPTED:
+**structure is now a GRADE + SIZE, not a gate** — entry fires on breakout + OR-mid bias + dir-seq (validated
++0.164R NQ / +0.259 QQQ / +0.368 SPY, all PASS "none" cohort); st_dir alignment drives the GRADE (A+ = aligned
++ wide OR) and GRADE_MULT size (unconfirmed B=0.4x, confirmed A/A+=full/1.5x = the scale-in). Propagated: STACK
+/AUTO/OPTIONS trend_mode default -> "Off — plain ORB"; BOT breakout family gate "trend" -> "none" (grade via
+struct_aligned). 1m st_dir feed KEPT (cuts the grade-upgrade lag to ~1-2 min). Tradeoff (honest): structure
+GATE was +0.29 NQ per-trade (F-fast-direction) vs +0.164 "none" — ~-0.10R/trade for CATCHING the breakouts the
+gate skipped; grade-weighted sizing recovers part (F66 ladder = equity win / NQ neutral / ES loss). 88/88 tests
+pass. Reverts by setting the trend gate back to Auto / family gate "trend".
+
+## F70 — SCALPING (1/2/3/4-min OR-break + lookback price-array) + structure-latency, on disk 1m data (2026-07-03)
+`orb_scalp.py` (resamples the on-disk *_continuous_1m.parquet to 1/2/3/4m) + `orb_struct_latency.py`. User
+scalping build: fast-TF OR-break gated by a lookback array (close > close[-N], N=3/5/10), entered AT the break
+(resting stop) or the NEXT candle (close+continuation), scalp exit (cap 1.0/1.5R, OR stop, ~30-min time-stop,
+EOD-flat, REAL costs). Baseline (no array) vs array-gated to isolate the array.
+
+**SCALP VERDICT: breakout-scalping on 1-4m = GRAVEYARD net of costs.**
+* NQ futures: DEAD at every TF/N/entry (−0.00 to −0.15R, CIlo all negative) — MNQ costs (0.52/order + 2-tick)
+  eat the tight cap. 1m worst, 4m least-bad (−0.026 base / −0.000 array-N3) but never clears 0.
+* QQQ (commission-free equity): near-breakeven; the array N=3 lifts every TF (base ~0.00 → +0.03-0.05) and the
+  ONLY cells with CIlo>0 are QQQ 3m N=3 (+0.043, CIlo +0.006) and QQQ 4m N=3 (+0.047, +0.011) — but a LONE-N
+  fitted point (N=5/10 fail, no plateau), tiny edge, equity-only → NOT a robust graduate.
+* The array HELPS a little (N=3 > baseline consistently) but can't manufacture edge where moves < costs.
+  NEXT-candle entry is WORSE than AT-break everywhere (catch it AT the break). medMFE ~0.4-0.7R = the median
+  scalp only runs ~0.5R before reversing → a 1.5R cap rarely fills; the moves are too small for the risk+cost.
+CONCLUSION: same wall as the direction graveyard — no free fast edge; scalping-by-breakout doesn't survive costs.
+
+**STRUCTURE LATENCY (answers "does a fresh trend take ~2 swings / 30-50m — will I be in it at the break?"):**
+At the OR BREAK, **~40-47% of breaks are ALREADY structure-aligned** (NQ 47% / QQQ 40% / SPY 40%) — the gate
+fires immediately, you ARE in the confirmed trend. Of the REST (unconfirmed breaks), structure confirms a median
+**~50m (NQ, 10 bars) to ~85m (QQQ/SPY, 16-17 bars)** later — those are exactly the breaks the structure gate
+FILTERS, and F-fast-direction showed that filtering ~doubles expectancy (they're the worse cohort). So the
+latency is NOT "you miss the trade" — the static OR break is instant; the gate just skips the ~half-to-60%
+unconfirmed breaks. (My earlier "~2 swings / 30-50m" was worst-case + the launch-swing distribution metric was
+contaminated — the %-aligned + bars-to-confirm above are the clean answer.) GATE STAYS chart-TF (~15-25m) per
+user; 1m = display-only (F69). Scalping graveyard closed; swing research is the next opened branch per user.
+
+## F69 — STRUC A/Bs + liquidity-zones step-1 + slope-gauntlet verdicts (2026-07-03, data drive)
+`orb_struc_ab.py` · `orb_liquidity_zones.py NQ ES` · `orb_slope_state.py NQ QQQ SPY`. Same validated
+stack config throughout (struct gate, delay0/chase1/struct-stop/cap4R/strong-body/ft/OR-mid/dir-seq/vol-exp).
+
+**A) Gap-aware CHoCH = FREE — adopt.** State differs on 7.6–8.7% of bars (the 41-bar staleness fix is real)
+but the backtest edge is unchanged: NQ +0.262/+0.271, QQQ +0.429/+0.465, SPY +0.382/+0.379 (new/old, all
+PASS both ways, CIlo within noise). Old validated numbers TRANSFER to the new structure machine.
+
+**B) 1m-FED trend gate = FAILS the gauntlet — keep the ENTRY gate on chart-TF st_state.** Gate on the 1m-fed
+state (causal last-1m-inside-5m, 100% coverage): NQ +0.218 (CIlo +0.081, recent-OOS collapses to +0.01) vs
+chart +0.262; QQQ +0.159 **CIlo −0.051 FAIL** vs chart +0.429 PASS; SPY +0.400 vs +0.382 (mixed: short side
++0.08, lopsided OOS). The faster 1m state takes ~50% MORE trades at materially lower quality — the extra
+trades are the weak early ones the 5m confirmation was correctly filtering. → `fast_dir` stays for
+DISPLAY/awareness speed (DIR-fast, dashboard, zone FSM), but the Pine trend GATE + BOT scan gate must stay
+on the chart-TF (5m) st_state; **flip the shipped fast_dir default OFF for the gate path** (or scope it to
+display only).
+
+**Liquidity zones step 1 = PASSES vs random (both futures).** NQ 4,087 days: scored-zone hit 6.3% vs random
+0.0%; ES 4,092 days: 7.7% vs 0.0% (hit = touch → react ≥0.5 ATR before pierce ≥0.5 ATR; fake ~0). Necessary
+not sufficient — step 2 = the additivity gauntlet on the stack before any gating/sizing use.
+
+**Slope (combined S) gauntlet = NOT a gate** (see F65): NQ no lift (full-stack CIlo drops), QQQ lone fitted
+point at S0.10, SPY plateau on struct-base that shrinks to marginal on the full stack — the SPY-only
+signature again. Stays display/awareness (DIR-fast row + 7-state classifier), not entry logic.
 
 ## F66 — SIZING LADDER policy: act on direction sooner via tranches (equity WIN / futures NEUTRAL) (2026-07-02)
 `orb_sizing_ladder.py`. NOT a new signal — a POLICY over two existing cohorts: **starter** = break+OR-mid+dir-seq
@@ -45,7 +137,16 @@ BINARY (wait) for futures. The 'act 30–60m sooner' benefit (starter fires at t
 NEXT (v2): model the exit-starter-on-opposite-structure cut — may rescue the futures case by cutting the bad
 unconfirmed trades early. Plumbing (grades / GRADE_MULT / struct_aligned) already exists — one policy toggle.
 
-## F67 — Direction-detector GRAVEYARD: the full specced suite is DEAD (2026-07-02)
+**v2 RESULT (2026-07-03, `orb_ladder_v2.py`): the CUT is REJECTED everywhere** — cutting the starter at the
+opposite-structure-confirm bar LOSES vs riding it on all 4 (NQ v1 +78.9→v2 +69.7R, QQQ +79.7→+69.1,
+SPY +100.3→+91.2, ES +45.5→+37.1; per-cut delta −0.14 to −0.40R). Even starters that LATER see opposite
+structure still average POSITIVE ridden to the normal exit (NQ +0.170 / QQQ +0.446 / SPY +0.256 / ES +0.130)
+— by the time the opposite confirms, the pullback already happened; the cut sells the dip. Matches every
+exit-protection test (BE/trail/scale all hurt): struct stop + 4R cap is already the right exit. FINAL POLICY =
+v1: LADDER 0.4/0.6 for EQUITIES, BINARY (wait) for futures, NO cut. (Baselines shifted slightly vs the v1
+table — gap-aware CHoCH changed st3 on ~8% of bars — internally consistent within the run.)
+
+## F68 — Direction-detector GRAVEYARD: the full specced suite is DEAD (2026-07-02)
 `orb_dir_state.py` · `orb_dirstate2.py` · `orb_efficiency.py` (+ `orb_fast_direction` / `orb_lead_lag` /
 `orb_predict` / `orb_flow_channels`). Every detector tested BOTH as a standalone direction gate AND as
 additive-confluence on the FULL stack (struct3 + OR-mid + dir-seq + vol-exp 2.4), with the dropped-cohort

@@ -1,34 +1,40 @@
-"""ORB zone state machine + direction math (staleness fix 2026-07).
+"""ORB entry state machine + direction math — the CANONICAL ENTRY STANDARD (2026-07-04).
 
-Fixes the state-staleness bug: a pending LONG stayed "ARMED" while price had already broken the
-opposite OR edge / tagged its own stop. This module is the Python twin of the Pine state machine
-(HIGHSTRIKE_ORB_STACK / _AUTO): a finite state machine per side —
+One state machine, three surfaces: this module is the Python reference implementation; the Pine
+scripts (HIGHSTRIKE_ORB_STACK / _AUTO / _OPTIONS) and the engine (`hs_backtest._orb_signals`) carry
+the same semantics. The strategy docs (Trading System Logic / README_trading_state_logic) define
+three layers:
 
-    WAITING -> WATCH -> ARMED -> FILLED -> TP1_HIT -> COMPLETED
-        |        |        |         `-> STOPPED
-        |        |        `-> WATCH  (soft: confirmed close on the wrong side of OR mid — pull the order)
-        |        `-> WAITING         (mid bias lost on a confirmed close — the mirror side promotes)
-        `-> INVALIDATED              (hard: confirmed close beyond the OPPOSITE OR edge, or the side's
-                                      proposed stop tagged before entry — cancel + clear levels)
-    WAITING -> WATCH (promotion, user spec 2026-07-03): price must PASS the OR mid with clear
-    direction before a side can arm — a confirmed close beyond the mid toward the side (with a
-    directional body when the bar's open is supplied) puts that side on WATCH, the visible stage
-    between WAITING and ARMED. Arming additionally requires the confirmed breakout close.
-    INVALIDATED -> WAITING only when price RECLAIMS the side's breakout edge on a confirmed close;
-    a completely new confirmation is then required to re-arm (hysteresis — no flip-flop).
+    Layer 1 — MARKET CONTEXT (hard):  Structure + VWAP aligned  ->  the side is ARMED.
+    Layer 2 — TRADE QUALITY (grade):  the combined slope engine grades A+..D — never direction.
+    Layer 3 — EXECUTION (OR levels):  OR mid activates WATCH; OR high/low triggers the FILL.
 
-LONG and SHORT are exact mirrors: one implementation, `sign` (+1 long / -1 short) flips every
-comparison. All transitions use confirmed-bar values only (no future data, no negative offsets).
+Per-side finite state machine (long/short exact mirrors, `sign` flips every comparison):
 
-Also implements the direction-math primitives from the spec (all causal, all symmetric):
-    delta_p, net_move, path_distance, efficiency_ratio (Kaufman ER, div-by-zero safe),
-    directional_persistence (noise-thresholded), norm_slope (regression slope / mean price).
+    WAITING ──ctx aligned──> ARMED ──confirmed close beyond OR mid──> WATCH ──body close beyond
+       ^                       |                                        |      OR high/low──> FILLED
+       |                       `──ctx lost──> WAITING                   |
+       |                                                                ├─ close back across mid ─> COOLDOWN (N bars) ─> restart
+       |                                                                ├─ extended > chase·ATR ──> PULLBACK ─ retest near edge ─> WATCH
+       |                                                                └─ > stale bars, no fill ─> RANGE (until mid lost)
+       └──────────── INVALIDATED (close beyond OPPOSITE edge / stop tagged pre-entry) — reclaim the
+                     entry edge on a confirmed close to return to WAITING (hysteresis, no flip-flop)
 
-    from bot.strategy.orb_state import OrbSideState, SideState, zone_of, Zone
+    FILLED -> TP1_HIT -> COMPLETED | STOPPED;  reset_cycle() -> COOLDOWN (fresh cycle) or LOCKED
+    when the side has used its max entries for the session (two-entry limit).
+
+All transitions use CONFIRMED bar values only (no future data, no intrabar flips). The fill itself
+additionally requires the validated stack: strong full-body close beyond the level (no wick-only),
+optional next-candle continuation (F59c) + direction sequence (F61) — enforced by the engine/Pine.
+
+Also implements the direction-math primitives (delta_p, net_move, path_distance, efficiency_ratio,
+directional_persistence, norm_slope), the combined slope engine (S = 0.50·Sc/ATR + 0.30·Sm/ATR +
+0.20·BP) and the Layer-2 `slope_grade` (A+..D).
+
+    from bot.strategy.orb_state import OrbSideState, SideState, ENTRY_STANDARD
     sm = OrbSideState(side="long", or_high=730.0, or_low=723.9)
-    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, close=730.5)
-    sm.on_bar(high=731, low=718.9, close=719.0)     # confirmed close < OR low -> INVALIDATED
-    sm.pending_cancelled                             # True -> caller cancels the broker order
+    sm.on_bar(high=728.0, low=725.0, close=727.5, open_px=725.4, struct_state=1, vwap=725.0)
+    sm.state                                        # ARMED -> WATCH once the mid is crossed
 """
 from __future__ import annotations
 
@@ -116,28 +122,65 @@ def zone_of(price: float, or_high: float, or_low: float) -> Zone:
 
 
 class SideState(str, Enum):
-    WAITING = "waiting"          # no pending setup; needs a fresh breakout confirmation
-    WATCH = "watch"              # pending pulled (wrong side of OR mid); needs a new confirmation
-    ARMED = "armed"              # confirmed breakout; entry order pending
+    WAITING = "waiting"          # Layer-1 context not aligned — the side may not look for a setup
+    ARMED = "armed"              # Structure + VWAP aligned toward the side (Layer 1 — Market Context)
+    WATCH = "watch"              # armed + confirmed close beyond OR mid toward the side (Layer 3)
+    PULLBACK = "pullback"        # over-extended past the entry edge pre-fill — wait for the retest
+    RANGE = "range"              # stale: sat in WATCH too long without a fill — stand down this cycle
+    COOLDOWN = "cooldown"        # watch cancelled at OR mid — no re-watch for cooldown_bars
     FILLED = "filled"            # position open
     TP1_HIT = "tp1_hit"          # partial banked; runner working
     COMPLETED = "completed"      # final target hit / position closed
-    STOPPED = "stopped"          # stop hit; block immediate re-entry
-    INVALIDATED = "invalidated"  # structure broke against the pending side; cleared + blocked
+    STOPPED = "stopped"          # stop hit
+    INVALIDATED = "invalidated"  # hard: close beyond the OPPOSITE edge / stop tagged pre-entry
+    LOCKED = "locked"            # max entries used on this side — locked for the session
 
 
-_PENDING = (SideState.WAITING, SideState.WATCH, SideState.ARMED)
+_PENDING = (SideState.WAITING, SideState.ARMED, SideState.WATCH,
+            SideState.PULLBACK, SideState.RANGE, SideState.COOLDOWN)
 _TERMINAL_TRADE = (SideState.COMPLETED, SideState.STOPPED)
+_FILL_READY = (SideState.WATCH,)          # the only state a fill may trigger from (canonical spec)
+
+
+@dataclass(frozen=True)
+class EntryStandard:
+    """The shared entry-standard knobs — ONE set of numbers for Pine + engine + BOT.
+    Defaults mirror the Pine inputs / engine params; change here and re-sync the Pine inputs."""
+    ctx_gate: bool = True        # Layer 1: Structure + VWAP must align to ARM the side
+    watch_gate: bool = True      # Layer 3: a confirmed close beyond OR mid is required (WATCH)
+    cooldown_bars: int = 3       # bars blocked after a watch cancel (close back across the mid)
+    stale_bars: int = 24         # max bars in WATCH without a fill -> RANGE (0 = off; 24 = 2h on 5m)
+    chase_atr: float = 1.0       # extension beyond the edge that flips WATCH -> PULLBACK (0 = off)
+    retest_atr: float = 0.5      # pullback satisfied when price returns within this ATR of the target
+    max_entries: int = 2         # two-entry limit per side per session (futures override to 3)
+    strong_body: float = 0.25    # fill: min body/range of the breakout candle (no wick-only fills)
+    ft_confirm: bool = True      # fill: next-candle continuation (F59c)
+    dir_seq: bool = True         # fill: direction sequence c>c1>c2 / mirror (F61)
+    # ── PULLBACK REFINEMENTS (deep-research doc, un-deferred 2026-07-05 — gauntlet before trust) ──
+    retest_mode: str = "edge"    # retest target: "edge" (OR high/low) | "impulse_mid" (midpoint of
+                                 # the extension impulse — catches profit-taking without a full
+                                 # boundary revisit) | "vwap" (session-VWAP retest)
+    min_pullback_atr: float = 0.05   # the retrace from the extension extreme must be AT LEAST this
+                                     # (anti-spike: don't buy an unrelieved vertical; 0 = off)
+    pullback_timeout: int = 8    # bars a PULLBACK may wait for its retest before the setup is
+                                 # stale for this cycle (docs: 3-8 bars; 0 = wait forever)
+    vol_confirm_x: float = 0.0   # fill trigger bar needs volume >= this x 20-bar average
+                                 # (docs suggest 1.2-2.0; DEFAULT OFF until gauntleted)
+
+
+ENTRY_STANDARD = EntryStandard()
 
 
 @dataclass
 class OrbSideState:
-    """One side (long or short) of the ORB day. Feed confirmed bars via on_bar(); call arm()/fill()
-    on the engine's confirmation events. `pending_cancelled` flags that a resting order must be
-    cancelled by the caller (Pine: strategy.cancel; Python: broker.cancel(order_id))."""
+    """One side (long or short) of the ORB day — the canonical three-layer entry state machine.
+    Feed CONFIRMED bars via on_bar(); attach the trade plan via arm(); call fill() on the engine's
+    fill event and reset_cycle() after a terminal trade state. `pending_cancelled` flags that a
+    resting order must be cancelled by the caller (Pine: strategy.cancel; Python: broker.cancel)."""
     side: str                              # "long" | "short"
     or_high: float
     or_low: float
+    cfg: EntryStandard = ENTRY_STANDARD
     state: SideState = SideState.WAITING
     entry: float | None = None
     stop: float | None = None
@@ -145,6 +188,11 @@ class OrbSideState:
     tp2: float | None = None
     pending_order_id: str | None = None
     pending_cancelled: bool = False
+    entries_used: int = 0                  # two-entry limit counter (per session)
+    watch_age: int = 0                     # bars spent in WATCH this cycle (range/stale rule)
+    cooldown_left: int = 0
+    ext_extreme: float | None = None       # furthest price of the extension impulse (PULLBACK)
+    pullback_age: int = 0                  # bars spent waiting for the retest (timeout rule)
     history: list[SideState] = field(default_factory=list)
 
     def __post_init__(self):
@@ -170,6 +218,10 @@ class OrbSideState:
     def opposite_edge(self) -> float:       # confirmed close beyond this = hard invalidation
         return self.or_low if self.sign == 1 else self.or_high
 
+    @property
+    def locked(self) -> bool:
+        return self.entries_used >= self.cfg.max_entries
+
     def _beyond(self, a: float, b: float) -> bool:
         """a is beyond b in the trade direction."""
         return self.sign * (a - b) > 0
@@ -186,34 +238,64 @@ class OrbSideState:
             self.pending_cancelled = True
             self.pending_order_id = None
 
+    def _ctx_ok(self, close: float, struct_state: int | None, vwap: float | None) -> bool:
+        """Layer 1 — Market Context: Structure AND VWAP aligned toward the side. Inputs not
+        supplied count as aligned (caller doesn't track them); ctx_gate off = always aligned."""
+        if not self.cfg.ctx_gate:
+            return True
+        ok = True
+        if struct_state is not None and struct_state != 0:
+            ok &= (struct_state == 1 and self.sign == 1) or (struct_state == 2 and self.sign == -1)
+        if vwap is not None and np.isfinite(vwap):
+            ok &= self._beyond(close, vwap)
+        return bool(ok)
+
     # ---- events from the signal engine ----
     def arm(self, entry: float, stop: float, tp1: float | None = None, tp2: float | None = None,
             close: float | None = None, order_id: str | None = None) -> SideState:
-        """A NEW confirmed breakout arms the side. Refused while INVALIDATED/STOPPED (hysteresis:
-        those clear only via on_bar reclaim) and refused from WATCH unless price is back on the
-        right side of OR mid (a re-breakout)."""
-        if self.state in (SideState.INVALIDATED, SideState.STOPPED):
+        """Attach the trade PLAN (levels + optional resting order). Only a side that has passed
+        the mid (WATCH) — or whose supplied close is beyond the mid — may carry a pending entry.
+        Refused while INVALIDATED / COOLDOWN / RANGE / LOCKED / terminal (hysteresis)."""
+        if self.state not in (SideState.WAITING, SideState.ARMED, SideState.WATCH):
             return self.state
-        if self.state not in _PENDING:
-            return self.state
-        if close is not None and not self._beyond(close, self.or_mid):
-            return self.state                      # still on the wrong side of the mid — no re-arm
+        if self.state is not SideState.WATCH:
+            if close is None or not self._beyond(close, self.or_mid):
+                return self.state                  # not past the mid — no pending entry yet
         if not self._beyond(entry, stop):
             raise ValueError(f"{self.side} stop {stop} must be beyond entry {entry} against the trade")
         self.entry, self.stop, self.tp1, self.tp2 = entry, stop, tp1, tp2
         self.pending_order_id = order_id
         self.pending_cancelled = False
-        return self._set(SideState.ARMED)
+        if self.state is not SideState.WATCH:
+            self.watch_age = 0
+        return self._set(SideState.WATCH)
 
     def fill(self) -> SideState:
-        if self.state is SideState.ARMED:
+        """Fill fires only from WATCH (canonical Layer 3) with a plan attached."""
+        if self.state in _FILL_READY and self.entry is not None:
             self.pending_order_id = None
+            self.entries_used += 1
             return self._set(SideState.FILLED)
         return self.state
 
+    def reset_cycle(self) -> SideState:
+        """Start a new entry cycle after a terminal trade state. LOCKED once the side has used
+        its max entries for the session (two-entry limit); otherwise COOLDOWN -> fresh cycle."""
+        if self.state not in _TERMINAL_TRADE:
+            return self.state
+        if self.locked:
+            return self._set(SideState.LOCKED)
+        self.entry = self.stop = self.tp1 = self.tp2 = None
+        self.watch_age = 0
+        if self.cfg.cooldown_bars > 0:
+            self.cooldown_left = self.cfg.cooldown_bars
+            return self._set(SideState.COOLDOWN)
+        return self._set(SideState.WAITING)
+
     # ---- one CONFIRMED bar (never intrabar values) ----
-    def on_bar(self, high: float, low: float, close: float,
-               open_px: float | None = None) -> SideState:
+    def on_bar(self, high: float, low: float, close: float, open_px: float | None = None,
+               struct_state: int | None = None, vwap: float | None = None,
+               atr: float | None = None) -> SideState:
         s, sign = self.state, self.sign
         adverse_extreme = low if sign == 1 else high     # how far the bar went AGAINST the side
         favor_extreme = high if sign == 1 else low       # how far it went WITH the side
@@ -225,20 +307,73 @@ class OrbSideState:
             if self._beyond(self.opposite_edge, close) or stop_tagged:
                 self._clear_pending()
                 return self._set(SideState.INVALIDATED)
-            # SOFT cancel: pending entry and the bar closed on the wrong side of OR mid -> WATCH
-            if s is SideState.ARMED and self._beyond(self.or_mid, close):
+
+            ctx = self._ctx_ok(close, struct_state, vwap)
+            past_mid = (not self.cfg.watch_gate) or self._beyond(close, self.or_mid)
+            body_ok = open_px is None or sign * (close - open_px) > 0
+
+            if s is SideState.COOLDOWN:
+                self.cooldown_left -= 1
+                if self.cooldown_left > 0:
+                    return s
+                # cooldown over — restart from context; a NEW clean close beyond the mid is
+                # required on a LATER bar before the side can WATCH again (no instant re-watch)
+                return self._set(SideState.ARMED if ctx else SideState.WAITING)
+
+            if s is SideState.WAITING:
+                if not ctx:
+                    return s
+                s = self._set(SideState.ARMED)   # context aligned -> ARMED (may WATCH same bar)
+
+            if s is SideState.ARMED:
+                if not ctx:
+                    return self._set(SideState.WAITING)
+                if self._beyond(close, self.or_mid) and body_ok:
+                    self.watch_age = 0
+                    return self._set(SideState.WATCH)
+                return s
+
+            # WATCH / PULLBACK / RANGE all die the same way: a confirmed close back across the
+            # mid cancels the setup -> COOLDOWN; ARMED context must then re-prove itself.
+            if not self._beyond(close, self.or_mid):
                 self._clear_pending()
-                return self._set(SideState.WATCH)
-            # WATCH promotion (user spec 2026-07-03): price must PASS the OR mid with clear
-            # direction before the side can arm — confirmed close beyond the mid toward this side
-            # (directional body when open_px is given) = the visible stage between WAITING/ARMED.
-            if s is SideState.WAITING and self._beyond(close, self.or_mid) and \
-                    (open_px is None or sign * (close - open_px) > 0):
-                return self._set(SideState.WATCH)
-            # WATCH tracks the LIVE mid bias: a confirmed close back on the wrong side drops the
-            # side to WAITING (the mirror side promotes on the same bar — exact symmetry).
-            if s is SideState.WATCH and self._beyond(self.or_mid, close):
-                return self._set(SideState.WAITING)
+                if self.cfg.cooldown_bars > 0:
+                    self.cooldown_left = self.cfg.cooldown_bars
+                    return self._set(SideState.COOLDOWN)
+                return self._set(SideState.ARMED if ctx else SideState.WAITING)
+
+            if s is SideState.RANGE:
+                return s                          # stale — stands down until the mid is lost
+
+            if s is SideState.PULLBACK:
+                # track the extension impulse + age (deep-research refinements 2026-07-05)
+                if self.ext_extreme is None or self._beyond(favor_extreme, self.ext_extreme):
+                    self.ext_extreme = favor_extreme
+                self.pullback_age += 1
+                if self.cfg.pullback_timeout > 0 and self.pullback_age > self.cfg.pullback_timeout:
+                    return self._set(SideState.RANGE)     # retest never came — stale this cycle
+                if atr is not None and atr > 0:
+                    target = self.entry_edge                          # "edge" (default)
+                    if self.cfg.retest_mode == "impulse_mid" and self.ext_extreme is not None:
+                        target = (self.entry_edge + self.ext_extreme) / 2.0
+                    elif self.cfg.retest_mode == "vwap" and vwap is not None and np.isfinite(vwap):
+                        target = vwap
+                    deep_enough = (self.cfg.min_pullback_atr <= 0 or self.ext_extreme is None or
+                                   sign * (self.ext_extreme - adverse_extreme)
+                                   >= self.cfg.min_pullback_atr * atr)
+                    if deep_enough and sign * (adverse_extreme - target) <= self.cfg.retest_atr * atr:
+                        return self._set(SideState.WATCH)  # valid retest -> clean re-check
+                return s
+
+            # s is WATCH
+            self.watch_age += 1
+            if self.cfg.stale_bars > 0 and self.watch_age > self.cfg.stale_bars:
+                return self._set(SideState.RANGE)
+            if atr is not None and atr > 0 and self.cfg.chase_atr > 0 and \
+                    self._beyond(favor_extreme, self.entry_edge + sign * self.cfg.chase_atr * atr):
+                self.ext_extreme = favor_extreme
+                self.pullback_age = 0
+                return self._set(SideState.PULLBACK)      # too extended — do not chase
             return s
 
         if s is SideState.INVALIDATED:
@@ -257,7 +392,7 @@ class OrbSideState:
                 return self._set(SideState.TP1_HIT)
             return s
 
-        return s     # STOPPED / COMPLETED are terminal for the setup (block immediate re-entry)
+        return s     # STOPPED / COMPLETED / LOCKED are terminal (reset_cycle() starts the next one)
 
 
 # ─────────────────────────── combined slope engine (user research spec 2026-07) ───────────────────────────
@@ -335,6 +470,37 @@ def directional_state(S: float, persistence: float, persist_dir: int, efficiency
     return "NEUTRAL"
 
 
+GRADES = ("A+", "A", "B+", "B", "C", "D")
+
+
+def slope_grade(S: float, persistence: float, efficiency: float, side: str | None = None) -> str:
+    """Layer 2 — TRADE QUALITY grade from the combined slope engine (docs: slope grades the setup,
+    it never decides direction). Graded along the trade direction when `side` is given — a slope
+    that actively disagrees with the trade demotes to C/D; without a side, graded on |S|.
+    A+ = strong slope with strong persistence+efficiency … D = flat/contrary. Stored as an ML
+    feature (docs: 'the slope grade will also be used as an input for the ML/NN models')."""
+    if side is not None:
+        a = S if side == "long" else -S
+        if a < 0:
+            return "D" if a <= -SLOPE_DIR else "C"        # slope pushing against the trade
+        a = abs(a)
+    else:
+        a = abs(S)
+    strong_conf = persistence >= PERSIST_STRONG and efficiency >= ER_STRONG
+    dir_conf = persistence >= PERSIST_DIR and efficiency >= ER_DIR
+    if a >= SLOPE_STRONG and strong_conf:
+        return "A+"
+    if a >= SLOPE_STRONG or (a >= SLOPE_DIR and strong_conf):
+        return "A"
+    if a >= SLOPE_DIR and dir_conf:
+        return "B+"
+    if a >= SLOPE_DIR:
+        return "B"
+    if a >= 0.05:
+        return "C"
+    return "D"
+
+
 def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None = None,
                    vwap: float | None = None, st_state_1m: int | None = None,
                    slope_n: int = 12, opens_1m=None, atr: float | None = None) -> dict:
@@ -344,8 +510,8 @@ def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None
     midpoint slope + weighted body pressure, ATR-normalized — user research spec), and the 1m
     swing-structure state. When opens+ATR are supplied the slope vote uses the combined S with the
     ±0.10 neutral band and the dict carries the full engine + the 7-level `state`
-    (STRONG_UP…STRONG_DOWN). ALIGNMENT is the point: when zone+slope+struct agree, price is moving
-    that way. All inputs causal (last closed 1m bars)."""
+    (STRONG_UP…STRONG_DOWN) + the Layer-2 `grade` (A+..D). ALIGNMENT is the point: when
+    zone+slope+struct agree, price is moving that way. All inputs causal (last closed 1m bars)."""
     c = np.asarray(closes_1m, float)
     px = float(c[-1]) if len(c) else float("nan")
     eng = None
@@ -367,13 +533,23 @@ def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None
     v_st = {1: 1, 2: -1}.get(int(st_state_1m) if st_state_1m is not None else 0, 0)
     score = v_zone + v_vwap + v_slope + v_st
     read = "up" if score >= 2 else ("down" if score <= -2 else "mixed")
+    # DIR-FAST A (user 2026-07-05): the ARMING pair read = OR-MID side + VWAP side only.
+    # The composite below stays as the fallback B read; slope/struct grade, they don't arm.
+    v_mid = 0
+    if or_high is not None and or_low is not None and np.isfinite(px) \
+            and np.isfinite(or_high) and np.isfinite(or_low):
+        v_mid = 1 if px > (or_high + or_low) / 2.0 else -1
+    a_score = v_mid + v_vwap
     out = {"zone": v_zone, "vwap": v_vwap, "slope": v_slope, "struct_1m": v_st,
            "score": score, "read": read,
+           "dir_a": {"mid": v_mid, "vwap": v_vwap,
+                     "read": "up" if a_score >= 2 else ("down" if a_score <= -2 else "mixed")},
            "aligned": v_zone != 0 and v_zone == v_slope == v_st}   # OR+SLOPE+STRUC agree
     if eng is not None:
         out["slope_engine"] = eng
         out["state"] = directional_state(eng["S"], eng["persistence"], eng["persist_dir"],
                                          eng["efficiency"], st_state=st_state_1m, zone_vote=v_zone)
+        out["grade"] = slope_grade(eng["S"], eng["persistence"], eng["efficiency"])
     return out
 
 
@@ -396,27 +572,39 @@ def signal_zone_state(side: str, price: float, or_high: float | None, or_low: fl
     return "active"
 
 
-if __name__ == "__main__":   # self-test: the spec's long-side table + the short mirror + math
-    sm = OrbSideState("long", or_high=730.0, or_low=723.9)
-    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, close=730.5, order_id="o1")
+if __name__ == "__main__":   # self-test: the canonical long-side flow + the short mirror + math
+    cfg = EntryStandard(cooldown_bars=2, stale_bars=6, chase_atr=1.0, retest_atr=0.5)
+    sm = OrbSideState("long", or_high=730.0, or_low=723.9, cfg=cfg)
+    sm.on_bar(high=726.0, low=724.0, close=725.5, struct_state=1, vwap=724.0)     # ctx ok, below mid
     assert sm.state is SideState.ARMED
-    sm.on_bar(high=730.5, low=727.0, close=726.5)        # closed below OR mid (726.95) -> WATCH
-    assert sm.state is SideState.WATCH and sm.pending_cancelled
-    sm.on_bar(high=727.0, low=718.9, close=719.0)        # confirmed close < OR low -> INVALIDATED
-    assert sm.state is SideState.INVALIDATED
-    assert sm.arm(entry=730.01, stop=726.76, close=731.0) is SideState.INVALIDATED   # re-arm refused
-    sm.on_bar(high=731.2, low=729.0, close=730.6)        # reclaim OR high -> WAITING
-    assert sm.state is SideState.WAITING
-    sm.arm(entry=730.01, stop=728.0, tp1=733.0, tp2=738.0, close=730.6)              # fresh confirm
+    sm.on_bar(high=728.0, low=725.0, close=727.5, open_px=725.4, struct_state=1, vwap=724.5)
+    assert sm.state is SideState.WATCH                                            # mid crossed
+    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, order_id="o1")
+    sm.on_bar(high=729.0, low=727.2, close=726.5, struct_state=1, vwap=724.5)     # back under mid
+    assert sm.state is SideState.COOLDOWN and sm.pending_cancelled
+    sm.on_bar(high=728.0, low=726.0, close=727.6, struct_state=1, vwap=724.5)     # cd 1
+    sm.on_bar(high=728.0, low=726.0, close=727.6, struct_state=1, vwap=724.5)     # cd over -> ARMED
     assert sm.state is SideState.ARMED
-    sm.fill(); sm.on_bar(high=733.5, low=730.0, close=733.2)
+    sm.on_bar(high=728.2, low=726.8, close=728.0, open_px=727.0, struct_state=1, vwap=724.5)
+    assert sm.state is SideState.WATCH
+    sm.on_bar(high=732.5, low=730.5, close=732.0, open_px=730.6, struct_state=1, vwap=725.0,
+              atr=1.0)                                                            # ran 2.5 pts past edge
+    assert sm.state is SideState.PULLBACK                                         # don't chase
+    sm.on_bar(high=731.0, low=730.2, close=730.8, struct_state=1, vwap=725.0, atr=1.0)
+    assert sm.state is SideState.WATCH                                            # retest near edge
+    sm.arm(entry=730.01, stop=728.0, tp1=733.0, tp2=738.0)
+    sm.fill()
+    assert sm.state is SideState.FILLED and sm.entries_used == 1
+    sm.on_bar(high=733.5, low=730.0, close=733.2)
     assert sm.state is SideState.TP1_HIT
     sm.on_bar(high=738.4, low=732.0, close=738.0)
     assert sm.state is SideState.COMPLETED
-    # mirror check: identical path, negated
-    ss = OrbSideState("short", or_high=730.0, or_low=723.9)
-    ss.arm(entry=723.89, stop=727.15, close=723.0)
-    ss.on_bar(high=731.0, low=722.0, close=730.8)        # confirmed close > OR high -> INVALIDATED
+    assert sm.reset_cycle() is SideState.COOLDOWN                                 # entry 2 available
+    # mirror check: short hard-invalidates on a confirmed close above OR high
+    ss = OrbSideState("short", or_high=730.0, or_low=723.9, cfg=cfg)
+    ss.on_bar(high=728.5, low=727.0, close=727.5, struct_state=2, vwap=728.0)     # above mid: ARMED only
+    assert ss.state is SideState.ARMED
+    ss.on_bar(high=731.0, low=725.0, close=730.8, struct_state=2, vwap=726.5)
     assert ss.state is SideState.INVALIDATED
     # math
     up = [1, 2, 3, 4, 5]
@@ -424,4 +612,5 @@ if __name__ == "__main__":   # self-test: the spec's long-side table + the short
     assert efficiency_ratio([5, 5, 5, 5]) == 0.0                     # zero path -> no crash
     assert directional_persistence([1, 2, 1, 2, 1])[0] == 0          # alternating -> neutral
     assert abs(norm_slope(up) - norm_slope([x * 100 for x in up])) < 1e-12   # scale-invariant
-    print("orb_state OK — mirrored FSM + spec math verified")
+    assert slope_grade(0.35, 0.8, 0.7) == "A+" and slope_grade(-0.2, 0.7, 0.5, side="long") == "D"
+    print("orb_state OK - canonical ARMED->WATCH->FILL FSM + pullback/cooldown/range + spec math verified")

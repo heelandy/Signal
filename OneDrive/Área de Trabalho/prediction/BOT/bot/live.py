@@ -57,6 +57,31 @@ def _dir_fast(ctx, or_high, or_low):
         return None
 
 
+_KELLY_B: dict = {}          # symbol -> payoff b from the backtest matrix (cached once per process)
+
+
+def _kelly_advice(sym: str, p_win) -> dict | None:
+    """Quarter-Kelly advisory from calibrated P(win) + the symbol's realized win/loss profile."""
+    if not isinstance(p_win, float):
+        return None
+    if sym not in _KELLY_B:
+        b = 2.2                                       # 4R-cap profile fallback (mixed exits)
+        try:
+            import json as _json
+            from bot.ml.registry import REPORTS_DIR
+            m = _json.loads((REPORTS_DIR / "backtest_matrix.json").read_text(encoding="utf-8"))
+            o = m["symbols"][sym]["overall"]          # derive b from win% + avg R:  avg = p*w - (1-p)*l
+            p_hist, avg = o["win_pct"] / 100.0, o["avg_r"]
+            l = 1.0                                   # full-stop loss ~= 1R in this system
+            w = (avg + (1 - p_hist) * l) / max(p_hist, 1e-9)
+            b = max(w / l, 0.1)
+        except Exception:
+            pass
+        _KELLY_B[sym] = round(b, 2)
+    from bot.risk import kelly_fraction
+    return kelly_fraction(p_win, _KELLY_B[sym], 1.0)
+
+
 def source_health(bars, max_bar_age_min: float = MAX_BAR_AGE_MIN,
                   now: pd.Timestamp | None = None) -> tuple[bool, float]:
     """Fail-closed feed check for one symbol's bar frame: market-truth issues + last-bar age.
@@ -122,6 +147,21 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                            float(d1["atr14"].iloc[-1]) if "atr14" in d1 else None)
         except Exception:
             _df_ctx, b1 = None, None
+        # F67 CLEAN-AIR: today's RTH 1m bars (causal "up to now") for the liquidity-zone map
+        _b1_today = None
+        try:
+            if b1 is not None and len(b1) >= 40 and a.clean_air:
+                _et = pd.to_datetime(b1["ts_et"] if "ts_et" in b1 else b1["ts"])
+                if _et.dt.tz is None:
+                    _et = _et.dt.tz_localize("UTC")
+                _et = _et.dt.tz_convert("America/New_York")
+                _mm = _et.dt.hour * 60 + _et.dt.minute
+                _tod = _et.dt.date == pd.Timestamp.now(tz="America/New_York").date()
+                _b1_today = b1[_tod & (_mm >= 570) & (_mm < 960)]
+                if len(_b1_today) < 40:
+                    _b1_today = b1[(_mm >= 570) & (_mm < 960)]      # fallback: last available RTH session
+        except Exception:
+            _b1_today = None
         # MULTI-TF ROLLING DIRECTION (research 2026-07-02): every chart TF re-scored from the SAME
         # 1m array on every completed 1m bar (2/5/15/30/60/240 x 1m windows, D = 0.30S+0.20P+0.20E+
         # 0.15B+0.15M), plus the 2-bar IMMEDIATE read refreshed by the live price between minute
@@ -142,7 +182,19 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
         iv_est = round(float(_np.clip(_np.std(_ret) * (252 * 78) ** 0.5, 0.10, 0.80)), 3) if len(_ret) > 5 else 0.20
         for s in families.scan(bars, sym, bars_back=bars_back, bars_1m=b1):   # 1m feed -> gate + grade at 1m speed
             c = s["candidate"]
-            conf = predict_candidate(c)                       # PREDICTIVE: P(win) from the champion (or prior)
+            # PREDICTIVE: calibrated P(win) from the champion, scored on the SAME PIT feature
+            # snapshot the model was trained on (train/live parity); prior when no champion.
+            conf = predict_candidate(c, feats=s.get("pit_features"))
+            # MULTI-HEAD + SIMILARITY + EXPLANATION (advisory, absent models just don't vote)
+            heads_out, sim_out, ml_explain = {}, s.get("similarity"), None
+            try:
+                if s.get("pit_features"):
+                    from bot.ml.heads import predict_heads
+                    heads_out = predict_heads(s["pit_features"])
+                    from bot.ml.pipeline import explain_last_champion
+                    ml_explain = explain_last_champion(s["pit_features"])
+            except Exception:
+                pass
             flow = orderflow_confirm(c)                       # order-flow confirmation (book-level; "no feed" live)
             rd = decide(c, Account(equity=equity, source_healthy=healthy))  # risk gate verdict (advisory)
             if persist:
@@ -153,23 +205,56 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             risk_per_unit = c.risk * a.point_value
             budget = equity * 0.0025
             qty = max(1, int(budget / risk_per_unit)) if risk_per_unit > 0 else 1
-            # GRADE = 2-D quality on the two validated, ADDITIVE conditioners (F20 structure + vol-expansion).
-            #   A+ = core breakout, HH/HL structure-aligned AND wide opening range (vol-expansion) — the best
-            #        cohort (+0.45-0.51R: aligned&wide on QQQ/SPY). A = one of the two. B = neither (narrow &
-            #        unaligned = the dead cohort). C = info-only family or unverified asset.
+            # GRADE LADDER (user 2026-07-05 v2): ORMID arms; the extras grade CUMULATIVELY —
+            # +VWAP = B · +STRUCT = A · +SLOPE = A+ (all three). No VWAP aligned = C.
             aligned = s.get("struct_aligned", False)
-            wide = s.get("vol_expansion", False)
+            wide = s.get("vol_expansion", False)             # still tagged for the dashboard/ML
+            _sS = s.get("slope_S")
+            slope_ok = _sS is not None and ((c.side.value == "long" and _sS >= 0.10) or
+                                            (c.side.value == "short" and _sS <= -0.10))
+            _pit = s.get("pit_features") or {}
+            _av = _pit.get("above_vwap")
+            vwap_ok = _av is not None and _av == _av and \
+                ((c.side.value == "long") == bool(_av >= 0.5))
             if s["family"] == "breakout" and s["tradeable"] and s.get("asset_status") == "validated":
-                grade = "A+" if (aligned and wide) else ("A" if (aligned or wide) else "B")
+                grade = "A+" if (vwap_ok and aligned and slope_ok) else \
+                        ("A" if (vwap_ok and aligned) else ("B" if vwap_ok else "C"))
             else:
                 grade = "C"
             # GRADE-WEIGHTED SIZING: scale the base qty by conviction; skip B where its edge is negative.
             size_mult = GRADE_MULT.get(grade, 0.4)
             skip_reco = (grade == "B" and sym in B_SKIP_SYMBOLS) or grade == "C"
-            sized_qty = 0 if skip_reco else (max(1, round(qty * size_mult)) if size_mult > 0 else 0)
             conviction = ({"A+": "HIGHEST — size up (1.5x)", "A": "standard (1.0x)",
                            "B": ("SKIP — grade-B is negative on " + sym) if skip_reco else "low — size down (0.4x)",
                            "C": "info only — don't trade"}).get(grade, "")
+            # F66 SIZING LADDER (ADOPTED, auto per side-of-edge): equity ladder assets take the UNCONFIRMED
+            # break as a 0.4x STARTER (that cohort is +0.34R QQQ / +0.16R SPY) and go FULL when structure
+            # confirms. Futures never reach here unconfirmed (binary trend gate). No cut-on-opposite (v2 rejected).
+            tranche = "full"
+            if a.ladder and s["family"] == "breakout" and s["tradeable"] and not aligned:
+                tranche = "starter"
+                size_mult, skip_reco = 0.4, False
+                conviction = "STARTER 0.4x — unconfirmed break (F66 ladder); ADD to full when structure confirms"
+            # F67 CLEAN-AIR (GRADUATED): a breakout into a WALL (MAJOR/STRONG zone within ~2 ATR ahead) is the
+            # negative cohort — down-grade + recommend skip (discretion model; the gauntlet validated the drop).
+            air_atr = None; air_ok = True
+            if a.clean_air and s["family"] == "breakout" and s["tradeable"]:
+                from bot.strategy.liquidity import clean_air_atr, CLEAN_AIR_ATR
+                air_atr = clean_air_atr(_b1_today, c.entry, c.side.value, sym)
+                if air_atr is not None and air_atr < CLEAN_AIR_ATR:
+                    air_ok = False
+                    grade = "B" if grade in ("A+", "A") else grade
+                    size_mult = min(size_mult, 0.4)
+                    skip_reco = True
+                    conviction = f"SKIP — WALL: MAJOR/STRONG zone {air_atr:.1f} ATR ahead (F67 clean-air; that cohort is negative)"
+            sized_qty = 0 if skip_reco else (max(1, round(qty * size_mult)) if size_mult > 0 else 0)
+            # ENSEMBLE VERDICT (MLP-001 §10): rules emitted it, risk decided, AI grades confidence.
+            try:
+                from bot.ml.ensemble import decide_ensemble
+                ai = decide_ensemble(rd.approved, ml_p=conf if isinstance(conf, float) else None,
+                                     heads=heads_out, similarity=sim_out, grade=grade)
+            except Exception:
+                ai = None
             proposals.append({
                 "symbol": sym, "source": src, "last_price": last_px, "price_source": px_src,
                 "bar_age_min": age_min, "source_healthy": healthy,
@@ -179,17 +264,26 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "or_high": s.get("or_high"), "or_low": s.get("or_low"),
                 "signal_state": _zone_state(c.side.value, float(last_px or c.entry),
                                             s.get("or_high"), s.get("or_low")),
+                # ENTRY STANDARD Layer 2 — slope QUALITY grade (A+..D) at the signal bar (5m frame);
+                # dir_fast additionally carries the 1m-feed grade. Advisory + an ML/NN feature.
+                "slope_grade": s.get("slope_grade"), "slope_S": s.get("slope_S"),
                 "dir_fast": _dir_fast(_df_ctx, s.get("or_high"), s.get("or_low")),
                 "mtf_direction": mtf_dir,          # rolling per-TF read (1m array); dir_fast = backup
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
-                "grade": grade, "struct_aligned": aligned, "vol_expansion": wide,
+                "grade": grade, "struct_aligned": aligned, "vol_expansion": wide, "tranche": tranche,
+                "air_atr": (None if air_atr is None else (999.0 if air_atr == float("inf") else round(air_atr, 1))),
+                "clean_air": air_ok,
                 "or_width_atr": s.get("or_width_atr"),
                 "session": s.get("session"), "bars_ago": s["bars_ago"],
                 "side": c.side.value, "entry": c.entry, "stop": c.stop,
                 "tp1": (plan["underlying"]["tp1"] if plan else round(c.entry + c.side.sign * 1.5 * c.risk, 2)),
                 "tp2": (plan["underlying"]["tp2"] if plan else round(c.entry + c.side.sign * 4.0 * c.risk, 2)),
                 "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats, "iv_est": iv_est,
+                "heads": heads_out or None, "ai_decision": ai, "ml_explain": ml_explain,
+                # KELLY (advisory, quarter-Kelly of the risk budget): P(win) from the champion/prior,
+                # payoff b from the symbol's backtest matrix when available (fallback 4R-cap profile)
+                "kelly": _kelly_advice(sym, conf),
                 "suggested_qty": qty, "risk_per_unit": round(risk_per_unit, 2),
                 "risk_pct": round(100 * qty * risk_per_unit / equity, 2),
                 "size_mult": size_mult, "sized_qty": sized_qty, "conviction": conviction,

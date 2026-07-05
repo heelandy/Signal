@@ -1,8 +1,10 @@
-"""Regression tests for the ORB zone state machine (staleness fix 2026-07).
+"""Regression tests for the CANONICAL ORB entry state machine (entry standard 2026-07-04).
 
-Encodes the spec's long-side / short-side behavior tables, verifies exact long/short mirror
-symmetry, the invalidation/hysteresis rules, and the direction-math invariants (ER, persistence,
-normalized slope). Run: pytest BOT/tests -q
+Encodes the three-layer spec (Trading System Logic / README_trading_state_logic):
+Layer 1 Market Context (Structure+VWAP arm), Layer 3 Execution (OR mid = WATCH, OR high/low = FILL,
+cooldown / pullback / range / two-entry-limit rules), exact long/short mirror symmetry, the
+invalidation/hysteresis rules, and the direction-math invariants (ER, persistence, slope).
+Run: pytest BOT/tests -q
 """
 import sys
 from pathlib import Path
@@ -12,31 +14,79 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.strategy.orb_state import (OrbSideState, SideState, Zone, zone_of, signal_zone_state,
+from bot.strategy.orb_state import (OrbSideState, SideState, EntryStandard, Zone, zone_of,
+                                    signal_zone_state, slope_grade,
                                     efficiency_ratio, directional_persistence, norm_slope,
                                     path_distance, net_move)
 
 OR_H, OR_L = 730.0, 723.9          # the QQQ session from the bug screenshot
 MID = (OR_H + OR_L) / 2.0
+CFG = EntryStandard(cooldown_bars=2, stale_bars=8, chase_atr=1.0, retest_atr=0.5, max_entries=2)
 
 
-def _long(**kw):
-    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
-    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, close=730.5, order_id="o1", **kw)
+def _watch_long(**kw):
+    """Long side promoted to WATCH with a pending trade plan attached (the canonical pre-fill state)."""
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG, **kw)
+    sm.on_bar(high=728.0, low=725.0, close=727.5, open_px=725.4)      # confirmed close above mid
+    assert sm.state is SideState.WATCH
+    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, order_id="o1")
     return sm
 
 
-def _short():
-    sm = OrbSideState("short", or_high=OR_H, or_low=OR_L)
-    sm.arm(entry=723.89, stop=727.15, tp1=720.65, tp2=710.89, close=723.0, order_id="o2")
+def _watch_short():
+    sm = OrbSideState("short", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sm.on_bar(high=726.5, low=724.5, close=725.0, open_px=726.4)      # confirmed close below mid
+    assert sm.state is SideState.WATCH
+    sm.arm(entry=723.89, stop=727.15, tp1=720.65, tp2=710.89, order_id="o2")
     return sm
 
 
-# ---- the screenshot bug: pending long must NOT stay ARMED with price below the OR low ----
+# ---- canonical layer flow: WAITING -> ARMED (context) -> WATCH (mid) -> FILL (edge) ----
+
+def test_context_arms_the_side_and_mid_cross_watches():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    # context misaligned (structure down) -> stays WAITING even above the mid
+    sm.on_bar(high=728.0, low=725.0, close=727.5, struct_state=2, vwap=726.0)
+    assert sm.state is SideState.WAITING
+    # context aligned but below the mid -> ARMED only
+    sm.on_bar(high=726.5, low=724.5, close=725.5, struct_state=1, vwap=725.0)
+    assert sm.state is SideState.ARMED
+    # confirmed close above the mid with a directional body -> WATCH
+    sm.on_bar(high=728.0, low=725.2, close=727.6, open_px=725.5, struct_state=1, vwap=725.0)
+    assert sm.state is SideState.WATCH
+
+
+def test_vwap_misalignment_blocks_arming():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sm.on_bar(high=726.5, low=724.5, close=725.5, struct_state=1, vwap=726.5)   # close < vwap
+    assert sm.state is SideState.WAITING
+    sm.on_bar(high=726.5, low=724.5, close=725.5, struct_state=1, vwap=725.0)   # aligned now
+    assert sm.state is SideState.ARMED
+
+
+def test_context_loss_disarms():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sm.on_bar(high=726.5, low=724.5, close=725.5, struct_state=1, vwap=725.0)
+    assert sm.state is SideState.ARMED
+    sm.on_bar(high=726.5, low=724.5, close=725.5, struct_state=2, vwap=725.0)   # structure flips
+    assert sm.state is SideState.WAITING
+
+
+def test_fill_only_from_watch():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    assert sm.fill() is SideState.WAITING                   # no watch, no plan -> refused
+    sm.on_bar(high=726.5, low=724.5, close=725.5)
+    assert sm.state is SideState.ARMED
+    assert sm.fill() is SideState.ARMED                     # still not in WATCH -> refused
+    sm.on_bar(high=728.0, low=725.2, close=727.6, open_px=725.5)
+    sm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02)
+    assert sm.fill() is SideState.FILLED and sm.entries_used == 1
+
+
+# ---- the screenshot bug: a pending long must NOT stay live with price below the OR low ----
 
 def test_pending_long_invalidated_when_price_closes_below_or_low():
-    sm = _long()
-    assert sm.state is SideState.ARMED
+    sm = _watch_long()
     sm.on_bar(high=730.2, low=718.9, close=719.0)          # the screenshot bar: price at 719
     assert sm.state is SideState.INVALIDATED
     assert sm.pending_cancelled                            # resting order must be cancelled
@@ -44,23 +94,13 @@ def test_pending_long_invalidated_when_price_closes_below_or_low():
 
 
 def test_pending_long_invalidated_when_proposed_stop_tagged_before_entry():
-    sm = _long()
+    sm = _watch_long()
     sm.on_bar(high=729.0, low=726.5, close=728.0)          # low 726.5 <= stop 726.76, close inside OR
     assert sm.state is SideState.INVALIDATED
 
 
-def test_pending_long_soft_cancel_below_or_mid_then_rearm_on_rebreak():
-    sm = _long()
-    sm.on_bar(high=729.0, low=726.9, close=726.5)          # close < mid 726.95, stop NOT tagged
-    assert sm.state is SideState.WATCH and sm.pending_cancelled
-    # re-arm refused while still under the mid
-    assert sm.arm(entry=730.01, stop=727.5, close=726.0) is SideState.WATCH
-    # re-breakout confirmation -> re-arm allowed
-    assert sm.arm(entry=730.01, stop=727.5, close=730.4) is SideState.ARMED
-
-
 def test_no_rearm_after_invalidation_until_or_high_reclaimed():
-    sm = _long()
+    sm = _watch_long()
     sm.on_bar(high=724.0, low=719.0, close=719.5)
     assert sm.state is SideState.INVALIDATED
     assert sm.arm(entry=730.01, stop=727.0, close=731.0) is SideState.INVALIDATED  # hysteresis
@@ -68,21 +108,93 @@ def test_no_rearm_after_invalidation_until_or_high_reclaimed():
     assert sm.state is SideState.INVALIDATED
     sm.on_bar(high=730.8, low=728.0, close=730.5)          # confirmed reclaim of OR high
     assert sm.state is SideState.WAITING
-    assert sm.arm(entry=730.01, stop=727.5, close=730.5) is SideState.ARMED        # fresh confirm
+    assert sm.arm(entry=730.01, stop=727.5, close=730.5) is SideState.WATCH        # fresh cycle
 
+
+# ---- cooldown rule: watch cancelled at the mid -> no immediate re-watch ----
+
+def test_watch_cancel_starts_cooldown_then_fresh_cycle():
+    sm = _watch_long()
+    sm.on_bar(high=729.0, low=726.9, close=726.5)          # close < mid 726.95, stop NOT tagged
+    assert sm.state is SideState.COOLDOWN and sm.pending_cancelled
+    # re-arm refused during cooldown, even beyond the mid
+    assert sm.arm(entry=730.01, stop=727.5, close=730.4) is SideState.COOLDOWN
+    sm.on_bar(high=728.0, low=726.0, close=727.6)          # cooldown bar 1 (no instant re-watch)
+    assert sm.state is SideState.COOLDOWN
+    sm.on_bar(high=728.0, low=726.0, close=727.6)          # cooldown over -> context re-proves
+    assert sm.state is SideState.ARMED
+    sm.on_bar(high=728.2, low=726.8, close=728.0, open_px=727.0)   # NEW clean close above mid
+    assert sm.state is SideState.WATCH
+
+
+# ---- pullback rule: extended past the edge without a fill -> wait for the retest ----
+
+def test_extension_flips_watch_to_pullback_and_retest_restores():
+    sm = _watch_long()
+    sm.on_bar(high=732.5, low=730.5, close=732.0, atr=1.0)  # high 2.5 pts > edge + 1.0 ATR
+    assert sm.state is SideState.PULLBACK                   # do not chase
+    sm.on_bar(high=732.4, low=731.6, close=732.2, atr=1.0)  # still extended, no retest
+    assert sm.state is SideState.PULLBACK
+    sm.on_bar(high=731.2, low=730.3, close=730.9, atr=1.0)  # low within 0.5 ATR of OR high
+    assert sm.state is SideState.WATCH                      # clean re-check allowed
+    sm.arm(entry=730.01, stop=728.0, tp1=733.0, tp2=738.0)
+    assert sm.fill() is SideState.FILLED
+
+
+def test_pullback_dies_at_the_mid_like_watch():
+    sm = _watch_long()
+    sm.on_bar(high=732.5, low=730.5, close=732.0, atr=1.0)
+    assert sm.state is SideState.PULLBACK
+    sm.on_bar(high=731.0, low=726.8, close=726.85, atr=1.0)  # back through the mid (stop NOT tagged)
+    assert sm.state is SideState.COOLDOWN
+
+
+# ---- range / stale-setup rule ----
+
+def test_watch_goes_range_when_stale_and_resets_on_mid_loss():
+    sm = _watch_long()
+    for _ in range(CFG.stale_bars + 1):                     # sits above mid, never fills
+        sm.on_bar(high=729.5, low=727.2, close=728.5, atr=1.0)
+    assert sm.state is SideState.RANGE
+    sm.on_bar(high=729.0, low=727.5, close=728.4, atr=1.0)  # still ranged (mid intact)
+    assert sm.state is SideState.RANGE
+    sm.on_bar(high=728.0, low=726.8, close=726.85, atr=1.0)  # mid lost (stop NOT tagged) -> cooldown
+    assert sm.state is SideState.COOLDOWN
+
+
+# ---- two-entry limit ----
+
+def test_two_entry_limit_locks_the_side():
+    sm = _watch_long()
+    sm.fill()
+    sm.on_bar(high=733.5, low=726.5, close=730.0)           # stop + TP1 same bar -> STOP (conservative)
+    assert sm.state is SideState.STOPPED
+    assert sm.reset_cycle() is SideState.COOLDOWN           # entry 2 still available
+    sm.on_bar(high=728.0, low=726.0, close=727.6)
+    sm.on_bar(high=728.0, low=726.0, close=727.6)           # cooldown over -> ARMED
+    sm.on_bar(high=728.2, low=726.8, close=728.0, open_px=727.0)
+    assert sm.state is SideState.WATCH
+    sm.arm(entry=730.01, stop=728.0, tp1=733.0, tp2=738.0)
+    sm.fill()
+    sm.on_bar(high=739.0, low=729.5, close=738.5)
+    assert sm.state is SideState.COMPLETED
+    assert sm.reset_cycle() is SideState.LOCKED             # both entries used -> side locks
+    sm.on_bar(high=728.2, low=726.8, close=728.0)
+    assert sm.state is SideState.LOCKED                     # terminal for the session
+
+
+# ---- filled lifecycle ----
 
 def test_filled_long_lifecycle_stop_first_on_same_bar():
-    sm = _long(); sm.fill()
+    sm = _watch_long(); sm.fill()
     assert sm.state is SideState.FILLED
-    # same bar contains both the stop and TP1 -> STOP wins (conservative)
-    sm.on_bar(high=733.5, low=726.5, close=730.0)
+    sm.on_bar(high=733.5, low=726.5, close=730.0)           # same bar has stop AND TP1 -> STOP wins
     assert sm.state is SideState.STOPPED
-    # stopped is terminal: no re-arm ("block immediate re-entry")
-    assert sm.arm(entry=730.01, stop=727.0, close=731.0) is SideState.STOPPED
+    assert sm.arm(entry=730.01, stop=727.0, close=731.0) is SideState.STOPPED   # no silent re-arm
 
 
 def test_filled_long_tp1_then_tp2():
-    sm = _long(); sm.fill()
+    sm = _watch_long(); sm.fill()
     sm.on_bar(high=733.5, low=729.0, close=733.0)
     assert sm.state is SideState.TP1_HIT
     sm.on_bar(high=743.3, low=732.0, close=743.0)
@@ -93,22 +205,25 @@ def test_filled_long_tp1_then_tp2():
 
 def test_short_side_is_exact_mirror():
     C = 2 * MID                                            # reflect prices around the OR mid
-    lm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
-    sh = OrbSideState("short", or_high=OR_H, or_low=OR_L)
-    lm.arm(entry=730.01, stop=726.76, tp1=733.26, tp2=743.02, close=730.5)
-    sh.arm(entry=C - 730.01, stop=C - 726.76, tp1=C - 733.26, tp2=C - 743.02, close=C - 730.5)
-    bars = [(730.2, 727.0, 726.5),                         # -> WATCH
-            (727.0, 718.9, 719.0),                         # -> INVALIDATED
-            (726.0, 720.0, 725.0),                         # stays INVALIDATED
-            (730.8, 728.0, 730.5)]                         # reclaim -> WAITING
-    for h, l, c in bars:
-        s_l = lm.on_bar(high=h, low=l, close=c)
-        s_s = sh.on_bar(high=C - l, low=C - h, close=C - c)   # mirrored bar (high/low swap)
+    lm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sh = OrbSideState("short", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    bars = [(728.0, 725.0, 727.5, 725.4),                  # -> WATCH
+            (729.0, 726.9, 726.5, None),                   # -> COOLDOWN
+            (728.0, 726.0, 727.6, None),                   # cooldown 1
+            (728.0, 726.0, 727.6, None),                   # -> ARMED
+            (728.2, 726.8, 728.0, 727.0),                  # -> WATCH
+            (727.0, 718.9, 719.0, None),                   # -> INVALIDATED
+            (726.0, 720.0, 725.0, None),                   # stays INVALIDATED
+            (730.8, 728.0, 730.5, None)]                   # reclaim -> WAITING
+    for h, l, c, o in bars:
+        s_l = lm.on_bar(high=h, low=l, close=c, open_px=o)
+        s_s = sh.on_bar(high=C - l, low=C - h, close=C - c,        # mirrored bar (high/low swap)
+                        open_px=None if o is None else C - o)
         assert s_l == s_s, (s_l, s_s)
 
 
 def test_short_invalidated_on_confirmed_close_above_or_high():
-    sm = _short()
+    sm = _watch_short()
     sm.on_bar(high=731.0, low=723.0, close=730.6)
     assert sm.state is SideState.INVALIDATED
     sm.on_bar(high=725.0, low=723.5, close=724.0)          # inside OR — still invalid
@@ -127,7 +242,7 @@ def test_zones():
 
 
 def test_signal_zone_state_matches_screenshot():
-    # the bug: long proposal shown ARMED with price 719 < OR low 723.9 -> must be 'invalid'
+    # the bug: long proposal shown live with price 719 < OR low 723.9 -> must be 'invalid'
     assert signal_zone_state("long", 719.0, OR_H, OR_L) == "invalid"
     assert signal_zone_state("long", 725.0, OR_H, OR_L) == "watch"
     assert signal_zone_state("long", 731.0, OR_H, OR_L) == "active"
@@ -136,38 +251,29 @@ def test_signal_zone_state_matches_screenshot():
     assert signal_zone_state("long", 719.0, None, None) == "unknown"   # missing levels never = invalid
 
 
-# ---- WATCH promotion (user spec 2026-07-03): price must PASS the OR mid before ARMED ----
+# ---- WATCH promotion detail: directional body required when the open is supplied ----
 
-def test_waiting_promotes_to_watch_on_confirmed_midcross_with_direction():
-    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
-    assert sm.state is SideState.WAITING
-    sm.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)   # full-body close above mid
-    assert sm.state is SideState.WATCH
-    # a confirmed breakout can then arm from WATCH
-    assert sm.arm(entry=730.01, stop=726.76, close=730.5) is SideState.ARMED
-
-
-def test_waiting_promotion_requires_clear_direction_when_open_given():
-    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+def test_watch_promotion_requires_clear_direction_when_open_given():
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
     sm.on_bar(high=728.0, low=726.5, close=727.2, open_px=727.8)   # above mid but DOWN body
-    assert sm.state is SideState.WAITING                           # no clear direction — no watch
+    assert sm.state is SideState.ARMED                             # armed, not yet watching
     sm.on_bar(high=728.0, low=726.8, close=727.6)                  # no open supplied: mid-cross alone
     assert sm.state is SideState.WATCH
 
 
 def test_watch_follows_live_mid_bias_and_sides_mirror():
-    lm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
-    sh = OrbSideState("short", or_high=OR_H, or_low=OR_L)
+    lm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sh = OrbSideState("short", or_high=OR_H, or_low=OR_L, cfg=CFG)
     lm.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)   # cross UP: long watches...
     sh.on_bar(high=727.5, low=725.0, close=727.4, open_px=725.2)
-    assert lm.state is SideState.WATCH and sh.state is SideState.WAITING
-    lm.on_bar(high=727.0, low=725.5, close=725.8, open_px=726.9)   # cross DOWN: bias flips...
+    assert lm.state is SideState.WATCH and sh.state is SideState.ARMED
+    lm.on_bar(high=727.0, low=725.5, close=725.8, open_px=726.9)   # cross DOWN: long cools...
     sh.on_bar(high=727.0, low=725.5, close=725.8, open_px=726.9)
-    assert lm.state is SideState.WAITING and sh.state is SideState.WATCH
+    assert lm.state is SideState.COOLDOWN and sh.state is SideState.WATCH
 
 
 def test_promotion_never_overrides_hard_invalidation():
-    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
     sm.on_bar(high=724.0, low=719.0, close=719.5)                  # close < OR low -> INVALIDATED
     assert sm.state is SideState.INVALIDATED
     sm.on_bar(high=728.0, low=726.0, close=727.5, open_px=726.2)   # above mid, but NOT reclaimed
@@ -185,7 +291,7 @@ def test_efficiency_ratio_bounds_and_zero_path():
 
 
 def test_persistence_formula_and_noise_threshold():
-    d, p = directional_persistence([0, 1, 2, 3, 2, 4, 3, 5])   # 5 up / 2 down (wait: diffs 1,1,1,-1,2,-1,2)
+    d, p = directional_persistence([0, 1, 2, 3, 2, 4, 3, 5])   # diffs 1,1,1,-1,2,-1,2
     assert d == 1 and abs(p - 5 / 7) < 1e-9
     assert directional_persistence([1, 2, 1, 2, 1]) == (0, 0.5)     # balanced -> neutral
     assert directional_persistence([1, 1, 1, 1]) == (0, 0.0)        # no meaningful moves
@@ -202,27 +308,44 @@ def test_norm_slope_scale_and_offset_behavior():
 
 
 def test_monotonic_sequences_drive_expected_states():
-    # strictly rising tape: long side arms and completes; short side invalidates
-    lm = OrbSideState("long", or_high=102.0, or_low=100.0)
-    sh = OrbSideState("short", or_high=102.0, or_low=100.0)
-    lm.arm(entry=102.05, stop=100.8, tp1=103.0, tp2=105.0, close=102.2)
-    sh.arm(entry=99.95, stop=101.2, tp1=99.0, tp2=97.0, close=99.9)   # hypothetical short pending
+    # strictly rising tape: long side watches, fills and completes; short side invalidates
+    lm = OrbSideState("long", or_high=102.0, or_low=100.0, cfg=CFG)
+    sh = OrbSideState("short", or_high=102.0, or_low=100.0, cfg=CFG)
+    lm.on_bar(high=101.6, low=100.9, close=101.5, open_px=101.0)   # above mid 101 -> WATCH
+    lm.arm(entry=102.05, stop=100.8, tp1=103.0, tp2=105.0)
     lm.fill()
     px = 102.0
     for _ in range(8):
-        px += 0.8
-        lm.on_bar(high=px + 0.2, low=px - 0.4, close=px)
-        sh.on_bar(high=px + 0.2, low=px - 0.4, close=px)
+        px += 0.4
+        lm.on_bar(high=px + 0.2, low=px - 0.3, close=px)
+        sh.on_bar(high=px + 0.2, low=px - 0.3, close=px)
     assert lm.state is SideState.COMPLETED
     assert sh.state is SideState.INVALIDATED
 
 
 def test_bad_geometry_rejected():
-    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L)
+    sm = OrbSideState("long", or_high=OR_H, or_low=OR_L, cfg=CFG)
+    sm.on_bar(high=728.0, low=725.0, close=727.5, open_px=725.4)   # WATCH (arm() geometry-checks here)
     with pytest.raises(ValueError):
-        sm.arm(entry=730.0, stop=731.0, close=730.5)       # long stop above entry
+        sm.arm(entry=730.0, stop=731.0)                    # long stop above entry
     with pytest.raises(ValueError):
         OrbSideState("long", or_high=100.0, or_low=101.0)  # inverted OR
+
+
+# ---- Layer 2: slope quality grade (docs: grades A+..D, never direction) ----
+
+def test_slope_grade_bands_and_side_demotion():
+    assert slope_grade(0.35, 0.80, 0.70) == "A+"
+    assert slope_grade(0.35, 0.55, 0.30) == "A"            # strong slope, weak confirmation
+    assert slope_grade(0.15, 0.65, 0.50) == "B+"
+    assert slope_grade(0.15, 0.50, 0.20) == "B"
+    assert slope_grade(0.07, 0.50, 0.20) == "C"
+    assert slope_grade(0.01, 0.90, 0.90) == "D"
+    # graded along the trade direction: contrary slope demotes hard
+    assert slope_grade(-0.20, 0.70, 0.50, side="long") == "D"
+    assert slope_grade(-0.08, 0.70, 0.50, side="long") == "C"
+    assert slope_grade(-0.35, 0.80, 0.70, side="short") == "A+"    # mirror: down-slope helps a short
+    assert slope_grade(0.20, 0.70, 0.50, side="short") == "D"
 
 
 # ---- 1-minute direction feed (fast_direction + flip-speed vs chart-TF structure) ----
@@ -316,8 +439,9 @@ def test_fast_state_1m_alignment_is_causal_and_maps_last_1m_bar():
 
 
 def test_scan_uses_1m_state_where_covered(monkeypatch):
-    """families.scan(bars_1m=...) must swap the gate/grade state to the 1m feed where covered and
-    keep the 5m state where the 1m frame has no coverage (NaN fallback)."""
+    """STRUCTURE comes from the 1m feed (user 2026-07-03: struct from 1m for SPEED; higher-TF struct lag IS
+    the problem). families.scan(bars_1m=...) must swap the direction state to the 1m feed where covered and
+    keep the entry-TF state where the 1m frame has no coverage (NaN fallback). Kept until judged live."""
     from bot.strategy import families
     import pandas as pd
     called = {}
@@ -336,8 +460,8 @@ def test_scan_uses_1m_state_where_covered(monkeypatch):
                        "close": c, "volume": 1000.0})
     b1 = b5.head(40).copy()                         # any non-empty frame (fake ignores content)
     sigs = families.scan(b5, "QQQ", bars_back=2, bars_1m=b1)
-    assert called.get("yes"), "1m fast path must be invoked when bars_1m is provided"
-    assert isinstance(sigs, list)                   # scan completes with the swapped state
+    assert called.get("yes"), "1m structure feed must be invoked when bars_1m is provided"
+    assert isinstance(sigs, list)                   # scan completes with the 1m-fed state
 
 
 # ---- combined slope engine (user research spec: Sc/ATR + Sm/ATR + body pressure) ----
@@ -419,6 +543,7 @@ def test_fast_direction_carries_slope_engine_and_alignment():
                        opens_1m=opens, atr=0.5)
     assert "slope_engine" in d and d["slope_engine"]["S"] > 0.10
     assert d["state"] in ("UP", "STRONG_UP")
+    assert d["grade"] in ("A+", "A", "B+", "B")            # Layer-2 grade carried for the ML layer
     assert d["aligned"] is True and d["read"] == "up"      # OR + SLOPE + STRUC agree
     # the screenshot dump, mirrored: everything down, aligned short
     closes_d = list(np.linspace(730.0, 719.0, n))

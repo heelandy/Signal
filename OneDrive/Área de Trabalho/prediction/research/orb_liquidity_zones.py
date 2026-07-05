@@ -453,7 +453,7 @@ def evaluate(sym: str):
     import hs_db
     con = hs_db.connect()
     try:
-        df = con.execute(f"SELECT * FROM {sym.lower()}_1m ORDER BY ts").df()
+        df = con.execute(f"SELECT * FROM {sym.lower()}_1m ORDER BY ts_et").df()
     except Exception as e:
         print(f"  {sym}: no continuous 1m view ({e})"); return
     tcol = "ts_et" if "ts_et" in df.columns else "ts"

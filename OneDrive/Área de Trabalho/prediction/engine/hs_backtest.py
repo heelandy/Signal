@@ -82,12 +82,24 @@ def attach_mtf(con, sym, d):
 def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="close", tradeday=False,
                  reentry=False, vol_conf=False, vol_mult=1.2, vol_len=20, entry_delay=0, ob_l=None, ob_s=None,
                  chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False, min_or_width=0.0, max_entries=99,
-                 or_mid_bias=False):
+                 or_mid_bias=False, watch_live=False, cooldown_bars=0, stale_bars=0, retest_atr=0.0,
+                 collect_rejects=None, retest_mode="edge", min_pullback_atr=0.0,
+                 pullback_timeout=0, vol_confirm_x=0.0, instant_aligned=False):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
     tradeday=True : minutes-since-18:00-ET + CME trade-day grouping (sessions that cross midnight,
-                    e.g. Asia/London). In trade-day mins: 18:00=0, 20:00=120, 00:00=360, 09:30=930."""
+                    e.g. Asia/London). In trade-day mins: 18:00=0, 20:00=120, 00:00=360, 09:30=930.
+    CANONICAL ENTRY STANDARD (2026-07-04, docs Layer 3 — Python twin: bot.strategy.orb_state):
+      watch_live=True : a side may only FIRE while its WATCH is active — a PRIOR confirmed close
+                        beyond OR mid toward the side with a directional body (live mid tracking;
+                        strictly causal: bar i fires on the watch state as of bar i-1's close).
+      cooldown_bars   : bars the side is blocked after its watch cancels (close back across the mid).
+      stale_bars      : max bars a watch may sit without a fill -> RANGE (side stands down until the
+                        mid is lost and a fresh watch cycle starts). 0 = off.
+      retest_atr      : PULLBACK rule — once price extends > chase_atr*ATR past the level pre-fill,
+                        fires are blocked until price retests within retest_atr*ATR of the level.
+                        Active only with chase_atr > 0; 0 keeps the plain no-chase guard only."""
     et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")
     if tradeday:
         sd = et + pd.Timedelta(hours=6)                       # 18:00 ET -> 00:00 of the trade-day
@@ -132,9 +144,21 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
             or_bull = ocm > ((orh + orl) / 2.0)          # per-bar (day-broadcast); False where OR undefined
     cur = None; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False
     n_l = n_s = 0                                       # re-entry counters per date (cap at max_entries)
+    # canonical WATCH state per side (entry standard 2026-07-04): watch flag, watch age (stale/range),
+    # cooldown countdown, range flag, pullback-extension latch — all reset at each new trade-day.
+    # Pullback refinements (2026-07-05): extension extreme + pullback age (timeout) per side.
+    watch_l = watch_s = ext_l = ext_s = range_l = range_s = False
+    age_l = age_s = cd_l = cd_s = 0
+    ext_hi_l = ext_lo_s = np.nan
+    pb_age_l = pb_age_s = 0
+    vsess = d["vwap_sess"].to_numpy() if "vwap_sess" in d else np.full(n, np.nan)
     for i in range(n):
         if date[i] != cur:
             cur = date[i]; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False; n_l = n_s = 0
+            watch_l = watch_s = ext_l = ext_s = range_l = range_s = False
+            age_l = age_s = cd_l = cd_s = 0
+            ext_hi_l = ext_lo_s = np.nan
+            pb_age_l = pb_age_s = 0
         if not rth[i] or mins[i] < or_e + entry_delay or np.isnan(orh[i]):   # entry_delay = F38 skip-opening-hour
             continue
         buf = (atr[i] * brk_buf_atr) if not np.isnan(atr[i]) else 0.0
@@ -163,8 +187,14 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
             if ft_confirm:                          # F59c: prior bar = strong breakout close, THIS bar CONTINUES the trend (no one-bar pop-and-reverse)
                 pq_l = i > 0 and date[i-1] == date[i] and c[i-1] > lh and c[i-1] > op[i-1] and (strong_body <= 0 or (hp[i-1]-lp[i-1]) <= 0 or abs(c[i-1]-op[i-1]) >= strong_body*(hp[i-1]-lp[i-1]))
                 pq_s = i > 0 and date[i-1] == date[i] and c[i-1] < ll and c[i-1] < op[i-1] and (strong_body <= 0 or (hp[i-1]-lp[i-1]) <= 0 or abs(c[i-1]-op[i-1]) >= strong_body*(hp[i-1]-lp[i-1]))
-                l_cross, ll_lvl = (pq_l and c[i] > c[i-1]), lh
-                s_cross, ls_lvl = (pq_s and c[i] < c[i-1]), ll
+                # INSTANT FILL WHEN ALIGNED (user 2026-07-05): when the side's context is aligned
+                # (trend array = the arming pair) the strong breakout candle ITSELF fills — no
+                # next-candle wait. Unaligned setups keep the F59c continuation confirm.
+                bigb_i = (hp[i]-lp[i]) <= 0 or abs(c[i]-op[i]) >= strong_body*(hp[i]-lp[i])
+                inst_l = instant_aligned and tup[i] and c[i] > lh and c[i] > op[i] and bigb_i
+                inst_s = instant_aligned and tdn[i] and c[i] < ll and c[i] < op[i] and bigb_i
+                l_cross, ll_lvl = ((pq_l and c[i] > c[i-1]) or inst_l), lh
+                s_cross, ls_lvl = ((pq_s and c[i] < c[i-1]) or inst_s), ll
             elif strong_body > 0:                   # F59b: a strong full-body, right-colour close beyond the level
                 bigb = (hp[i]-lp[i]) <= 0 or abs(c[i]-op[i]) >= strong_body*(hp[i]-lp[i])
                 l_cross, ll_lvl = (c[i] > lh and c[i] > op[i] and bigb), lh
@@ -175,6 +205,38 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         ok_l = (n_l < max_entries) and (armed_l if reentry else (not done_l))
         ok_s = (n_s < max_entries) and (armed_s if reentry else (not done_s))
         vok = (not vol_conf) or (not np.isnan(vavg[i]) and vavg[i] > 0 and vol[i] >= vol_mult * vavg[i])
+        # PULLBACK retest (entry standard + deep-research refinements 2026-07-05): while extended
+        # past chase_atr, a fire needs THIS bar to retest the TARGET (OR edge / impulse midpoint /
+        # VWAP per retest_mode) within retest_atr, AND to have retraced at least min_pullback_atr
+        # from the extension extreme (anti-spike — don't buy an unrelieved vertical).
+        if watch_live and retest_atr > 0 and not np.isnan(atr[i]):
+            if ext_l:
+                tgt = lh
+                if retest_mode == "impulse_mid" and ext_hi_l == ext_hi_l:
+                    tgt = (lh + ext_hi_l) / 2.0
+                elif retest_mode == "vwap" and vsess[i] == vsess[i]:
+                    tgt = vsess[i]
+                deep = min_pullback_atr <= 0 or (ext_hi_l == ext_hi_l and
+                                                 (ext_hi_l - lp[i]) >= min_pullback_atr * atr[i])
+                if deep and lp[i] <= tgt + atr[i] * retest_atr:
+                    ext_l = False; ext_hi_l = np.nan; pb_age_l = 0
+            if ext_s:
+                tgt = ll
+                if retest_mode == "impulse_mid" and ext_lo_s == ext_lo_s:
+                    tgt = (ll + ext_lo_s) / 2.0
+                elif retest_mode == "vwap" and vsess[i] == vsess[i]:
+                    tgt = vsess[i]
+                deep = min_pullback_atr <= 0 or (ext_lo_s == ext_lo_s and
+                                                 (hp[i] - ext_lo_s) >= min_pullback_atr * atr[i])
+                if deep and hp[i] >= tgt - atr[i] * retest_atr:
+                    ext_s = False; ext_lo_s = np.nan; pb_age_s = 0
+        # relative-volume confirmation on the trigger bar (deep-research; default OFF)
+        vcx_ok = vol_confirm_x <= 0 or (not np.isnan(vavg[i]) and vavg[i] > 0
+                                        and vol[i] >= vol_confirm_x * vavg[i])
+        # canonical WATCH gate: the side fires only while its watch (prior confirmed close beyond
+        # the OR mid) is active, not cooling down, not stale (RANGE), not extended (PULLBACK).
+        canon_l = (not watch_live) or (watch_l and cd_l == 0 and not range_l and not ext_l)
+        canon_s = (not watch_live) or (watch_s and cd_s == 0 and not range_s and not ext_s)
         # F57 no-chase guard: skip if price has already run > chase_atr·ATR past the level (buying exhaustion);
         # done_l NOT set, so a later PULLBACK bar near the level can still fire (waits instead of chasing)
         near_l = chase_atr <= 0 or (not np.isnan(atr[i]) and lp[i] <= ll_lvl + atr[i] * chase_atr)
@@ -188,13 +250,86 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         wide_ok = min_or_width <= 0 or (not np.isnan(orw_atr[i]) and orw_atr[i] >= min_or_width)
         bias_l = or_bull is None or bool(or_bull[i])          # OR-mid bias: long only if OR closed upper-half
         bias_s = or_bull is None or not bool(or_bull[i])      # short only if OR closed lower-half
-        if ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
+        # REJECTED-SETUP capture (MLP-001 §2): the trigger fired but a gate blocked — record the
+        # FIRST failing gate so the ML layer can learn "why no trade" (+ wick-only level pokes).
+        if collect_rejects is not None:
+            fire_l = ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and canon_l and tup[i] and (ob_l is None or ob_l[i]) and vok
+            fire_s = ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and canon_s and tdn[i] and (ob_s is None or ob_s[i]) and vok
+            if l_cross and not fire_l:
+                r = ("entries_done" if not ok_l else "context_gate" if not tup[i] else
+                     "narrow_or" if not wide_ok else "or_mid_bias" if not bias_l else
+                     "no_watch" if (watch_live and not watch_l) else
+                     "cooldown" if (watch_live and cd_l > 0) else
+                     "range_stale" if (watch_live and range_l) else
+                     "pullback_wait" if (watch_live and ext_l) else
+                     "chase_guard" if not near_l else "dir_seq" if not seq_l else
+                     "no_ob" if (ob_l is not None and not ob_l[i]) else "volume")
+                collect_rejects.append((i, "long", r))
+            elif not l_cross and ok_l and hp[i] >= lh and lp[i] < lh:
+                collect_rejects.append((i, "long", "wick_or_weak_body"))
+            if s_cross and not fire_s:
+                r = ("entries_done" if not ok_s else "context_gate" if not tdn[i] else
+                     "narrow_or" if not wide_ok else "or_mid_bias" if not bias_s else
+                     "no_watch" if (watch_live and not watch_s) else
+                     "cooldown" if (watch_live and cd_s > 0) else
+                     "range_stale" if (watch_live and range_s) else
+                     "pullback_wait" if (watch_live and ext_s) else
+                     "chase_guard" if not near_s else "dir_seq" if not seq_s else
+                     "no_ob" if (ob_s is not None and not ob_s[i]) else "volume")
+                collect_rejects.append((i, "short", r))
+            elif not s_cross and ok_s and lp[i] <= ll and hp[i] > ll:
+                collect_rejects.append((i, "short", "wick_or_weak_body"))
+        if ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and canon_l and vcx_ok and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
             lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False; n_l += 1
-        if ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and tdn[i] and (ob_s is None or ob_s[i]) and vok:
+        if ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and canon_s and vcx_ok and tdn[i] and (ob_s is None or ob_s[i]) and vok:
             ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False; n_s += 1
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
         if broke_s and c[i] > orl[i]: reclaimed_s = True
+        # ── canonical WATCH update at THIS bar's confirmed close (used by the NEXT bar's fire check —
+        # strictly causal, matching the Pine's confirmed-bar state block and the FSM's on_bar) ──
+        if watch_live:
+            mid_i = (orh[i] + orl[i]) / 2.0
+            if cd_l > 0: cd_l -= 1
+            if cd_s > 0: cd_s -= 1
+            if watch_l and c[i] < mid_i:                   # watch cancelled at the mid -> cooldown
+                watch_l = False; ext_l = False; range_l = False; cd_l = cooldown_bars
+                ext_hi_l = np.nan; pb_age_l = 0
+            elif not watch_l and cd_l == 0 and c[i] > mid_i and c[i] > op[i]:
+                watch_l = True; age_l = 0                  # clean directional close beyond the mid
+            elif watch_l:
+                age_l += 1
+                if stale_bars > 0 and age_l > stale_bars and not lsig[i]:
+                    range_l = True                         # stale setup -> RANGE (docs: no trade)
+                if ext_l:                                  # pullback refinements: impulse + timeout
+                    ext_hi_l = hp[i] if ext_hi_l != ext_hi_l else max(ext_hi_l, hp[i])
+                    pb_age_l += 1
+                    if pullback_timeout > 0 and pb_age_l > pullback_timeout:
+                        range_l = True                     # retest never came — stale this cycle
+                        ext_l = False; ext_hi_l = np.nan; pb_age_l = 0
+                elif not lsig[i] and not done_l and chase_atr > 0 and retest_atr > 0 and \
+                        not np.isnan(atr[i]) and hp[i] > lh + atr[i] * chase_atr:
+                    ext_l = True                           # over-extended pre-fill -> wait for pullback
+                    ext_hi_l = hp[i]; pb_age_l = 0
+            if watch_s and c[i] > mid_i:
+                watch_s = False; ext_s = False; range_s = False; cd_s = cooldown_bars
+                ext_lo_s = np.nan; pb_age_s = 0
+            elif not watch_s and cd_s == 0 and c[i] < mid_i and c[i] < op[i]:
+                watch_s = True; age_s = 0
+            elif watch_s:
+                age_s += 1
+                if stale_bars > 0 and age_s > stale_bars and not ssig[i]:
+                    range_s = True
+                if ext_s:
+                    ext_lo_s = lp[i] if ext_lo_s != ext_lo_s else min(ext_lo_s, lp[i])
+                    pb_age_s += 1
+                    if pullback_timeout > 0 and pb_age_s > pullback_timeout:
+                        range_s = True
+                        ext_s = False; ext_lo_s = np.nan; pb_age_s = 0
+                elif not ssig[i] and not done_s and chase_atr > 0 and retest_atr > 0 and \
+                        not np.isnan(atr[i]) and lp[i] < ll - atr[i] * chase_atr:
+                    ext_s = True
+                    ext_lo_s = lp[i]; pb_age_s = 0
     return lsig, ssig, orl, orh, lvl_l, lvl_s
 
 
@@ -212,7 +347,10 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              tradeday=False, eod_min=958, reentry=False, max_entries=2, vol_conf=False, vol_mult=1.2,
              time_stop=0, vwap_cap=0.0, skip_mask=None, stop_mode="or", scale_frac=0.5,
              entry_delay=0, ob_confluence=False, chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False,
-             min_or_width=0.0, ext_long=None, ext_short=None, or_mid_bias=False):
+             min_or_width=0.0, ext_long=None, ext_short=None, or_mid_bias=False,
+             watch_live=False, cooldown_bars=0, stale_bars=0, retest_atr=0.0,
+             retest_mode="edge", min_pullback_atr=0.0, pullback_timeout=0, vol_confirm_x=0.0,
+             instant_aligned=False):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -251,7 +389,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     if entry_type == "orb":                       # Opening-Range Breakout entry
         _obl = d["in_bull_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bull_ob" in d) else None
         _obs = d["in_bear_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bear_ob" in d) else None
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq, min_or_width=min_or_width, or_mid_bias=or_mid_bias)
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq, min_or_width=min_or_width, or_mid_bias=or_mid_bias, watch_live=watch_live, cooldown_bars=cooldown_bars, stale_bars=stale_bars, retest_atr=retest_atr, retest_mode=retest_mode, min_pullback_atr=min_pullback_atr, pullback_timeout=pullback_timeout, vol_confirm_x=vol_confirm_x, instant_aligned=instant_aligned)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)

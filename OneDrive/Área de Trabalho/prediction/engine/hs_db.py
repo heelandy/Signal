@@ -56,8 +56,15 @@ def _report(con):
         "WHERE table_name LIKE '%_1m' ORDER BY table_name").fetchall()]
     print("CONTINUOUS-1m VIEWS:", ", ".join(syms))
     for v in syms:
-        r = con.execute(f"SELECT count(*) n, min(ts_utc) lo, max(ts_utc) hi FROM {v}").df()
-        print(f"  {v}:", r.to_string(index=False, header=False))
+        # timestamp column differs by feed: futures store ts_utc, equities (QQQ/SPY) ts_et —
+        # detect per view instead of assuming (data-QA fix 2026-07-04)
+        cols = [r[0] for r in con.execute(f"DESCRIBE {v}").fetchall()]
+        tcol = next((c for c in ("ts_utc", "ts_et", "ts") if c in cols), None)
+        if tcol is None:
+            print(f"  {v}: no timestamp column found (cols: {cols[:8]})")
+            continue
+        r = con.execute(f"SELECT count(*) n, min({tcol}) lo, max({tcol}) hi FROM {v}").df()
+        print(f"  {v} [{tcol}]:", r.to_string(index=False, header=False))
     print("\nbars per sym/tf/session:")
     print(con.execute("""
         SELECT sym, tf, session, count(*) bars, min(year) y0, max(year) y1

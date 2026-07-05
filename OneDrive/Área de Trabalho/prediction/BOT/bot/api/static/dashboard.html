@@ -129,6 +129,8 @@
     <a data-t="#s-risk"><svg class="ic"><use href="#i-shield"/></svg> Risk Management</a>
     <a data-t="#s-perf"><svg class="ic"><use href="#i-activity"/></svg> Performance</a>
     <a data-t="#s-alerts"><svg class="ic"><use href="#i-bell"/></svg> Alerts</a>
+    <div class="grp">Research</div>
+    <a href="/training" onclick="event.stopPropagation()"><svg class="ic"><use href="#i-cpu"/></svg> Training Lab</a>
     <div class="grp">System</div>
     <a data-t="#s-tools"><svg class="ic"><use href="#i-sliders"/></svg> Options Calc</a>
     <a data-t="#s-system"><svg class="ic"><use href="#i-terminal"/></svg> Bot Logs</a>
@@ -327,7 +329,7 @@ function kpiHTML(obj){return Object.entries(obj).map(([k,v])=>`<div class="kpi">
 function kpis(el,obj){if(el)el.innerHTML=kpiHTML(obj)}
 function big(l,v,cls){return `<div class="big"><span class="v ${cls||''}">${v}</span><span class="l">${l}</span></div>`}
 // sidebar nav — smooth scroll + active state
-document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>{const t=document.querySelector(a.dataset.t);
+document.querySelectorAll('#nav a[data-t]').forEach(a=>a.onclick=()=>{const t=document.querySelector(a.dataset.t);
   if(t){if(a.dataset.t==='#s-system')t.open=true; t.scrollIntoView({behavior:'smooth',block:'start'});}
   document.querySelectorAll('#nav a').forEach(x=>x.classList.remove('on')); a.classList.add('on');});
 
@@ -546,8 +548,8 @@ async function scanSignals(force){
     const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
     $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
     if(!sigs.length){$('#signals').innerHTML='<div class="mut">No active setups on the latest bars. (No signal = nothing to trade.)</div>';}
-    else $('#signals').innerHTML=`<table><tr><th>asset</th><th>sess</th><th>family</th><th title="A+ = HH/HL structure-aligned AND wide opening range; A = one; B = neither; C = info-only.">grade</th><th>side</th><th class="num">entry</th><th class="num">now</th><th class="num">stop</th>`+
-      `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th class="num" title="grade-weighted units: base 0.25%-risk × A+1.5/A1.0/B0.4, skip B on ES/SPY & C">size</th><th>option</th><th>action</th></tr>`+
+    else $('#signals').innerHTML=`<table><tr><th>asset</th><th>sess</th><th>family</th><th title="A+ = HH/HL structure aligned; A = slope aligned; B = neither; C = info-only/unverified. Structure & slope GRADE the setup — arming comes from the context pair (futures MID+VWAP · equities STRUCT+VWAP).">grade</th><th>side</th><th class="num">entry</th><th class="num">now</th><th class="num">stop</th>`+
+      `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th title="ensemble verdict: rules emitted it, risk decided, AI grades confidence (ML P(win) + heads + similarity + grade). Hover a badge for the reasons.">AI</th><th class="num" title="grade-weighted units: base 0.25%-risk × A+1.5/A1.0/B0.4, skip B on ES/SPY & C">size</th><th class="num" title="quarter-Kelly multiple of the risk budget (P(win) + realized payoff)">¼K</th><th>option</th><th>action</th></tr>`+
       sigs.map((s,i)=>{
         const opt=s.options?(()=>{const r=s.options.recommended;const st=s.options.structures[r];return `<b>${r.toUpperCase()}</b> ${st.legs.join('/')} $${st.cost_or_credit_usd}`;})():'<span class="mut">futures</span>';
         const flags=[s.tradeable?'':'INFO',s.asset_status==='unverified'?'UNVERIFIED':'',s.bar_age_min>30?'STALE':''].filter(Boolean).join(' ');
@@ -557,8 +559,10 @@ async function scanSignals(force){
           `<td><b>${s.symbol}</b></td><td class="mut">${s.session||'rth'}</td><td>${s.family}${flags?' <span class="dn" style="font-size:9px">'+flags+'</span>':''}</td>`+
           `<td>${gbadge(s.grade)}</td><td class="${s.side==='long'?'up':'dn'}">${s.side.toUpperCase()}</td>`+
           `<td class="num">${s.entry}</td><td class="num ${nowc}">${s.last_price}</td><td class="num">${s.stop}</td><td class="num">${s.tp1}</td><td class="num">${s.tp2}</td>`+
-          `<td class="num">${s.rr}</td><td class="num">${s.confidence}${fl}</td>`+
+          `<td class="num">${s.rr}${s.heads&&s.heads.expected_r!==undefined?' <span class="mut" title="expected R (model)">eR'+s.heads.expected_r+'</span>':''}</td><td class="num">${s.confidence}${fl}</td>`+
+          `<td>${s.ai_decision?`<span class="badge ${s.ai_decision.verdict==='approved_high_ai_confidence'?'b-aplus':s.ai_decision.verdict==='risk_blocked'?'b-c':'b-b'}" title="${(s.ai_decision.reasons||[]).join(' · ').replace(/"/g,'&quot;')}">${s.ai_decision.verdict==='approved_high_ai_confidence'?'HIGH':s.ai_decision.verdict==='risk_blocked'?'RISK✗':'low'}</span>`:'<span class="mut">—</span>'}</td>`+
           `<td class="num ${s.skip_reco?'dn':(s.grade==='A+'?'up':'mut')}">${s.skip_reco?'<b>SKIP</b>':('<b>'+s.sized_qty+'</b>')}</td>`+
+          `<td class="num mut">${s.kelly&&s.kelly.quarter_kelly!==null&&s.kelly&&s.kelly.quarter_kelly!==undefined?s.kelly.quarter_kelly+'x':'—'}</td>`+
           `<td style="font-size:10.5px">${opt}</td>`+
           `<td><button style="border-color:var(--grn);padding:3px 7px" onclick="event.stopPropagation();decide(${i},true)">Take</button> `+
           `<button style="padding:3px 7px" onclick="event.stopPropagation();decide(${i},false)">Skip</button></td></tr>`;

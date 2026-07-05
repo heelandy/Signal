@@ -701,3 +701,6 @@ ml/
     └── parameters.yaml
 
 This structure keeps data preparation, model development, inference, evaluation, and storage separated, making the ML layer modular and easier to maintain as your Institutional Market Prediction System grows.
+
+webhook solution link TradingView
+https://www.tradingview.com/support/solutions/43000529348/

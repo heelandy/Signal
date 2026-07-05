@@ -61,10 +61,34 @@ wait_ft      = input.bool(true, "Wait for next-candle continuation (2-candle con
             tooltip="Close-confirm only (user rule): don't fire on the breakout candle itself — WAIT for the NEXT candle to CONTINUE the trend (close higher than the breakout candle for a long, lower for a short), then fill on that continuation candle. Stops 'fired into a reversal' entries (a one-bar pop above the OR that immediately rolls over). VALIDATED (F59c): improves QQQ (+0.283→+0.304) and SPY (+0.232→+0.344, PF 1.66) substantially, ~neutral on NQ — all pass the CI gate. Default ON.")
 dir_seq      = input.bool(true, "Direction sequence (price must be pushing the trade way)", group="ORB",
             tooltip="USER RULE (example.txt / Evidence early-entry): only fire while price is actually MOVING the trade direction — a LONG needs close > close[1] AND close[1] > close[2] (the 101→102→103 up-sequence); a SHORT the mirror down-sequence. Blocks the counter-trend / 'middle-of-nowhere' touches. VALIDATED F61: on the 'Wick / touch' fill mode this is a real graduate (NQ +0.151→+0.261R PF 1.26→1.47, QQQ +0.276→+0.448, SPY +0.257→+0.383; yrs+ 13/17·9/9·8/9, OOS holds, survives 2× slip). On the close-confirm fill it's already implied by the strong-body + continuation confirm, so it's ~neutral there. Default ON.")
+// ───────────────────────── ENTRY STANDARD (canonical 2026-07-04 — one entry across STACK/AUTO/OPTIONS/BOT/engine) ─────────────────────────
+ctx_source   = input.string("Auto (equities Struct+VWAP · futures MID+VWAP)", "Layer-1 context — arming pair", group="Entry standard",
+            options=["Auto (equities Struct+VWAP · futures MID+VWAP)", "OR-mid + VWAP (DIR-A)", "Structure + VWAP (fallback B)", "Off"],
+            tooltip="DIR-FAST pairs test (2026-07-05, OOS-ranked; ORMID obligatory so the 4-item pool = 3 pairs): FUTURES arm best from the user's MID+VWAP pair (NQ OOS +0.213 vs +0.104 struct; ES +0.153); EQUITIES arm best from STRUCT+VWAP (QQQ +0.374, SPY +0.753). AUTO picks per instrument (crypto = MID+VWAP). STRUCTURE and SLOPE grade the setup either way (struct aligned = A+, slope aligned = A) — they never veto on the MID+VWAP pair.")
+watch_gate   = input.bool(true, "Layer 3: close beyond OR mid activates WATCH", group="Entry standard",
+            tooltip="A side may only FILL while it is WATCHING: a confirmed DIRECTIONAL-BODY close beyond the OR MID toward the side (long: close > mid on an up candle; short mirror). A confirmed close back across the mid CANCELS the watch and starts the cooldown. This is the LIVE mid tracking from the docs — it complements the frozen OR-mid day bias toggle above.")
+cooldown_n   = input.int(3, "Cooldown bars after a watch cancel", group="Entry standard", minval=0,
+            tooltip="COOLDOWN RULE: after a watch is cancelled at the OR mid, no immediate re-watch/re-entry for this many confirmed bars — kills the chop-around-the-mid churn. A NEW clean close beyond the mid is then required.")
+stale_n      = input.int(24, "Stale: max bars in WATCH without a fill (0 = off)", group="Entry standard", minval=0,
+            tooltip="RANGE / STALE-SETUP RULE: a side that sits beyond the OR mid for this many bars without producing a valid fill is a RANGE for that side — stand down until the mid is lost and a fresh watch cycle begins. 24 bars = 2 hours on 5m.")
+retest_atr   = input.float(0.5, "Pullback: retest within xATR of the target", group="Entry standard", step=0.25, minval=0.0,
+            tooltip="PULLBACK MODE: once price runs more than the chase cap (Max-chase above) past the OR level WITHOUT a clean fill, do NOT chase — the side shows PULLBACK and fills stay blocked until price returns within this many ATR of the retest target. Then the normal fill rules re-check. 0 = plain no-chase guard only. GAUNTLET-ADOPTED per asset (2026-07-05): SPY uses 0.25 + cooldown 0 + stale 12 (7/7 checks, OOS +0.75 vs +0.57 avg R) — set those manually on a SPY chart.")
+// ── PULLBACK REFINEMENTS (deep-research doc, adopted 2026-07-05 — rule version orb-standard-2026.07.1) ──
+retest_target = input.string("OR edge", "Pullback: retest target", group="Entry standard",
+            options=["OR edge", "Impulse midpoint", "VWAP"],
+            tooltip="WHERE the pullback must return to before fills unblock. 'OR edge' = the broken OR high/low (default, role-reversal retest). 'Impulse midpoint' = 50% of the extension impulse (edge -> extension extreme) — catches profit-taking without a full boundary revisit. 'VWAP' = the session-VWAP retest (institutional fair-price defense).")
+min_pb_atr   = input.float(0.05, "Pullback: min retrace from extension (xATR, 0=off)", group="Entry standard", step=0.05, minval=0.0,
+            tooltip="ANTI-SPIKE (deep-research): the retrace from the extension extreme must be AT LEAST this deep before a retest counts — never buy/sell an unrelieved vertical. Doc default 0.05-0.10 ATR.")
+pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=forever)", group="Entry standard", minval=0,
+            tooltip="FRESHNESS (deep-research): if the retest hasn't come within this many bars the OR setup is stale — the side stands down (RANGE) until the mid is lost and a fresh watch cycle begins. Doc default 3-8 bars.")
+vol_confirm  = input.float(0.0, "Fill: min volume x 20-bar avg (0=off)", group="Entry standard", step=0.1, minval=0.0,
+            tooltip="RELATIVE-VOLUME CONFIRMATION (deep-research): the fill trigger bar must print at least this multiple of 20-bar average volume (doc: 1.2-2.0x). DEFAULT OFF until gauntleted.")
+instant_fill = input.bool(true, "Fill instantly when the arming pair is aligned (no next-candle wait)", group="Entry standard",
+            tooltip="USER RULE (2026-07-05): when everything is ALIGNED — the side is armed by its context pair AND price closes beyond the mid — the strong full-body breakout candle FILLS IMMEDIATELY; the F59c next-candle continuation wait applies only to UNALIGNED setups. Rule orb-standard-2026.07.2. PER-ASSET A/B (2026-07-05): ON lifts NQ (+0.163->+0.189 avg R) and is ~neutral QQQ/SPY, but HURTS ES (+0.090->+0.057) — turn this OFF on an ES chart.")
 // ───────────────────────── STRUCTURE GATE ─────────────────────────
-trend_mode = input.string("Auto (structure <=5m / EMA >=15m)", "Trend gate", group="Structure gate",
+trend_mode = input.string("Off — plain ORB (F58 default)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
-             tooltip="KEEP ON — Auto (2026-07 fast-direction study, corrects F58): the confirmed HH/HL swing-structure gate ROUGHLY DOUBLES expectancy by selecting trending days (RTH NQ +0.16->+0.29, QQQ +0.26->+0.46, SPY +0.37->+0.56 R, CIlo up on all) and NO fast price-derived read replaces it — VWAP-side, EMA-slope, 2-bar momentum AND a rolling price-array regression slope ALL land on plain-ORB (they show where price WAS, not where it's GOING). The edge costs latency: structure confirms ~50-60 min after the OR. Tune the speed/edge tradeoff with the pivot lookback below (lb=3 keeps NQ's full edge with more/earlier entries). 'Off' trades every breakout (OR-mid + dir-seq still gate direction) but gives up ~0.13-0.20R. The DIR·fast dashboard row is the early AWARENESS read; THIS gate is the confirmed EDGE.")
+             tooltip="DEFAULT OFF — STRUCTURE IS A GRADE, NOT A GATE (user 2026-07-03, backed by the latency data): the HH/HL swing-structure LAGS — when OR+VWAP+SLOPE already agree, 5m structure is aligned only ~50-55% of the time and takes a MEDIAN 40-50 MIN (p75 200) to catch up, so a structure GATE MISSES clean breakouts (price runs past the OR before structure confirms). Entry now fires on the breakout + OR-mid bias + dir-sequence (validated +0.164R NQ, PASS); STRUCTURE drives the GRADE (A+ when st_dir aligned + wide OR) and size, it no longer BLOCKS. Cost vs the structure gate: ~-0.10R per-trade on average, but it CATCHES the breakouts the gate skipped. The 1m st_dir feed cuts the lag to ~1-2 min so the grade upgrades near the break. Turn back ON (Auto) to REQUIRE confirmed structure (higher per-trade, fewer/later entries).")
 struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
 auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="FASTER STRUCTURE (2026-07 fast-direction study): NQ/futures keep the FULL structure edge at lb=3 (pivots confirm 2 bars sooner = MORE + EARLIER breakout entries, same exp on NQ); QQQ needs lb=5 (lb=3 fails its gauntlet); SPY ~tied. ON = futures 3 / equity 5. OFF = the manual value above for every instrument.")
 int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
@@ -119,13 +143,16 @@ exit_mode = input.string("Full → cap @ TP2 (struct stop)", "Exit", group="Risk
             options=["Trail (ATR chandelier)", "Scale 50% @ TP1 → BE → TP2", "Full → cap @ TP2 (struct stop)"],
             tooltip="DEFAULT = 'Full → cap @ TP2' (F34b graduate): full position to the TP2 R-cap (default 4R) on the structure stop — no scale, no trail. Honest PF (3-6) + ~2× the trail's median $/trade, best for steady eval accumulation. F50/F51 (2026-06-22): the ATR-chandelier TRAIL's headline R/PF is TAIL-INFLATED (a few low-ATR trades blow up the R-denominator; F27b made it default on exactly that unreliable R-comparison) → demoted to a toggle for momentum-riding, no longer the default. 'Scale' = bank 50% @ TP1, runner BE→TP2.")
 trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
-tp1_rr      = input.float(1.0, "TP1 R (scale mode)", group="Risk plan", step=0.25)
+tp1_rr      = input.float(1.5, "TP1 R (scale mode)", group="Risk plan", step=0.25,
+            tooltip="F64 (2026-06-29): 1.5R is the BEST scale point (beats 1.0R) — medMFE ≈ 1R, so TP1 at 1.5R banks the high-probability move; 4R is the fat-tail cap. Matches the BOT (T1_RR=1.5).")
 tp2_rr      = input.float(4.0, "TP2 R (scale mode)", group="Risk plan", step=0.25)
 show_plan   = input.bool(true, "Show stop / target lines", group="Display")
 show_gated  = input.bool(true, "Show entry levels while the gate is BLOCKED (dimmed)", group="Display",
               tooltip="The bright yellow entry line only shows when a touch would FIRE (trend + regime gates clear). This adds a dim gray line at the same level while a gate blocks it — so you always see where the trigger sits; the dashboard says why it's blocked.")
 show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
 show_dash = input.bool(true, "Show dashboard", group="Display")
+show_vwap = input.bool(true, "Show session VWAP on the chart", group="Display",
+            tooltip="The session VWAP line (user 2026-07-05) — the Layer-1 arming reference (OR-mid + VWAP) and the 'VWAP' pullback-retest target. Colored by price side: above = lime, below = red.")
 risk_dlr  = input.float(250.0, "Risk $ per trade (size readout)", group="Display", step=25,
             tooltip="ENTRY rows show suggested contracts = risk$ / (stop distance × the ticker's point value). Auto-adjusts per SECURITY via syminfo.pointvalue (NQ vs MNQ vs SPY vs GC). Display only — the AUTO strategy places the real risk-sized order.")
 // ───────────────────────── PROP EVAL (signal-sim guardrails — the AUTO strategy is the real enforcer) ─────────────────────────
@@ -166,7 +193,9 @@ int cut_et = (cut_hhmm / 100) * 60 + (cut_hhmm % 100)
 int trade_end = (cut_et - 1080 + 1440) % 1440
 bool new_day = ta.change(time("D")) != 0                        // CME futures: rolls at 18:00 ET = trade-day start
 int td_dow = dayofweek(time + 6 * 60 * 60 * 1000, sess_tz)      // weekday of the TRADE-day (Sun-eve = Mon)
-bool wkday = td_dow != dayofweek.saturday and td_dow != dayofweek.sunday
+// CRYPTO trades weekends (user screenshot 2026-07-05: BTCUSD sat/sun showed 'RANGE - weekend'
+// and could never ARM) — the weekend block only applies to non-crypto instruments.
+bool wkday = syminfo.type == "crypto" or (td_dow != dayofweek.saturday and td_dow != dayofweek.sunday)
 int tf_s = timeframe.in_seconds()
 float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
 
@@ -307,6 +336,15 @@ f_struct_1m() =>
 bool use_fast_dir = fast_dir and tf_s > 60                        // a 1m chart already reads at 1m speed
 int   st_dir    = use_fast_dir ? st_1m : st_state                 // DIRECTION state (1m speed) — gates + DIR-fast
 float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S, 1m feed (12-min window) or chart TF
+// ENTRY STANDARD Layer 1 — MARKET CONTEXT pair (DIR-FAST A, 2026-07-05):
+//   standard  = OR-mid (watch machine) + VWAP side — structure/slope grade instead of gating
+//   fallback B = Structure (1m-fed) + VWAP side (the previous standard)
+bool eff_ctx = ctx_source != "Off"
+bool is_auto_ctx = str.startswith(ctx_source, "Auto")
+bool use_dirB = ctx_source == "Structure + VWAP (fallback B)" or
+     (is_auto_ctx and syminfo.type != "futures" and syminfo.type != "crypto")
+bool ctx_up = use_dirB ? (st_dir == 1 and close > vwap_c) : close > vwap_c
+bool ctx_dn = use_dirB ? (st_dir == 2 and close < vwap_c) : close < vwap_c
 
 // ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
 bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
@@ -396,10 +434,25 @@ var int   n_s = 0
 // short are exact mirrors. Confirmed bars only — intrabar spikes cannot flip the state.
 var bool l_invalid = false
 var bool s_invalid = false
-var bool l_below_mid = false        // confirmed-close zone latch (WATCH): pending long below OR mid
+var bool l_below_mid = false        // confirmed-close zone latch: pending long below OR mid
 var bool s_above_mid = false        // pending short above OR mid
-var bool l_watch = false            // WATCH promotion (user spec 2026-07-03): confirmed FULL-BODY
-var bool s_watch = false            // close beyond OR mid toward the side — the stage before ARMED
+// CANONICAL WATCH MACHINE (entry standard 2026-07-04): a LATCHED watch per side — activated by a
+// confirmed DIRECTIONAL-BODY close beyond the OR mid, cancelled (+ cooldown) by a confirmed close
+// back across it; tracks stale age (RANGE rule) and the pullback extension (don't chase).
+var bool l_watch = false            // WATCH active (Layer 3: the stage between ARMED and FILL)
+var bool s_watch = false
+var int  l_cd = 0                   // cooldown bars left after a watch cancel
+var int  s_cd = 0
+var int  l_wage = 0                 // bars spent in WATCH this cycle (stale/RANGE rule)
+var int  s_wage = 0
+var bool l_range = false            // stale watch -> RANGE (side stands down this cycle)
+var bool s_range = false
+var bool l_ext = false              // extended past the chase cap pre-fill -> PULLBACK (wait for retest)
+var bool s_ext = false
+var float l_ext_hi = na             // extension-impulse extreme (refinements: min-depth + impulse-mid target)
+var float s_ext_lo = na
+var int   l_pb_age = 0              // bars waiting for the retest (timeout rule)
+var int   s_pb_age = 0
 if reset_now
     Le := na
     Se := na
@@ -413,6 +466,18 @@ if reset_now
     s_above_mid := false
     l_watch := false
     s_watch := false
+    l_cd := 0
+    s_cd := 0
+    l_wage := 0
+    s_wage := 0
+    l_range := false
+    s_range := false
+    l_ext := false
+    s_ext := false
+    l_ext_hi := na
+    s_ext_lo := na
+    l_pb_age := 0
+    s_pb_age := 0
 if or_set and na(Le) and not na(or_high) and not na(or_low)
     Le := or_high + brk_buf                                     // breakout entry levels (frozen at OR close)
     Se := or_low  - brk_buf
@@ -460,13 +525,79 @@ bool ev_throttle = eval_on and ((eval_cap > 0 and ev_day_n >= eval_cap) or (eval
 
 // ───────────────────────── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ─────────────────────────
 if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
-    // zone latches (soft WATCH): which side of OR mid did this bar CLOSE on?
+    // zone latches: which side of OR mid did this bar CLOSE on? (display/why-strings)
     l_below_mid := close < or_mid
     s_above_mid := close > or_mid
-    // WATCH promotion latches: price PASSED the mid toward the side with clear direction (full-
-    // body confirmed close). The side shows WATCH before it can be ARMED; exact long/short mirror.
-    l_watch := close > or_mid and close > open
-    s_watch := close < or_mid and close < open
+    // ── canonical WATCH machine (Layer 3, mirrored long/short — confirmed closes only) ──
+    if l_cd > 0
+        l_cd -= 1
+    if s_cd > 0
+        s_cd -= 1
+    if l_watch and close < or_mid                     // watch cancelled at the mid -> cooldown
+        l_watch := false
+        l_ext := false
+        l_range := false
+        l_cd := cooldown_n
+        l_ext_hi := na
+        l_pb_age := 0
+    else if not l_watch and l_cd == 0 and close > or_mid and close > open
+        l_watch := true                               // clean directional close beyond the mid
+        l_wage := 0
+    else if l_watch
+        l_wage += 1
+        if stale_n > 0 and l_wage > stale_n and not in_long
+            l_range := true                           // stale setup -> RANGE (no trade this cycle)
+        if l_ext                                      // refinements: track impulse + timeout
+            l_ext_hi := na(l_ext_hi) ? high : math.max(l_ext_hi, high)
+            l_pb_age += 1
+            if pb_timeout > 0 and l_pb_age > pb_timeout
+                l_range := true                       // retest never came — stale this cycle
+                l_ext := false
+                l_ext_hi := na
+                l_pb_age := 0
+        else if not in_long and not traded_l and chase_max > 0 and retest_atr > 0 and not na(Le) and high > Le + atr14 * chase_max
+            l_ext := true                             // over-extended pre-fill -> PULLBACK (don't chase)
+            l_ext_hi := high
+            l_pb_age := 0
+    // retest: mode-aware target (edge / impulse midpoint / VWAP) + min retrace from the extreme
+    float l_tgt = retest_target == "Impulse midpoint" and not na(l_ext_hi) and not na(Le) ? (Le + l_ext_hi) / 2.0 : retest_target == "VWAP" ? vwap_c : Le
+    bool  l_deep = min_pb_atr <= 0 or (not na(l_ext_hi) and (l_ext_hi - low) >= atr14 * min_pb_atr)
+    if l_ext and l_deep and not na(l_tgt) and low <= l_tgt + atr14 * retest_atr
+        l_ext := false                                // valid retest -> clean re-check
+        l_ext_hi := na
+        l_pb_age := 0
+    if s_watch and close > or_mid
+        s_watch := false
+        s_ext := false
+        s_range := false
+        s_cd := cooldown_n
+        s_ext_lo := na
+        s_pb_age := 0
+    else if not s_watch and s_cd == 0 and close < or_mid and close < open
+        s_watch := true
+        s_wage := 0
+    else if s_watch
+        s_wage += 1
+        if stale_n > 0 and s_wage > stale_n and not in_short
+            s_range := true
+        if s_ext
+            s_ext_lo := na(s_ext_lo) ? low : math.min(s_ext_lo, low)
+            s_pb_age += 1
+            if pb_timeout > 0 and s_pb_age > pb_timeout
+                s_range := true
+                s_ext := false
+                s_ext_lo := na
+                s_pb_age := 0
+        else if not in_short and not traded_s and chase_max > 0 and retest_atr > 0 and not na(Se) and low < Se - atr14 * chase_max
+            s_ext := true
+            s_ext_lo := low
+            s_pb_age := 0
+    float s_tgt = retest_target == "Impulse midpoint" and not na(s_ext_lo) and not na(Se) ? (Se + s_ext_lo) / 2.0 : retest_target == "VWAP" ? vwap_c : Se
+    bool  s_deep = min_pb_atr <= 0 or (not na(s_ext_lo) and (high - s_ext_lo) >= atr14 * min_pb_atr)
+    if s_ext and s_deep and not na(s_tgt) and high >= s_tgt - atr14 * retest_atr
+        s_ext := false
+        s_ext_lo := na
+        s_pb_age := 0
     // LONG hard-invalidate: confirmed close below OR LOW, or price tagged the proposed long stop pre-entry
     if not in_long and (close < or_low or (not na(Ls) and low <= Ls))
         l_invalid := true
@@ -484,8 +615,11 @@ if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
 bool stale_gap = is_auto and o_now < 60
 bool past_delay = entry_delay == 0 or (not na(or_close_o) and o_now >= or_close_o + entry_delay)   // F38/F39 skip-opening-hour
 bool window = or_set and wkday and past_delay and o_now < trade_end and not na(Le) and not stale_gap and not ev_halt and not ev_throttle
-bool gate_long  = long_on  and eff_up   and macro_allow and macro_long_ok  and local_ok and (not ob_on or in_bull_ob[1]) and (not ormid_bias or or_bull)          // +OR-mid bias
-bool gate_short = short_on and eff_down  and macro_allow and macro_short_ok and local_ok and (not ob_on or in_bear_ob[1]) and (not ormid_bias or or_bull == false)
+// FROZEN day bias applies only on the STRUCT+VWAP (B) pair — the LIVE mid (watch machine)
+// supersedes it when MID+VWAP arms (user screenshots: 'OR-mid: short day' blocked an aligned long)
+bool eff_bias = ormid_bias and use_dirB
+bool gate_long  = long_on  and eff_up   and (not eff_ctx or ctx_up) and macro_allow and macro_long_ok  and local_ok and (not ob_on or in_bull_ob[1]) and (not eff_bias or or_bull)          // +Layer-1 context (auto per instrument) +OR-mid bias (B only)
+bool gate_short = short_on and eff_down  and (not eff_ctx or ctx_dn) and macro_allow and macro_short_ok and local_ok and (not ob_on or in_bear_ob[1]) and (not eff_bias or or_bull == false)
 if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
     traded_l := false
 if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
@@ -496,9 +630,12 @@ bool conf_close = brk_confirm == "Candle close beyond level (full body)"        
 bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)   // decisive candle, not a doji / long-wick rejection
 bool qual_l = close >= Le and close > open and body_strong                        // a strong full-body BULLISH close above OR high (the breakout candle)
 bool qual_s = close <= Se and close < open and body_strong
-// brk fires on the breakout candle (wait_ft off) OR on the NEXT candle that CONTINUES the trend (wait_ft on, F59c)
-bool brk_l = conf_close ? (wait_ft ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le
-bool brk_s = conf_close ? (wait_ft ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
+// INSTANT FILL WHEN ALIGNED (user 2026-07-05): the arming pair agrees AND price is beyond the
+// mid -> the breakout candle ITSELF fills; the F59c continuation wait applies only unaligned.
+bool alignedA_l = ctx_up and or_set and not na(or_mid) and close > or_mid
+bool alignedA_s = ctx_dn and or_set and not na(or_mid) and close < or_mid
+bool brk_l = conf_close ? ((wait_ft and not (instant_fill and alignedA_l)) ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le
+bool brk_s = conf_close ? ((wait_ft and not (instant_fill and alignedA_s)) ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
 // F61 direction sequence: only fire while price is pushing the trade way (101->102->103 up / mirror down)
 bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
 bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
@@ -508,8 +645,14 @@ bool volexp_ok = not volexp_filter or vol_exp                                   
 // that never confirms). Close-confirm signals now latch only on the CONFIRMED bar — identical on
 // history, honest live. Wick/touch mode keeps its intended intrabar trigger.
 bool cc_bar_ok = not conf_close or barstate.isconfirmed
-bool sig_l = window and not traded_l and not l_invalid and gate_long  and brk_l and near_l and seq_l and volexp_ok and cc_bar_ok
-bool sig_s = window and not traded_s and not s_invalid and gate_short and brk_s and near_s and seq_s and volexp_ok and cc_bar_ok
+// ENTRY STANDARD Layer 3 gate: fire only while the side's WATCH is live — active, not cooling down,
+// not stale (RANGE) and not extended (PULLBACK: wait for the retest near the level).
+bool watch_ok_l = not watch_gate or (l_watch and l_cd == 0 and not l_range and not l_ext)
+bool watch_ok_s = not watch_gate or (s_watch and s_cd == 0 and not s_range and not s_ext)
+// relative-volume confirmation on the trigger bar (deep-research refinement; default OFF)
+bool vcx_ok = vol_confirm <= 0 or (not na(ob_vMA) and ob_vMA > 0 and volume >= ob_vMA * vol_confirm)
+bool sig_l = window and not traded_l and not l_invalid and gate_long  and brk_l and near_l and seq_l and volexp_ok and watch_ok_l and vcx_ok and cc_bar_ok
+bool sig_s = window and not traded_s and not s_invalid and gate_short and brk_s and near_s and seq_s and volexp_ok and watch_ok_s and vcx_ok and cc_bar_ok
 bool long_fire  = sig_l and cap_long_ok
 bool short_fire = sig_s and cap_short_ok
 bool long_skip  = sig_l and not cap_long_ok
@@ -678,23 +821,35 @@ bool l_live = (window and not traded_l and not l_invalid and gate_long) or in_lo
 bool s_live = (window and not traded_s and not s_invalid and gate_short) or in_short
 float l_stop_now = in_long ? lstop : Ls                                // the stop to SHOW (planned while armed, working once live)
 float s_stop_now = in_short ? sstop : Ss
-// flat-side state refresh (final states persist for the session once the side has traded)
+// flat-side state refresh — CANONICAL ordering (entry standard 2026-07-04):
+//   WAIT (context off) -> ARMED (Structure+VWAP aligned) -> WATCH (confirmed close beyond OR mid)
+//   -> FILL, with COOLDOWN (watch cancelled at the mid), PULLBACK (extended, wait for the retest),
+//   RANGE (stale watch) and LOCKED (max entries used). Final states persist once the side traded.
 bool armL = window and not traded_l and not l_invalid and gate_long and cap_long_ok
 bool armS = window and not traded_s and not s_invalid and gate_short and cap_short_ok
 if not in_long and not traded_l
-    stL := l_invalid ? "INVALID" : armL ? (l_below_mid ? "WATCH" : "ARMED") : (l_watch ? "WATCH" : "WAIT")
+    stL := l_invalid ? "INVALID" : l_cd > 0 ? "COOLDOWN" : l_range ? "RANGE" : (armL and l_ext) ? "PULLBACK" : (armL and l_watch) ? "WATCH" : armL ? "ARMED" : "WAIT"
 if not in_short and not traded_s
-    stS := s_invalid ? "INVALID" : armS ? (s_above_mid ? "WATCH" : "ARMED") : (s_watch ? "WATCH" : "WAIT")
-// state colors (user legend): WAIT gray · WATCH orange · ARMED yellow · FILLED blue · NEAR TP1 light green ·
-// TP1 HIT green · TP2 HIT dark green · STOP HIT red · INVALID dark red (structure broke against the pending side)
+    stS := s_invalid ? "INVALID" : s_cd > 0 ? "COOLDOWN" : s_range ? "RANGE" : (armS and s_ext) ? "PULLBACK" : (armS and s_watch) ? "WATCH" : armS ? "ARMED" : "WAIT"
+if traded_l and not in_long and n_l >= max_entries
+    stL := stL == "STOP HIT" or stL == "TP1 HIT" or stL == "TP2 HIT" ? stL : "LOCKED"
+if traded_s and not in_short and n_s >= max_entries
+    stS := stS == "STOP HIT" or stS == "TP1 HIT" or stS == "TP2 HIT" ? stS : "LOCKED"
+// state colors (user legend): WAIT gray · ARMED yellow · WATCH orange · PULLBACK purple · COOLDOWN silver ·
+// RANGE dim gray · LOCKED dark gray · FILLED blue · NEAR TP1 light green · TP1 HIT green · TP2 HIT dark green ·
+// STOP HIT red · INVALID dark red (structure broke against the pending side)
 f_stc(s) => s == "WAIT" ? color.gray : s == "WATCH" ? color.orange : s == "INVALID" ? color.rgb(139, 0, 0) :
      s == "ARMED" ? color.yellow : s == "FILLED" ? color.rgb(41, 121, 255) :
+     s == "PULLBACK" ? color.rgb(187, 134, 252) : s == "COOLDOWN" ? color.silver :
+     s == "RANGE" ? color.new(color.gray, 30) : s == "LOCKED" ? color.rgb(90, 90, 90) :
      s == "NEAR TP1" ? color.rgb(144, 238, 144) : s == "TP1 HIT" ? color.green : s == "TP2 HIT" ? color.rgb(0, 102, 0) : color.red
-// 2-D grade on the two graduated additive conditioners: HH/HL structure (gateok) + vol-expansion (volexp = wide OR).
-// A+ = aligned AND wide-OR (the best cohort); A = one of the two; B = breakout but neither (the dead cohort); C = cap-blocked.
-f_grade(trendok, gateok, capok, volexp) => not trendok ? "—" : not capok ? "C" : gateok and volexp ? "A+" : gateok or volexp ? "A" : "B"
+// GRADE LADDER (user 2026-07-05 v2): ORMID arms; the extras GRADE cumulatively —
+// +VWAP = B · +STRUCT = A · +SLOPE = A+ (all three aligned). No VWAP / cap-blocked = C.
+f_grade(capok, vwapok, structok, slopeok) => not capok ? "C" :
+     vwapok and structok and slopeok ? "A+" : vwapok and structok ? "A" : vwapok ? "B" : "C"
 
 // ───────────────────────── PLOTS ─────────────────────────
+plot(show_vwap ? vwap_c : na, "Session VWAP", color=close >= vwap_c ? color.new(color.lime, 35) : color.new(color.red, 35), style=plot.style_linebr, linewidth=1)
 plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
 plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
 // OR-mid (equilibrium / premium-discount line) — the OR-mid bias axis, colored by which half the OR closed in
@@ -781,8 +936,10 @@ if barstate.islast and show_dash
     bool   dispDn = gate_off ? (ormid_bias ? not or_bull : st_dir == 2) : eff_down
     string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_dir == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
     string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_dir == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
-    string grL = (gate_long or in_long) ? f_grade(eff_up, gate_long, cap_long_ok, vol_exp) : "—"
-    string grS = (gate_short or in_short) ? f_grade(eff_down, gate_short, cap_short_ok, vol_exp) : "—"
+    // STRUCTURE-AS-GRADE (user 2026-07-03): the entry no longer requires structure; st_dir alignment now drives
+    // the GRADE (A+ = aligned + wide OR) — the structure upgrade, not a veto. Uses st_dir (1m-fed when fast).
+    string grL = (gate_long or in_long) ? f_grade(cap_long_ok, close > vwap_c, st_dir == 1, slope_dir >= 0.10) : "—"
+    string grS = (gate_short or in_short) ? f_grade(cap_short_ok, close < vwap_c, st_dir == 2, slope_dir <= -0.10) : "—"
     string etagL = in_long ? "FILLED" : traded_l ? "DONE" : armL ? "ARMED" : "WAIT"
     string etagS = in_short ? "FILLED" : traded_s ? "DONE" : armS ? "ARMED" : "WAIT"
     color etcL = etagL == "FILLED" ? color.rgb(41, 121, 255) : etagL == "ARMED" ? color.yellow : color.gray
@@ -791,8 +948,8 @@ if barstate.islast and show_dash
     string rr_txt = is_trail ? "1R stop · trail " + str.tostring(trail_atr, "#.#") + "ATR" : is_full ? "FULL → 1:" + str.tostring(tp2_rr, "#.#") + " cap" : "1 : " + str.tostring(tp2_rr, "#.#")
     string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE block" : "clear ✓"
     // per-side "why not firing" (first failing gate) — makes a WAIT explainable (esp. the OR-mid / narrow-OR blocks)
-    string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (ormid_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_below_mid ? "below OR mid — needs fresh break" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
-    string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (ormid_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_above_mid ? "above OR mid — needs fresh break" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
+    string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : (eff_ctx and not ctx_up) ? "context: struct+VWAP not aligned" : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (eff_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_cd > 0 ? "cooldown " + str.tostring(l_cd) + " bars (mid lost)" : l_range ? "range — stale watch, no trade" : l_ext ? "pullback — retest " + str.tostring(Le, format.mintick) + " first" : (watch_gate and not l_watch) ? "no watch — needs close above OR mid" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
+    string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : (eff_ctx and not ctx_dn) ? "context: struct+VWAP not aligned" : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (eff_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_cd > 0 ? "cooldown " + str.tostring(s_cd) + " bars (mid lost)" : s_range ? "range — stale watch, no trade" : s_ext ? "pullback — retest " + str.tostring(Se, format.mintick) + " first" : (watch_gate and not s_watch) ? "no watch — needs close below OR mid" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
     // FAST DIRECTION read (the user's core ask: how fast does the system know which way?) — 0-2 bar lag reads vs the slow structure
     // STALENESS FIX (user 2026-07): OR arrow = where price is NOW vs the OR (live zone), not the
     // frozen 10:00 day bias (which kept showing ▲ with price under the OR low). Slope + Struct come
@@ -803,6 +960,10 @@ if barstate.islast and show_dash
     int dir_st  = st_dir == 1 ? 1 : st_dir == 2 ? -1 : 0
     int dir_fast = dir_or + dir_vw + dir_slp
     string dirV = dir_fast >= 2 ? "▲ UP" : dir_fast <= -2 ? "▼ DOWN" : "◆ mixed"
+    // DIR-FAST A (the new standard read): OR-MID side + VWAP side only — what ARMS the side.
+    int dir_mid = not or_set ? 0 : close > or_mid ? 1 : -1
+    int dirA = dir_mid + dir_vw
+    string dirAtxt = dirA >= 2 ? "▲ UP" : dirA <= -2 ? "▼ DOWN" : "◆ mixed"
     table.cell(dash,0,0,"STACK " + syminfo.ticker + " " + timeframe.period, text_color=color.yellow, text_size=size.small)
     table.cell(dash,1,0,"LONG",  text_color=color.lime, text_size=size.small)
     table.cell(dash,2,0,"SHORT", text_color=color.red,  text_size=size.small)
@@ -828,8 +989,10 @@ if barstate.islast and show_dash
     table.cell(dash,1,7, rr_txt, text_color=color.silver, text_size=size.tiny)
     table.cell(dash,2,7, rr_txt, text_color=color.silver, text_size=size.tiny)
     table.cell(dash,0,8,"STATE", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,8, stL + ((stL == "WAIT" or stL == "WATCH" or stL == "INVALID") and whyL != "" ? " · " + whyL : ""), text_color=f_stc(stL), text_size=size.tiny)
-    table.cell(dash,2,8, stS + ((stS == "WAIT" or stS == "WATCH" or stS == "INVALID") and whyS != "" ? " · " + whyS : ""), text_color=f_stc(stS), text_size=size.tiny)
+    bool whyLon = stL == "WAIT" or stL == "ARMED" or stL == "WATCH" or stL == "PULLBACK" or stL == "COOLDOWN" or stL == "RANGE" or stL == "INVALID"
+    bool whySon = stS == "WAIT" or stS == "ARMED" or stS == "WATCH" or stS == "PULLBACK" or stS == "COOLDOWN" or stS == "RANGE" or stS == "INVALID"
+    table.cell(dash,1,8, stL + (whyLon and whyL != "" ? " · " + whyL : ""), text_color=f_stc(stL), text_size=size.tiny)
+    table.cell(dash,2,8, stS + (whySon and whyS != "" ? " · " + whyS : ""), text_color=f_stc(stS), text_size=size.tiny)
     table.cell(dash,0,9,"Session", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,9, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
     table.cell(dash,2,9, or_set ? "OR " + str.tostring(or_low, "#.#") + "/" + str.tostring(or_high, "#.#") + (ormid_bias ? (or_bull ? " · long½" : " · short½") : "") : "OR forming…", text_color=or_set and ormid_bias ? (or_bull ? color.lime : color.red) : color.aqua, text_size=size.tiny)
@@ -848,5 +1011,5 @@ if barstate.islast and show_dash
     table.cell(dash,1,12, evtxt, text_color=not eval_on ? color.gray : ev_passed ? color.lime : ev_halt ? color.red : ev_throttle ? color.orange : color.silver, text_size=size.tiny)
     table.cell(dash,2,12, eval_on ? "1R $" + str.tostring(eval_risk, "#") : "", text_color=color.gray, text_size=size.tiny)
     table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,13, dirV + " (" + str.tostring(dir_fast) + ")", text_color=dir_fast >= 2 ? color.lime : dir_fast <= -2 ? color.red : color.gray, text_size=size.tiny)
-    table.cell(dash,2,13, "OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " S=" + str.tostring(slope_dir, "#.##") + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m feed)" : " (edge)") + (dir_or != 0 and dir_or == dir_slp and dir_or == dir_st ? " ALIGNED" : ""), text_color=(dir_or != 0 and dir_or == dir_slp and dir_or == dir_st) ? color.lime : color.aqua, text_size=size.tiny)
+    table.cell(dash,1,13, "A: " + dirAtxt + " MID" + f_ar(dir_mid) + "+VWAP" + f_ar(dir_vw) + (use_dirB ? "" : " ← ARMS"), text_color=dirA >= 2 ? color.lime : dirA <= -2 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(dash,2,13, "B: " + dirV + " (" + str.tostring(dir_fast) + ") · OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " S=" + str.tostring(slope_dir, "#.##") + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m)" : "") + (use_dirB ? " ← ARMS" : " (grade)") + (dir_or != 0 and dir_or == dir_slp and dir_or == dir_st ? " ALIGNED" : ""), text_color=(dir_or != 0 and dir_or == dir_slp and dir_or == dir_st) ? color.lime : color.aqua, text_size=size.tiny)

@@ -103,6 +103,17 @@ def _paper_autotrade():
     only (Alpaca can't trade futures). Dedup'd. PAPER only — for study/data collection."""
     if not _state.get("paper_autotrade") or not settings.alpaca_paper:
         return
+    # APPROVAL GATE (AITP): the strategy version must carry a MANUAL 'paper' approval to trade
+    # paper. Re-checked every cycle so a revoke takes effect immediately.
+    try:
+        from bot.approval import paper_approved
+        from bot.strategy.orb_candidates import STRATEGY_VERSION
+        if not paper_approved(STRATEGY_VERSION):
+            _state["paper_autotrade"] = False
+            _paper["log"].append({"ts": _now(), "error": f"paper approval missing for {STRATEGY_VERSION} — autotrade disarmed"})
+            return
+    except Exception:
+        return
     from bot.contracts import OrderRequest, OrderType, Side, TimeInForce
     from bot.live import GRADE_MULT
     try:
@@ -167,7 +178,12 @@ def _autotrack_acceptable():
             record_decision({"candidate_id": key, "symbol": s["symbol"], "side": s["side"],
                              "family": s.get("family"), "session": s.get("session"), "entry": s["entry"],
                              "stop": s["stop"], "tp1": s.get("tp1"), "tp2": s.get("tp2"),
-                             "grade": s.get("grade"), "generated_at": c.get("generated_at")}, taken=True, auto=True)
+                             "grade": s.get("grade"), "generated_at": c.get("generated_at"),
+                             # POST-TRADE LEARNING QUEUE (AITP §18): the PIT snapshot rides with the
+                             # decision so resolved outcomes become training rows (bot.ml.live_labels)
+                             "pit_features": s.get("pit_features"),
+                             "slope_grade": s.get("slope_grade"),
+                             "ai_decision": s.get("ai_decision")}, taken=True, auto=True)
         except Exception:
             pass
 
@@ -309,16 +325,28 @@ def datasources(probe: int = 0):
 def _startup():
     if os.environ.get("BOT_AUTOSCAN", "1") != "0":
         _threading.Thread(target=_scan_loop, daemon=True).start()
+    # AUTO-ARM continuous training on boot (opt-in): set BOT_CONT_TRAINING=1 (+ optional
+    # BOT_CONT_INTERVAL_MIN). Pairs with run_server.bat's --reload so new code always runs.
+    if os.environ.get("BOT_CONT_TRAINING", "0") == "1" and not _cont["on"]:
+        _cont["interval_min"] = max(30, int(os.environ.get("BOT_CONT_INTERVAL_MIN", "360")))
+        _cont["on"] = True
+        _threading.Thread(target=_cont_loop, daemon=True).start()
 
 
 @app.get("/api/health")
 def health():
     broker = "n/a"
+    try:
+        from bot.strategy.orb_candidates import STRATEGY_VERSION as _sv
+    except Exception:
+        _sv = "?"
     return {"mode": _state["mode"], "kill_switch": _state["kill_switch"],
             "live_allowed": settings.live_allowed, "alpaca_paper": settings.alpaca_paper,
             "source_healthy": True, "broker": broker, "healthy": not _state["kill_switch"],
             "uptime_sec": int(_time.time() - _START), "scanning": _latest["scanning"],
-            "paper_autotrade": _state.get("paper_autotrade", False)}
+            "paper_autotrade": _state.get("paper_autotrade", False),
+            "strategy_version": _sv,           # stale-server tell: compare with the CHANGELOG
+            "continuous_training": _cont["on"]}
 
 
 @app.get("/api/contract")
@@ -538,6 +566,8 @@ def kill(on: bool = True, x_api_token: str | None = Header(default=None)):
     if not on:
         auth(x_api_token)
     _state["kill_switch"] = bool(on)        # consulted by the orchestrator before any submit
+    from bot.audit import log as _audit
+    _audit("kill_switch", on=bool(on))
     return {"kill_switch": _state["kill_switch"]}
 
 
@@ -545,10 +575,19 @@ def kill(on: bool = True, x_api_token: str | None = Header(default=None)):
 def paper_autotrade_toggle(on: int = 0, _=Depends(auth)):
     """STUDY toggle: when ON, the bot auto-places PAPER bracket orders on Alpaca for A+/A equity
     signals (grade-sized). PAPER ACCOUNT ONLY (hardcoded paper=True) — it can NEVER place a live trade.
-    Requires Alpaca keys + market hours. Data is for study/comparison vs the backtest."""
+    Requires Alpaca keys + market hours + the AITP 'paper' approval for the current strategy version."""
     if on and not settings.alpaca_paper:
         return {"error": "Alpaca is not in paper mode (set ALPACA_PAPER=true + keys)", "paper_autotrade": False}
+    if on:
+        from bot.approval import paper_approved
+        from bot.strategy.orb_candidates import STRATEGY_VERSION
+        if not paper_approved(STRATEGY_VERSION):
+            return {"error": f"BLOCKED: strategy {STRATEGY_VERSION} has no 'paper' approval — "
+                             f"approve research → replay → paper on /training first",
+                    "paper_autotrade": False}
     _state["paper_autotrade"] = bool(on)
+    from bot.audit import log as _audit
+    _audit("paper_autotrade", on=bool(on))
     return {"paper_autotrade": _state["paper_autotrade"], "placed": len(_paper["placed"])}
 
 
@@ -561,11 +600,42 @@ def paper_log():
 
 @app.post("/api/control/mode")
 def set_mode(mode: str, _=Depends(auth)):
-    if mode == "live" and not settings.live_allowed:
-        return {"error": "live blocked: needs LIVE_APPROVED.lock", "mode": _state["mode"]}
+    if mode == "live":
+        # DOUBLE GATE (AITP phase 8): the readiness lock file AND the approval ladder's 'live'
+        # stage — either missing blocks live. Paper results must earn this stage first.
+        if not settings.live_allowed:
+            return {"error": "live blocked: needs LIVE_APPROVED.lock", "mode": _state["mode"]}
+        from bot.approval import status as _appr_status
+        from bot.strategy.orb_candidates import STRATEGY_VERSION
+        if not _appr_status(STRATEGY_VERSION)["stages"].get("live"):
+            return {"error": f"live blocked: strategy {STRATEGY_VERSION} has no 'live' approval "
+                             f"(earn it with a green paper scorecard first)", "mode": _state["mode"]}
     _state["mode"] = mode
     _broker_cache.clear()                       # rebuild broker for the new mode
+    from bot.audit import log as _audit
+    _audit("mode_change", mode=mode)
     return {"mode": _state["mode"]}
+
+
+@app.get("/api/audit")
+def audit_tail(n: int = 60, event: str | None = None):
+    """Unified audit trail (AITP §8.10) — newest-first governance/state events."""
+    from bot.audit import tail
+    return {"records": tail(min(n, 500), event)}
+
+
+@app.get("/api/strategy/modules")
+def strategy_modules(status: str | None = None):
+    """The AITP strategy-module registry (asset class x style, full module contract)."""
+    from bot.strategy.modules import modules
+    return {"modules": modules(status)}
+
+
+@app.get("/api/training/live_labels")
+def training_live_labels():
+    """Post-trade learning queue status: resolved live outcomes -> training rows."""
+    from bot.ml.live_labels import summary
+    return summary()
 
 
 # ── order placement (UI), still routed through risk gate + kill switch + mode gate ──
@@ -800,6 +870,441 @@ async def tape(ws: WebSocket):
             await asyncio.sleep(2)
     except WebSocketDisconnect:
         return
+
+
+# ── ML/NN TRAINING DASHBOARD (offline research visualization — /training) ─────────────────────
+# Read-mostly endpoints over the saved training reports/registry/A-B results + one runner that
+# launches a training subprocess (research tooling; nothing here places trades).
+import subprocess as _subprocess
+import sys as _sys
+
+_train_state = {"proc": None, "kind": None, "sym": None, "started": None, "rc": None, "log": []}
+
+
+def _train_reader(proc):
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            if not line:
+                break
+            _train_state["log"].append(line.rstrip()[:300])
+            _train_state["log"] = _train_state["log"][-80:]
+    finally:
+        _train_state["rc"] = proc.wait()
+        _train_state["proc"] = None
+
+
+import re as _re
+
+
+def _safe_args(args: str) -> list[str]:
+    """Whitelist-sanitize extra CLI tokens from the dashboard (params like --tf=15m, --retest=0.25)."""
+    out = []
+    for tok in (args or "").split():
+        if _re.fullmatch(r"[A-Za-z0-9@._=\-]+", tok):
+            out.append(tok)
+    return out
+
+
+def _train_cmds(kind: str, sym: str, promote: bool = True, extra: list[str] | None = None):
+    from bot.config import BOT_ROOT
+    root = BOT_ROOT.parent
+    flag = ([] if promote else ["--no-promote"]) + (extra or [])
+    cmds = {"dataset": ([_sys.executable, "-m", "bot.ml.dataset", sym] + (extra or []), BOT_ROOT),
+            "rejects": ([_sys.executable, "-c",
+                         "import sys\n"
+                         "from bot.ml.dataset import build_rejects\n"
+                         "s = sys.argv[1]\n"
+                         "df = build_rejects(s)\n"
+                         "print(s, len(df), 'rejected setups',\n"
+                         "      dict(df['block_reason'].value_counts()) if len(df) else {})",
+                         sym], BOT_ROOT),
+            "ml": ([_sys.executable, "-m", "bot.ml.pipeline", sym] + flag, BOT_ROOT),
+            "nn": ([_sys.executable, "-m", "bot.nn.train", sym] + flag, BOT_ROOT),
+            "dataqa": ([_sys.executable, str(root / "pipeline" / "hs_data_qa.py"),
+                        "QQQ", "SPY", "NQ", "ES", "GC"], root),
+            "ab": ([_sys.executable, str(root / "research" / "ab_entry_standard.py"),
+                    "QQQ", "SPY", "NQ", "ES"], root),
+            "sweep": ([_sys.executable, str(root / "research" / "sweep_entry_params.py")]
+                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
+            "heads": ([_sys.executable, "-m", "bot.ml.heads", sym] + flag, BOT_ROOT),
+            "similarity": ([_sys.executable, "-m", "bot.nn.similarity", sym], BOT_ROOT),
+            "l2sync": ([_sys.executable, "-m", "bot.ml.l2_features", "sync", sym], BOT_ROOT),
+            "report": ([_sys.executable, str(root / "research" / "backtest_report.py")]
+                       + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
+            "parity": ([_sys.executable, str(root / "research" / "replay_parity.py")]
+                       + (["QQQ", "SPY"] if sym == "ALL" else [sym]), root),
+            "gauntlet": ([_sys.executable, str(root / "research" / "gauntlet.py"), sym]
+                         + (extra or []), root),
+            "threshold": ([_sys.executable, str(root / "research" / "threshold_study.py"), sym], root),
+            "pairs": ([_sys.executable, str(root / "research" / "dirfast_pairs.py")]
+                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root)}
+    return cmds.get(kind)
+
+
+@app.post("/api/training/run")
+def training_run(kind: str = "ml", sym: str = "QQQ", args: str = "", _=Depends(auth)):
+    """Launch one offline training/research job as a subprocess:
+    kind = dataset | rejects | ml | nn | heads | similarity | dataqa | ab | sweep | report |
+    parity | l2sync | gauntlet. `args` = sanitized extra CLI tokens (e.g. --tf=15m,
+    gauntlet params --ctx=1 --cooldown=0 ...). One at a time; watch /api/training/status."""
+    if _train_state["proc"] is not None:
+        return {"error": f"a {_train_state['kind']} run is already in progress", "running": True}
+    sym = sym.upper()
+    if not _re.fullmatch(r"[A-Z0-9@._\-]{1,12}", sym):     # sym feeds argv — whitelist it
+        return {"error": f"bad symbol '{sym}'"}
+    hit = _train_cmds(kind, sym, extra=_safe_args(args))
+    if hit is None:
+        return {"error": f"unknown kind {kind}",
+                "kinds": ["dataset", "rejects", "ml", "nn", "dataqa", "ab"]}
+    cmd, cwd = hit
+    proc = _subprocess.Popen(cmd, cwd=str(cwd), stdout=_subprocess.PIPE,
+                             stderr=_subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    _train_state.update(proc=proc, kind=kind, sym=sym.upper(), started=_now(), rc=None, log=[])
+    _threading.Thread(target=_train_reader, args=(proc,), daemon=True).start()
+    from bot.audit import log as _audit
+    _audit("training_run", kind=kind, sym=sym.upper(), by="dashboard")
+    return {"started": kind, "sym": sym.upper()}
+
+
+# ── CONTINUOUS TRAINING (AITP §19 — controlled, logged, validated; promotion stays MANUAL) ──
+# A background worker cycles dataset -> ML -> NN per symbol (subprocesses, sequential) on an
+# interval. Runs train CHALLENGERS with --no-promote: a gate-passing model is registered as
+# PENDING and waits for the user's Approve click on the Training Lab. Web-controllable.
+_cont = {"on": False, "interval_min": 360, "syms": ["QQQ", "SPY", "NQ", "ES", "ALL"],
+         "cycle": 0, "last_start": None, "last_end": None, "current": None, "history": []}
+
+
+def _cont_run(kind: str, sym: str) -> int:
+    hit = _train_cmds(kind, sym, promote=False)
+    if hit is None:
+        return -1
+    cmd, cwd = hit
+    _cont["current"] = f"{kind} {sym}"
+    p = _subprocess.run(cmd, cwd=str(cwd), stdout=_subprocess.PIPE, stderr=_subprocess.STDOUT,
+                        text=True, encoding="utf-8", errors="replace", timeout=3600)
+    tail = (p.stdout or "").strip().splitlines()[-3:]
+    _cont["history"].append({"ts": _now(), "job": f"{kind} {sym}", "rc": p.returncode,
+                             "tail": tail})
+    _cont["history"] = _cont["history"][-60:]
+    return p.returncode
+
+
+def _cont_loop():
+    while _cont["on"]:
+        _cont["last_start"] = _now()
+        _cont["cycle"] += 1
+        try:
+            for sym in list(_cont["syms"]):
+                if not _cont["on"]:
+                    break
+                if _train_state["proc"] is not None:      # never fight a manual run
+                    _time.sleep(30)
+                    continue
+                if sym != "ALL":
+                    _cont_run("dataset", sym)
+                _cont_run("ml", sym)
+                _cont_run("nn", sym)
+        except Exception as e:
+            _cont["history"].append({"ts": _now(), "job": "cycle", "rc": -1, "tail": [str(e)[:200]]})
+        _cont["last_end"] = _now()
+        _cont["current"] = None
+        for _ in range(int(_cont["interval_min"] * 60 / 5)):
+            if not _cont["on"]:
+                break
+            _time.sleep(5)
+
+
+@app.post("/api/training/continuous")
+def training_continuous(on: int = 1, interval_min: int = 0, syms: str = "", _=Depends(auth)):
+    """Start/stop the continuous training worker (web control). syms = comma list; may include
+    ALL (pooled). Challengers train with --no-promote — promotion is your click, never automatic."""
+    if interval_min > 0:
+        _cont["interval_min"] = max(30, int(interval_min))
+    if syms:
+        _cont["syms"] = [s.strip().upper() for s in syms.split(",") if s.strip()]
+    from bot.audit import log as _audit
+    if on and not _cont["on"]:
+        _cont["on"] = True
+        _threading.Thread(target=_cont_loop, daemon=True).start()
+        _audit("continuous_training", state="started", interval_min=_cont["interval_min"],
+               syms=_cont["syms"])
+    elif not on:
+        _cont["on"] = False
+        _cont["current"] = None
+        _audit("continuous_training", state="stopped")
+    return {k: v for k, v in _cont.items() if k != "history"}
+
+
+@app.get("/api/training/status")
+def training_status():
+    return {"running": _train_state["proc"] is not None, "kind": _train_state["kind"],
+            "sym": _train_state["sym"], "started": _train_state["started"],
+            "rc": _train_state["rc"], "log": _train_state["log"][-25:],
+            "continuous": {**{k: v for k, v in _cont.items() if k != "history"},
+                           "history": _cont["history"][-10:]}}
+
+
+@app.post("/api/training/approve_model")
+def training_approve_model(name: str, version: str, _=Depends(auth)):
+    """MANUAL model promotion (AITP §19): make a gate-passing PENDING model the live champion."""
+    from bot.ml.registry import ModelRegistry
+    ok = ModelRegistry().promote(name, version)
+    return {"promoted": ok, "name": name, "version": version}
+
+
+# ── STRATEGY APPROVAL WORKFLOW (AITP — paper trading stays blocked until manually approved) ──
+
+@app.get("/api/approval/status")
+def approval_status():
+    """Approval ladder + WHAT IS BEING APPROVED (user 2026-07-05: 'I need to know what was used
+    and how') — the strategy version, its rules, and the evidence reports behind each stage."""
+    from bot.approval import status
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    from bot.ml.registry import REPORTS_DIR
+    st = status(STRATEGY_VERSION)
+    about = {
+        "strategy_version": STRATEGY_VERSION,
+        "what_it_is": "ORB day-trading entry standard: ARMED (context) -> WATCH (close beyond OR "
+                      "mid) -> FILL (strong body close beyond OR high/low + continuation + dir-seq), "
+                      "pullback retest modes, cooldown 3 (SPY 0), stale 24 (SPY 12), retest 0.5 ATR "
+                      "(SPY 0.25), struct stop, 4R cap, EOD flat. Symbols: QQQ SPY NQ MNQ ES (GC "
+                      "unverified).",
+        "stage_meaning": {
+            "research": "you reviewed the data QA + backtest reports and accept the rule version "
+                        "as the strategy-of-record",
+            "replay": "you reviewed replay parity (contract candidates == engine trades) and the "
+                      "A/B + gauntlet evidence",
+            "paper": "you authorize AUTOMATIC paper orders on the Alpaca PAPER account "
+                     "(grade-sized brackets, equities; futures via TV webhook in paper mode)",
+            "live": "final gate for real money — ALSO requires the LIVE_APPROVED.lock file; "
+                    "earned only by a green paper scorecard",
+        },
+    }
+    # headline evidence pulled from the saved reports so the decision is informed, not blind
+    try:
+        m = json.loads((REPORTS_DIR / "backtest_matrix.json").read_text(encoding="utf-8"))["symbols"]
+        about["backtest_overall"] = {s: v.get("overall") for s, v in m.items() if "overall" in v}
+        about["cost_stress_warning"] = [s for s, v in m.items()
+                                        if (v.get("cost_stress", {}).get("slip_x2", {}).get("avg_r") or 0) <= 0]
+    except Exception:
+        pass
+    try:
+        p = json.loads((REPORTS_DIR / "replay_parity.json").read_text(encoding="utf-8"))["symbols"]
+        about["replay_parity"] = {s: v.get("match_pct") for s, v in p.items() if "match_pct" in v}
+    except Exception:
+        pass
+    try:
+        g = json.loads((REPORTS_DIR / "gauntlet.json").read_text(encoding="utf-8"))["runs"]
+        about["gauntlet_runs"] = {k: v.get("verdict") for k, v in g.items()}
+    except Exception:
+        pass
+    st["about"] = about
+    return st
+
+
+@app.post("/api/approval/approve")
+def approval_approve(stage: str, notes: str = "", approved_by: str = "user", _=Depends(auth)):
+    from bot.approval import approve, status
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    try:
+        approve(STRATEGY_VERSION, stage, approved_by=approved_by, notes=notes)
+    except ValueError as e:
+        return {"error": str(e), **status(STRATEGY_VERSION)}
+    return status(STRATEGY_VERSION)
+
+
+@app.post("/api/approval/revoke")
+def approval_revoke(stage: str, _=Depends(auth)):
+    from bot.approval import revoke, status
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    revoke(STRATEGY_VERSION, stage)
+    return status(STRATEGY_VERSION)
+
+
+@app.get("/api/training/report_matrix")
+def training_report_matrix():
+    """Backtest report matrix + cost stress (research/backtest_report.py; run kind=report)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "backtest_matrix.json"
+    if not p.exists():
+        return {"error": "no report matrix yet — run kind=report"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/api/training/parity")
+def training_parity():
+    """Replay-parity report (research/replay_parity.py; run kind=parity)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "replay_parity.json"
+    if not p.exists():
+        return {"error": "no parity report yet — run kind=parity"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/api/training/sweep")
+def training_sweep():
+    """The saved entry-parameter sweep (research/sweep_entry_params.py; run kind=sweep)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "sweep_entry_params.json"
+    if not p.exists():
+        return {"error": "no sweep report yet — run kind=sweep"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/api/training/threshold")
+def training_threshold():
+    """Threshold-usage study (research/threshold_study.py; run kind=threshold)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "threshold_study.json"
+    if not p.exists():
+        return {"error": "no threshold study yet — run kind=threshold"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/api/training/gauntlet")
+def training_gauntlet():
+    """Saved gauntlet runs (research/gauntlet.py; run kind=gauntlet with candidate params)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "gauntlet.json"
+    if not p.exists():
+        return {"error": "no gauntlet runs yet — pick a sweep candidate and run the gauntlet"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.post("/api/approval/approve_paper_all")
+def approval_approve_paper_all(notes: str = "", approved_by: str = "user", _=Depends(auth)):
+    """ONE-CLICK strategy approval (user request 2026-07-04): walk the whole ladder —
+    research -> replay -> paper — for the current strategy version. This is the MANUAL
+    sign-off AITP requires; the caller then arms paper autotrade separately."""
+    from bot.approval import approve, status
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    st = status(STRATEGY_VERSION)
+    for stage in ("research", "replay", "paper"):
+        if not st["stages"].get(stage):
+            approve(STRATEGY_VERSION, stage, approved_by=approved_by,
+                    notes=notes or "one-click approval from Training Lab")
+            st = status(STRATEGY_VERSION)
+    return st
+
+
+@app.get("/api/training/dataqa")
+def training_dataqa():
+    """The saved historical data-QA report (pipeline/hs_data_qa.py; run kind=dataqa to refresh)."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "dataqa.json"
+    if not p.exists():
+        return {"error": "no data-QA report yet — run kind=dataqa"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+# ── L2/L3 EXTERNAL DATA (register a path on ANY disk — read in place, only features persist) ──
+
+@app.get("/api/data/sources")
+def data_sources():
+    from bot.ml.l2_features import sources
+    return {"sources": sources()}
+
+
+@app.post("/api/data/register")
+def data_register(path: str, symbol: str = "NQ", _=Depends(auth)):
+    """Register an on-disk L2/L3 file (external drive fine — nothing is copied). Then run
+    kind=l2sync with sym=<source id> to synthesize its features."""
+    from bot.ml.l2_features import register
+    return register(path, symbol)
+
+
+@app.post("/api/data/synthesize_upload")
+async def data_synthesize_upload(request: Request, symbol: str = "NQ", _=Depends(auth)):
+    """Drag-and-drop path: the dragged file streams here, features are synthesized IN MEMORY and
+    only the per-minute l2_* parquet persists — the raw upload is never written to disk.
+    Accepts csv or parquet bodies (browser drop zone posts the raw file)."""
+    import io
+    import pandas as pd
+    from bot.ml.l2_features import synthesize_frame
+    body = await request.body()
+    if len(body) > 800_000_000:
+        return {"error": "file > 800MB — register its PATH instead (reads in place, no copy)"}
+    name = (request.headers.get("x-filename") or "upload.csv").lower()
+    try:
+        if name.endswith(".parquet"):
+            df = pd.read_parquet(io.BytesIO(body))
+        else:
+            df = pd.read_csv(io.BytesIO(body))
+    except Exception as e:
+        return {"error": f"could not parse upload: {str(e)[:120]}"}
+    res = synthesize_frame(df, symbol)
+    if "error" not in res:
+        from bot.audit import log as _audit
+        _audit("l2_upload_synthesized", symbol=symbol.upper(), rows=res.get("feature_rows"),
+               filename=name)
+    return res
+
+
+@app.get("/api/training/reports")
+def training_reports():
+    from bot.ml.registry import list_reports
+    return {"reports": list_reports()[:40]}
+
+
+@app.get("/api/training/report")
+def training_report(name: str):
+    from bot.ml.registry import load_report
+    r = load_report(name)
+    return r if r is not None else {"error": "not found"}
+
+
+@app.get("/api/training/registry")
+def training_registry():
+    """Model registry — every artifact with metrics, feature schema size, rule version, champion flag."""
+    from bot.ml.registry import ModelRegistry
+    out = []
+    for m in ModelRegistry().list():
+        out.append({"name": m.name, "version": m.version, "champion": m.champion,
+                    "created_at": m.created_at, "metrics": m.metrics,
+                    "n_features": len(m.features) if m.features else None,
+                    "strategy_version": m.strategy_version})
+    return {"models": sorted(out, key=lambda x: x["created_at"], reverse=True)}
+
+
+@app.get("/api/training/dataset")
+def training_dataset(sym: str = "QQQ"):
+    """Headline stats of the CACHED labeled dataset (build via kind=dataset if missing)."""
+    from bot.ml.registry import FeatureStore
+    from bot.ml.features_pit import FEATURE_COLUMNS
+    from bot.ml.dataset import DATASET_NAME, _version_slug
+    import pandas as pd
+    try:
+        df = FeatureStore().load(f"{DATASET_NAME}_{sym.upper()}", _version_slug())
+    except FileNotFoundError:
+        return {"sym": sym.upper(), "error": "no cached dataset — run kind=dataset first"}
+    yr = pd.to_datetime(df["ts"]).dt.year
+    nan_share = df[FEATURE_COLUMNS].isna().mean().sort_values(ascending=False)
+    return {"sym": sym.upper(), "rows": int(len(df)),
+            "strategy_version": str(df["strategy_version"].iloc[0]) if len(df) else None,
+            "span": [str(df['ts'].iloc[0])[:10], str(df['ts'].iloc[-1])[:10]] if len(df) else None,
+            "win_rate": round(float(df["y_win"].mean()), 3),
+            "tp2_rate": round(float(df["y_tp2"].mean()), 3),
+            "stop_rate": round(float(df["y_stop"].mean()), 3),
+            "avg_net_r": round(float(df["net_r"].mean()), 3),
+            "by_year": {int(k): int(v) for k, v in yr.value_counts().sort_index().items()},
+            "worst_nan": {k: round(float(v), 3) for k, v in nan_share.head(6).items() if v > 0},
+            "n_features": len(FEATURE_COLUMNS)}
+
+
+@app.get("/api/training/ab")
+def training_ab():
+    """The saved entry-standard A/B (research/ab_entry_standard.py) — variants x symbols."""
+    from bot.ml.registry import REPORTS_DIR
+    p = REPORTS_DIR / "ab_entry_standard.json"
+    if not p.exists():
+        return {"error": "no A/B report yet — run kind=ab"}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/training", response_class=HTMLResponse)
+def training_page():
+    f = STATIC / "training.html"
+    return f.read_text(encoding="utf-8") if f.exists() else "<h1>training.html missing</h1>"
 
 
 @app.get("/", response_class=HTMLResponse)

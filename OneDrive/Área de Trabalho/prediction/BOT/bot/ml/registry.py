@@ -19,6 +19,65 @@ from bot.config import BOT_ROOT
 from bot.ml.validation import auc
 
 ML_DIR = BOT_ROOT / "data" / "ml"
+REPORTS_DIR = ML_DIR / "reports"
+
+
+def _jsonable(x):
+    """Deep-convert numpy scalars/arrays and NaN to JSON-safe values (NaN -> None so the
+    dashboard's JSON.parse never chokes)."""
+    if isinstance(x, dict):
+        return {k: _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return _jsonable(x.tolist())
+    if isinstance(x, (np.floating, float)):
+        f = float(x)
+        return None if f != f else f
+    if isinstance(x, np.integer):
+        return int(x)
+    if isinstance(x, np.bool_):
+        return bool(x)
+    return x
+
+
+def save_report(kind: str, sym: str, report: dict) -> Path:
+    """Persist a training run report (ml|nn) — the training dashboard's raw material."""
+    from bot.contracts import utcnow_iso
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = utcnow_iso().replace(":", "").replace("-", "")[:15]
+    p = REPORTS_DIR / f"{kind}_{sym}_{ts}.json"
+    body = {"kind": kind, "sym": sym, "created_at": utcnow_iso(), **_jsonable(report)}
+    p.write_text(json.dumps(body, indent=1), encoding="utf-8")
+    return p
+
+
+def list_reports() -> list[dict]:
+    """Newest-first index of saved training reports (headline fields only)."""
+    if not REPORTS_DIR.exists():
+        return []
+    out = []
+    for p in sorted(REPORTS_DIR.glob("*.json"), key=lambda q: q.stat().st_mtime, reverse=True):
+        if p.stem.startswith("ab_"):                 # the A/B study has its own endpoint/panel
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        out.append({"name": p.stem, "kind": d.get("kind", p.stem.split("_")[0]),
+                    "sym": d.get("sym"), "created_at": d.get("created_at"),
+                    "oos_auc": d.get("oos_auc"), "oos_brier": d.get("oos_brier"),
+                    "best": d.get("best"), "promote": d.get("promote"),
+                    "samples": d.get("samples") or d.get("sequences"),
+                    "reason": d.get("reason")})
+    return out
+
+
+def load_report(name: str) -> dict | None:
+    p = REPORTS_DIR / f"{name}.json"
+    if not p.exists() or p.parent.resolve() != REPORTS_DIR.resolve():
+        return None
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 class FeatureStore:
@@ -44,6 +103,8 @@ class ModelMeta:
     metrics: dict
     champion: bool = False
     created_at: str = ""
+    features: list | None = None        # feature schema the model was trained on (ML-011)
+    strategy_version: str | None = None  # the rule version the labels came from (one rule at a time)
 
 
 class ModelRegistry:
@@ -53,14 +114,23 @@ class ModelRegistry:
     def _paths(self, name, version):
         return self.root / f"{name}__{version}.pkl", self.root / f"{name}__{version}.json"
 
-    def register(self, model, name: str, version: str, metrics: dict, champion: bool = False) -> ModelMeta:
+    def register(self, model, name: str, version: str, metrics: dict, champion: bool = False,
+                 features: list | None = None, strategy_version: str | None = None) -> ModelMeta:
         from bot.contracts import utcnow_iso
         pkl, js = self._paths(name, version)
         pkl.write_bytes(pickle.dumps(model))
-        meta = ModelMeta(name, version, metrics, champion, utcnow_iso())
+        meta = ModelMeta(name, version, metrics, champion, utcnow_iso(),
+                         features=features, strategy_version=strategy_version)
         js.write_text(json.dumps(asdict(meta)), encoding="utf-8")
         if champion:
             self._set_champion(name, version)
+        try:
+            from bot.audit import log as _audit
+            _audit("model_registered", name=name, version=version, champion=champion,
+                   metrics={k: v for k, v in metrics.items() if not isinstance(v, dict)},
+                   strategy_version=strategy_version)
+        except Exception:
+            pass
         return meta
 
     def load(self, name: str, version: str):
@@ -86,6 +156,19 @@ class ModelRegistry:
             if m.champion:
                 return self.load(name, m.version), m
         return None, None
+
+    def promote(self, name: str, version: str) -> bool:
+        """MANUAL promotion (AITP governance): make a registered pending model the champion."""
+        _, js = self._paths(name, version)
+        if not js.exists():
+            return False
+        self._set_champion(name, version)
+        try:
+            from bot.audit import log as _audit
+            _audit("model_promoted", name=name, version=version, by="user")
+        except Exception:
+            pass
+        return True
 
 
 class ChampionChallenger:

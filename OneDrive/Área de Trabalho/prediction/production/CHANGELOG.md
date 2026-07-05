@@ -5,6 +5,246 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-05 (v3) — 07.2 VERIFIED: parity 100% · similarity clusters PROMOTED (first live model) · QQQ + NQ gauntlet adoptions · triples lose to pairs · auto-reload launcher · CI
+
+* **07.2 verification chain** (research/verify_072.py — parity → matrix → similarity → 8 combos →
+  sweep): parity **100% all four symbols**; cost stress — QQQ +0.424 / SPY +0.448 robust,
+  NQ +0.189 holds 2× slip (+0.112), **ES still negative at 2× slip (stays barred)**.
+* **SIMILARITY CLUSTERS PROMOTED** — OOS winner-vs-loser spread held → the first model live:
+  every proposal now carries its nearest-pattern-cluster read; it votes in the ensemble.
+* **DIR-fast 8 combos (incl. the 3 triples)**: no triple beats the adopted pairs — equities
+  STRUCT(+VWAP), futures MID+VWAP confirmed.
+* **Gauntlet adoptions (both 7/7)**: QQQ cd5/stale12/retest0.25 (OOS +0.419 vs +0.374, PF 1.66,
+  DD −6.2 vs −9.1R) and NQ/MNQ cd0/stale12/retest0.25 (OOS +0.117 vs +0.109, DD −9.8 vs −11.1R).
+  Both trade FEWER times (quality over volume) — revert per-asset overrides to restore volume.
+  Sweep/gauntlet defaults now honor per-asset overrides (SPY baseline was understated).
+* **Ops**: `BOT/run_server.bat` (uvicorn --reload = new code runs on save), BOT_CONT_TRAINING=1
+  auto-arms continuous training on boot, /api/health carries strategy_version,
+  `requirements.txt` (88 pins), GitHub Actions pytest workflow.
+
+---
+
+## 2026-07-05 (v2) — RULE orb-standard-2026.07.2: INSTANT FILL when aligned · frozen bias superseded · grade ladder v2 · DIR-fast A/B · crypto weekends · VWAP plot · security fix
+
+⚠️ STACK changed again — **TradingView compile-check needed**. **121 tests green.**
+
+* **INSTANT FILL (user rule)**: when the arming pair is aligned AND price is beyond the mid, the
+  strong full-body breakout candle FILLS IMMEDIATELY — the F59c next-candle wait now applies only
+  to UNALIGNED setups (engine `instant_aligned`, STACK `instant_fill` input, default ON).
+  **Per-asset A/B on the rebuilds**: NQ +0.163→+0.189 avg R on MORE trades (clear win), QQQ/SPY
+  total-R neutral, **ES +0.090→+0.057 (worse)** → `Asset.instant_fill=False` for ES (keeps the
+  continuation wait); on an ES TV chart turn the input OFF (tooltip says so).
+* **Frozen OR-mid day bias SUPERSEDED by the live mid** on mid-armed assets (user screenshots:
+  'OR-mid: short day' blocked a live-aligned long). STACK: bias applies only on the STRUCT+VWAP
+  (B) pair; BOT mirrors via ctx_mode.
+* **GRADE LADDER v2 (user)**: ORMID arms → +VWAP = B → +STRUCT = A → +SLOPE = A+ (cumulative);
+  no VWAP = C. STACK `f_grade` + BOT live grade updated.
+* **DIR-FAST pairs test run + adopted**: futures arm from MID+VWAP (NQ OOS +0.213 vs +0.104 struct,
+  dataset avg +0.155→+0.163; ES +0.153, +0.087→+0.090); equities keep STRUCT+VWAP (QQQ +0.374,
+  SPY +0.753). STACK `ctx_source` Auto picks per instrument; dashboards show DIR-A (arming read)
+  + DIR-B (fallback composite). 8 possible ORMID-anchored combinations documented; kind=pairs
+  re-runs the test.
+* **Crypto weekends**: the weekend block no longer applies to `syminfo.type == "crypto"` (BTCUSD
+  showed 'RANGE - weekend' and could never arm). **Session VWAP now plottable** (`show_vwap`, on).
+* **Kelly**: quarter-Kelly advisory multiple on every proposal (P(win) + realized payoff per
+  symbol); main dashboard gained AI verdict + expected-R + ¼K columns.
+* **Transformer + MoE** added to the NN zoo (tiny encoder / 3-GRU gated experts) — same gates.
+* **Swing datasets live**: tf=1d/1w now build triple-barrier daily/weekly candidates
+  (QQQ 1d: 1,484 rows, +0.268R avg) — trainable through the same pipeline.
+* **Threshold study** (kind=threshold): current pooled model shows NO reliable top-bucket lift
+  (honest negative). **L2 registration**: whole-FOLDER auto-scan + ZIP auto-extract (streamed
+  in memory, never written to disk).
+* **SECURITY (code review)**: `/api/training/run` symbol was interpolated into a `python -c`
+  string — command-injection fixed (argv-passed + whitelist); symbol validated everywhere.
+* Training Lab: ET timestamps everywhere, run start-time + elapsed in the status pill, loud
+  404 guidance ("restart the server"), per-panel HOW-IT-WORKS guide, approval panel now shows
+  WHAT is being approved (rules + evidence + stage meanings), threshold/pairs run buttons.
+
+---
+
+## 2026-07-05 (late) — RULE orb-standard-2026.07.1: pullback refinements ADOPTED · SPY gauntlet-adopted params · FULL GAUNTLET on the UI · multi-TF training · candidate full-detail views
+
+⚠️ STACK + AUTO changed (refinement inputs + watch machine) — **TradingView compile-check needed**
+on both. Rule version bumped to **orb-standard-2026.07.1** → datasets/models/approvals re-key
+(fresh ladder approvals required — correct governance). **121 tests green.**
+
+* **PULLBACK REFINEMENTS (deep-research doc, un-deferred by user)** in FSM + engine + STACK/AUTO:
+  retest TARGET modes (OR edge / impulse midpoint / VWAP), MIN retrace from the extension extreme
+  (0.05 ATR anti-spike), pullback TIMEOUT (8 bars → RANGE), relative-VOLUME confirmation on the
+  trigger bar (default OFF until gauntleted). Engine params: `retest_mode, min_pullback_atr,
+  pullback_timeout, vol_confirm_x`; Pine inputs mirror them.
+* **SPY sweep candidate PASSED THE FULL GAUNTLET (7/7)** — cooldown 0 · stale 12 · retest 0.25:
+  OOS +0.753 vs default +0.572 avg R, PF 2.40 vs 1.97, win 47.5% vs 40.9%, maxDD −6.1 vs −6.5R,
+  survives 2× slip, years consistent, sides clean → **ADOPTED as per-asset overrides**
+  (`Asset.cooldown_bars/stale_bars/retest_atr`; BOT reads them everywhere; on a SPY TV chart set
+  the three inputs manually). Sweep→gauntlet→adopt pipeline now the standard promotion path.
+* **FULL GAUNTLET on the Training Lab**: parameter form (prefilled by clicking any sweep row) →
+  `kind=gauntlet` run → verdict + 7 checks + candidate-vs-default table + a full-detail expander
+  recording EVERYTHING used (data span/bars/timeframe, IS/OOS split dates, fill rules, cost
+  model, per-side results). `research/gauntlet.py`, `/api/training/gauntlet`.
+* **Candidate full details everywhere**: sweep report carries a `used` block (span, windows, grid,
+  fixed rules, costs); sweep rows click → detail box + gauntlet prefill; training-run rows click →
+  full raw report expander.
+* **MULTI-TIMEFRAME TRAINING**: dataset/ML/NN accept `--tf=` (1m/3m/5m/15m/30m/1h/2h/4h — 3m/2h/1w
+  resampled causally, 1m from the continuous store); Training Lab timeframe selector; per-TF
+  dataset stores + report/version tags (`QQQ@15m`). **1d/1w return an explicit "swing module
+  (spec_only)" error** — the ORB day replay needs intraday bars; daily/weekly training ships with
+  the swing module.
+* Runner accepts sanitized extra args (`--tf`, gauntlet params) from the web.
+
+---
+
+## 2026-07-05 — AITP/MLP phase 2: multi-head ML · rejects no-trade model · ensemble verdicts · L2/L3 depth pipeline · reversal detectors · report matrix + cost stress · parity · unified audit · paper→live path
+
+No Pine changes (BOT/platform only). **121 tests green.** Full detail: `docs/TASKS_INCOMPLETE.md`,
+`docs/ENGINEERING_AUDIT.md`, `docs/PAPER_TO_LIVE.md`.
+
+* **Sweep verdicts**: SPY candidate combo (ctx ON · cooldown 0 · stale 12 · retest 0.25) beats the
+  default OUT-OF-SAMPLE (+0.753 vs +0.572 avg R) — flagged for gauntlet, NOT adopted; QQQ/NQ/ES
+  best-IS combos failed OOS → defaults kept (anti-curve-fit gate worked).
+* **Multi-head ML** (`bot/ml/heads.py`, kind=heads): tp2_prob (OOS AUC **0.641**), stop_prob
+  (0.541), expected_r (rank-IC **0.117**), no_trade on the **126k pooled rejects** (0.546 vs 0.55
+  gate) — all correctly gated out, none deployed; the closest signals yet.
+* **Rejects everywhere**: QQQ 22.6k + SPY 24.4k + NQ 38.4k + ES 40.8k blocked setups with first-
+  failing-gate reasons + hypothetical outcomes (missed_winner/loser).
+* **Ensemble decision layer** (`bot/ml/ensemble.py`): every live proposal now carries
+  `ai_decision` (risk_blocked / approved_low/high_ai_confidence + reasons), `heads`, `ml_explain`.
+* **Reversal detectors** (user spec — `bot/strategy/reversals.py`): RSI level+divergence, MACD
+  histogram/shrink/divergence, VWAP slope-momentum divergence, capitulation wick, absorption —
+  8 causal features in the schema (now **59 columns** incl. 6 `l2_*`), unit-tested for causality.
+* **L2/L3 depth pipeline** (`bot/ml/l2_features.py`): register a PATH on any disk (nothing
+  copied — DuckDB reads csv/csv.zst/parquet in place; Databento MBP/MBO/trades auto-detected)
+  → per-minute l2_* features into the FeatureStore, joined onto candidates at their signal
+  minute. Training Lab: path box + DRAG-AND-DROP zone (dropped files synthesize in memory,
+  raw never written). Epoch units auto-detected (ns/µs/ms/s).
+* **Risk lockouts**: weekly-loss (2%), correlated-exposure buckets (NQ+QQQ = one nasdaq bet,
+  ES+SPY = spx, GC+GLD = gold) added to daily/trailing/streak/kill/news.
+* **Unified audit trail** (`bot/audit.py` → `BOT/data/audit.jsonl`, `/api/audit` + panel):
+  approvals, model registrations/promotions, paper toggle, kill switch, mode changes, training
+  runs, continuous start/stop, L2 registrations.
+* **Report matrix + cost stress** (kind=report): slices by year/regime/DOW/hour/side + stress
+  (2× slip, 1-2 tick latency, 90% partial fills). **ES flips NEGATIVE at 2× slip (+0.087→−0.098)**
+  → ES barred from live sizing until measured execution beats the stress; NQ halves; QQQ/SPY robust.
+* **Replay parity** (kind=parity): contract candidates ≡ engine trades — **100.0% exact on all
+  4 symbols (2,073/2,073)**.
+* **Post-trade learning queue**: PIT snapshots now ride with tracked decisions; `live_labels`
+  builds training rows (taken + missed outcomes) into the FeatureStore.
+* **Paper→live**: approval ladder extended with a **live** stage; live mode now needs BOTH the
+  LIVE_APPROVED.lock file AND the 'live' approval (double gate). Full path: docs/PAPER_TO_LIVE.md.
+* **Strategy-module registry** (`bot/strategy/modules.py`, `/api/strategy/modules`): AITP module
+  contract for equities/futures/options day-ORB (implemented) + scalping/swing specs (planned).
+* **Engineering audit** (`docs/ENGINEERING_AUDIT.md`): top risks — OneDrive syncing 3.9GB of
+  data+venv+SQLite, ES stress economics, single-process server state, 110-script research sprawl;
+  ranked with actions.
+
+---
+
+## 2026-07-04 (late) — AITP/MLP phase 1: data QA · pooled training · rejected-setup labels · approval gates · continuous training (web-controlled)
+
+STACK compile confirmed on TradingView by the user. Scope rule active: only STACK/AUTO + BOT are
+updated; OPTIONS/V1/MTF untouched. Pullback deep-research refinements deliberately deferred (user:
+"do the pullback last").
+
+* **Data QA (AITP step 1)**: fixed `engine/hs_db.py` per-view timestamp detection (ts_utc futures /
+  ts_et equities — the report no longer crashes on QQQ/SPY); new `pipeline/hs_data_qa.py` DuckDB
+  report (dupes, bad candles, calendar gaps, bars/day completeness) — ALL 5 SYMBOLS CLEAN
+  (~1.25M RTH 5m bars checked). Served at `/api/training/dataqa` + a Training Lab panel.
+* **Pooled multi-symbol training (MLP-001)**: 6 symbol-identity features added to the PIT schema
+  (45 total: sym_* one-hots + is_futures), `dataset.build_pooled()` + `bot.ml.pipeline ALL` and
+  pooled NN sequences (`bot.nn.train ALL`) — chronologically interleaved so purged walk-forward
+  stays honest. NQ/ES datasets now reflect their adopted layer3-only entry (ctx grade-only).
+* **Rejected-setup capture (MLP-001 §2)**: `_orb_signals(collect_rejects=...)` records every bar
+  where the breakout trigger fired but a gate blocked (first failing gate: context/no_watch/
+  cooldown/range/pullback_wait/chase/dir_seq/or_mid_bias/narrow_or/wick_or_weak_body) +
+  `dataset.build_rejects()` adds PIT features and a first-touch HYPOTHETICAL outcome →
+  missed_winner/missed_loser labels, stored per symbol in the FeatureStore.
+* **Approval workflow (AITP governance)**: `bot/approval.py` — research → replay → paper ladder
+  per strategy version, manual + revocable, with auto-collected evidence (data-QA ok, A/B report,
+  run count). The PAPER AUTOTRADE toggle is now HARD-BLOCKED without a paper approval (verified
+  live). Model promotion: `--no-promote` runs register gate-passing challengers as PENDING;
+  `/api/training/approve_model` (+ dashboard button) makes them champion — no automatic
+  replacement.
+* **Continuous training (web-controlled)**: background worker on the API server cycles
+  dataset → ML → NN per symbol (QQQ/SPY/NQ/ES/ALL) on an interval (1h–daily), always
+  `--no-promote`; start/stop + interval from the Training Lab; per-job history with rc + tails.
+* Training Lab additions: run kinds 0·Data QA / 1b·Rejects, ALL/GC symbols, continuous panel,
+  approval ladder panel, pending-models panel with Promote buttons, data-QA table.
+* Tests: approval ladder, engine reject-reasons (deterministic tape), symbol one-hots —
+  **116 green**.
+* **ENTRY-PARAMETER SWEEP (separate training, user request)**: `research/sweep_entry_params.py` —
+  54-combo grid over the direction/entry knobs (ctx gate × cooldown × stale × retest), ranked on
+  the first 70% of history (min 60 IS trades), JUDGED on the last 30% next to the adopted default;
+  a best-IS combo is only a CANDIDATE if it also beats the default OOS (anti-curve-fit verdict).
+  Run kind `sweep` on the Training Lab + `/api/training/sweep` panel; merges per-symbol so runs
+  accumulate. First QQQ result: best-IS (cooldown 0) ties the default OOS → **keep default**.
+* **ONE-CLICK APPROVAL (user request)**: `/api/approval/approve_paper_all` + the big
+  "✓ APPROVE strategy + enable PAPER trade" button on /training — walks research → replay → paper
+  with audit notes, then arms paper autotrade (still refuses without Alpaca paper keys; live
+  remains hard-locked). Verified live: blocked → approved → toggle ON → revoke re-blocks.
+* `docs/TASKS_INCOMPLETE.md` — living checklist of partial/incomplete items across all spec docs
+  (pullback refinements ⏸ deferred by user to last).
+
+---
+
+## 2026-07-04 — CANONICAL ENTRY STANDARD (ARMED→WATCH→FILL) across STACK/AUTO/OPTIONS + BOT + engine · PULLBACK mode · ML/NN platform
+
+⚠️ Needs a **TradingView compile-check** on STACK/AUTO/OPTIONS + a forward paper session. ⚠️ The
+Layer-1 context gate + live watch/cooldown/stale/retest CHANGE the entry vs the validated plain-ORB
+config — **A/B on the data drive before trusting old backtest numbers** (every knob reverts
+individually: Pine "Entry standard" inputs / `EntryStandard` fields, `ctx_gate=False` restores the
+old arming). Full spec: `docs/ENTRY_STANDARD.md`; ML/NN: `docs/ML_NN_PLATFORM.md`.
+
+* **One entry state machine on every surface** (strategy docs 2026-07-04, "Known Bug Fix"): the
+  canonical ordering is **context arms → OR mid watches → OR high/low fills**. Old surfaces showed
+  WATCH below the mid and called ready-to-fill ARMED — reversed vs the docs; standardized now.
+  States everywhere: WAIT → ARMED (Structure+VWAP aligned, 1m-fed) → WATCH (confirmed
+  directional-body close beyond OR mid) → FILLED → …, plus COOLDOWN / PULLBACK / RANGE / LOCKED /
+  INVALID. New "Entry standard" input group on all 3 Pines (ctx_gate, watch_gate, cooldown 3,
+  stale 24, retest 0.5 ATR; chase 1.0 added to AUTO/OPTIONS).
+* **PULLBACK mode (new)**: price extends > chase·ATR past the OR level pre-fill → do NOT chase;
+  fills blocked until an OR-edge retest within retest·ATR, then the normal fill rules re-check.
+  Formalizes the old silent no-chase guard into a visible state + explicit retest requirement.
+* **Cooldown rule (new)**: watch cancel at the mid → N-bar cooldown, fresh mid close required
+  (kills mid-chop churn). **Range/stale rule (new)**: watch too old without a fill → RANGE, stand
+  down until the mid is lost. **Two-entry limit** surfaces as LOCKED.
+* **Python twin rebuilt** (`BOT/bot/strategy/orb_state.py` `OrbSideState` + `EntryStandard` — the
+  shared knob set), engine grew the same causal machinery
+  (`hs_backtest._orb_signals(watch_live, cooldown_bars, stale_bars, retest_atr)`), BOT scan/replay
+  route through it (`orb_candidates.run_backtest()` = the ONE canonical call,
+  `STRATEGY_VERSION = orb-standard-2026.07`). Layer-2 slope grade (A+..D from the combined slope
+  engine) attached to every proposal + carried as an ML feature.
+* **ML platform** (`BOT/bot/ml/`): point-in-time feature engine (39 features, causal, train/live
+  parity — the live scan attaches the same snapshot the trainer uses), labeled dataset builder →
+  FeatureStore parquet, model zoo (numpy logit + sklearn LogReg/RF/HistGB + LightGBM + XGBoost),
+  isotonic/Platt calibration on pooled OOS predictions, PURGED walk-forward with embargo,
+  hard promotion gates (AUC>0.52, Brier beats base rate, high-conf bucket must out-earn low-conf
+  in expected R), champion-challenger + registry with feature-schema + rule-version pinning,
+  SHAP/linear/perturbation explainability.
+* **NN platform** (`BOT/bot/nn/`): causal 64-bar × 11-channel sequence dataset (shorts mirrored),
+  NumpyMLP + torch MLP/1D-CNN/GRU/LSTM/CNN-GRU zoo, same purged validation + gates + registry.
+* **Honest first results (QQQ, 312 candidates under the standard)**: best tabular OOS AUC 0.535
+  (xgb) fails the Brier gate; best NN 0.487 fails the AUC gate → **nothing deployed, prior stays
+  live** — the gates doing their job on a thin sample. Next: pool NQ/ES/QQQ/SPY + add rejected
+  setups as no-trade labels (`docs/ML_NN_PLATFORM.md` §results).
+* Tests: `BOT/tests/test_orb_state.py` rewritten to the canonical spec (38 tests) +
+  `BOT/tests/test_ml_platform.py` (causality, leakage, gates, calibration, registry schema,
+  NN causality) — **113 tests green**.
+* **A/B RUN + ADOPTED (2026-07-04 evening, `research/ab_entry_standard.py`, 2018–2026)**:
+  Layer 3 (watch/cooldown/stale/pullback) improves ALL FOUR instruments → ON everywhere
+  (QQQ +0.273→+0.340, SPY +0.183→+0.242, NQ +0.140→+0.155, ES +0.073→+0.087 avg R vs baseline).
+  The Layer-1 context hard gate LIFTS equities (QQQ +0.340→+0.449 avg R PF 1.70 maxDD −14.2→−9.1R;
+  SPY +0.242→+0.329) but HURTS futures (NQ +0.155→+0.109, ES +0.087→+0.041) → **context is now
+  PER ASSET**: `Asset.ctx_gate` (equities ON / futures OFF) + the `ctx_auto` input in STACK/AUTO
+  (auto by `syminfo.type`). OPTIONS/V1/MTF NOT touched (user scope rule: only STACK/AUTO + BOT
+  are updated by default) — on futures charts toggle OPTIONS' manual ctx_gate OFF.
+* **TRAINING LAB dashboard** (same local server): `/training` page + `/api/training/*` endpoints
+  (run dataset/ML/NN/A-B as subprocesses with live logs, model-zoo AUC/Brier charts vs the gates,
+  bucket expectancy, calibration table, A/B panel, model registry, run history). Every
+  `train_and_promote` run now persists its report to `BOT/data/ml/reports/` (registry
+  `save_report`). Sidebar link "Training Lab" added to the main dashboard.
+
+---
+
 ## 2026-07-03 — STRUC velocity: gap-aware CHoCH (all 8 structure machines) + multi-TF rolling direction engine (BOT)
 
 ⚠️ Needs a **TradingView compile-check** on STACK/AUTO/OPTIONS/V1_STRATEGY + a forward session

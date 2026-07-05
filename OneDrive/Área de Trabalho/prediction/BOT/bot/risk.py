@@ -23,13 +23,22 @@ POINT_VALUE = {"NQ": 20.0, "MNQ": 2.0, "ES": 50.0, "MES": 5.0, "GC": 100.0, "MGC
 class RiskLimits:
     risk_per_trade: float = 0.0025      # 0.25% of equity (Evidence 0.20–0.35%)
     max_daily_loss: float = 0.0075      # 0.75% (Evidence 0.75–1.0%)
+    max_weekly_loss: float = 0.02       # 2% week-to-date stand-down (AITP risk library)
     max_trailing_dd: float = 0.03       # 3% peak-to-now stand-down
     max_trades_per_day: int = 3
     max_consecutive_losses: int = 2
     max_open_positions: int = 1         # one position at a time (Evidence: one strategy at a time)
+    max_correlated_positions: int = 1   # per correlation bucket (nasdaq/spx/gold) — NQ+QQQ = ONE bet
     min_rr: float = 1.5                 # reward-to-first-target floor
     max_contracts: int = 50             # absolute cap for FUTURES contracts
     max_notional_mult: float = 4.0      # equity/ETF: position notional <= this × equity (sizing safety)
+
+
+# correlated-exposure buckets (AITP): instruments that move together count as ONE exposure —
+# an open NQ position blocks a new QQQ candidate (same index beta), mirror for SPX and gold.
+CORRELATION_BUCKET = {"NQ": "nasdaq", "MNQ": "nasdaq", "QQQ": "nasdaq",
+                      "ES": "spx", "MES": "spx", "SPY": "spx",
+                      "GC": "gold", "MGC": "gold", "GLD": "gold"}
 
 
 @dataclass
@@ -37,7 +46,9 @@ class Account:
     equity: float
     peak_equity: float | None = None
     daily_pnl: float = 0.0              # today's realized PnL ($); negative = down
+    weekly_pnl: float = 0.0             # week-to-date realized PnL ($)
     open_positions: int = 0
+    open_symbols: list[str] = field(default_factory=list)   # symbols of open positions (correlation check)
     trades_today: int = 0
     consecutive_losses: int = 0
     kill_switch: bool = False
@@ -49,6 +60,18 @@ class Account:
         self.mode = Mode(self.mode)
         if self.peak_equity is None:
             self.peak_equity = self.equity
+
+
+def kelly_fraction(p_win: float, avg_win_r: float, avg_loss_r: float) -> dict:
+    """KELLY SIZING (additive, user 2026-07-05): f* = p − (1−p)/b with b = avg win / |avg loss|.
+    Full Kelly is far too aggressive for fat-tailed trading returns — the ADVISORY multiplier is
+    QUARTER-Kelly, clamped to [0, 1] of the base risk budget. Never sizes up past the budget."""
+    b = abs(avg_win_r) / max(abs(avg_loss_r), 1e-9)
+    if not (0.0 < p_win < 1.0) or b <= 0:
+        return {"kelly_f": None, "quarter_kelly": None, "payoff_b": round(b, 2)}
+    f = p_win - (1.0 - p_win) / b
+    return {"kelly_f": round(f, 3), "payoff_b": round(b, 2),
+            "quarter_kelly": round(min(max(f / 4.0 / 0.25, 0.0), 1.0), 2)}   # as a multiple of the 0.25% budget
 
 
 def _block(cid, code, notes=""):
@@ -73,6 +96,9 @@ def decide(c: TradeCandidate, acct: Account, limits: RiskLimits | None = None) -
     if acct.daily_pnl <= -L.max_daily_loss * acct.equity:
         return _block(cid, ReasonCode.DAILY_LOSS_LIMIT,
                       f"daily PnL {acct.daily_pnl:.0f} <= -{L.max_daily_loss:.2%} equity")
+    if acct.weekly_pnl <= -L.max_weekly_loss * acct.equity:
+        return _block(cid, ReasonCode.WEEKLY_LOSS_LIMIT,
+                      f"weekly PnL {acct.weekly_pnl:.0f} <= -{L.max_weekly_loss:.2%} equity")
     if acct.peak_equity and (acct.peak_equity - acct.equity) >= L.max_trailing_dd * acct.peak_equity:
         return _block(cid, ReasonCode.TRAILING_DRAWDOWN, "trailing drawdown limit hit")
     if acct.trades_today >= L.max_trades_per_day:
@@ -81,6 +107,13 @@ def decide(c: TradeCandidate, acct: Account, limits: RiskLimits | None = None) -
         return _block(cid, ReasonCode.CONSECUTIVE_LOSSES, f"{acct.consecutive_losses} losses in a row")
     if acct.open_positions >= L.max_open_positions:
         return _block(cid, ReasonCode.MAX_OPEN_POSITIONS, f"{acct.open_positions} already open")
+    # correlated exposure: an open position in the candidate's correlation bucket = the SAME bet
+    bucket = CORRELATION_BUCKET.get(c.symbol.upper())
+    if bucket:
+        n_corr = sum(1 for s in acct.open_symbols if CORRELATION_BUCKET.get(str(s).upper()) == bucket)
+        if n_corr >= L.max_correlated_positions:
+            return _block(cid, ReasonCode.CORRELATED_EXPOSURE,
+                          f"{n_corr} open position(s) already in the '{bucket}' bucket")
 
     # --- candidate-quality rejects ---
     if c.risk <= 0:
@@ -117,9 +150,11 @@ if __name__ == "__main__":   # self-test: one approve + each block/reject path
         ("kill",      Account(equity=25_000, kill_switch=True),            ReasonCode.KILL_SWITCH),
         ("stale",     Account(equity=25_000, source_healthy=False),        ReasonCode.SOURCE_HEALTH_CRITICAL),
         ("dailyloss", Account(equity=25_000, daily_pnl=-200),              ReasonCode.DAILY_LOSS_LIMIT),
+        ("weekloss",  Account(equity=25_000, weekly_pnl=-600),             ReasonCode.WEEKLY_LOSS_LIMIT),
         ("maxtrades", Account(equity=25_000, trades_today=3),              ReasonCode.MAX_TRADES_PER_DAY),
         ("losses",    Account(equity=25_000, consecutive_losses=2),        ReasonCode.CONSECUTIVE_LOSSES),
         ("openpos",   Account(equity=25_000, open_positions=1),            ReasonCode.MAX_OPEN_POSITIONS),
+        ("correl",    Account(equity=25_000, open_symbols=["NQ"]),         ReasonCode.CORRELATED_EXPOSURE),
     ]
     for name, acct, code in checks:
         d = decide(cand(), acct)
