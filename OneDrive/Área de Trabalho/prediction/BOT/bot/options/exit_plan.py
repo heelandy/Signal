@@ -21,6 +21,13 @@ from bot.options.strategies import signal_to_options
 
 TP1_RR, TP2_RR = 1.5, 4.0      # F64: TP1 = debit cap / scale point; TP2 = naked target / final cap
 
+# GATE VERDICTS per structure on ORB signals (payoff replay 2026-07-06, research/options_replay.py
+# + options_cross.py) — the single source every UI shows (user: "show the information according
+# to the gate they pass").
+STRUCTURE_GATES = {"naked": "PASS (QQQ PF 2.05 / SPY 1.5, 9/9 yrs)",
+                   "debit": "FAIL on ORB (passes only on swing QQQ @21DTE)",
+                   "credit": "FAIL (all streams)"}
+
 
 def options_exit_plan(c: TradeCandidate, iv: float = 0.20, dte: int = 0, sel_n: int = 1,
                       contracts: int = 1) -> dict:
@@ -34,23 +41,26 @@ def options_exit_plan(c: TradeCandidate, iv: float = 0.20, dte: int = 0, sel_n: 
 
     exits = {
         "naked": {"target": f"TP2 {tp2} ({TP2_RR}R)", "scale": f"sell half at TP1 {tp1}, run half to TP2 {tp2}",
-                  "stop": f"underlying tags structure stop {c.stop}", "when": "clean trend / high conviction"},
+                  "stop": f"underlying tags structure stop {c.stop}",
+                  "when": "THE VALIDATED PLAY — the ORB's low-WR/big-winner profile needs convexity"},
         "debit": {"target": f"TP1 {tp1} ({TP1_RR}R) — short leg caps it here",
                   "manage": "close near the short strike; defined cost", "stop": f"underlying stop {c.stop}",
-                  "when": "DEFAULT — most trades only run ~1R (medMFE~1R)"},
+                  "when": "REJECTED for ORB signals — capping the 4R tail kills the edge"},
         "credit": {"target": f"close ~50% of credit, or by TP2 {tp2} / expiry", "manage": "theta works for you",
                    "stop": f"underlying tags the short strike near the structure stop {c.stop}",
-                   "when": "range / low conviction / income"},
+                   "when": "REJECTED — selling the predicted direction fails every stream"},
     }
-    rec = "naked" if c.regime == "A" else "debit"      # clean trend -> capture the tail; else workhorse
+    gates = STRUCTURE_GATES
     out = {"underlying": {"symbol": c.symbol, "side": c.side.value, "entry": c.entry, "stop": c.stop,
                           "tp1": tp1, "tp2": tp2, "tp1_rr": TP1_RR, "tp2_rr": TP2_RR, "risk": round(risk, 2)},
-           "recommended": rec,
-           "rationale": "medMFE~1R: most trades small -> DEBIT (caps at TP1) is the reliable money; "
-                        "NAKED runs to TP2(4R) for the trend-day tail; CREDIT = theta in range.",
+           "recommended": "naked",
+           "rationale": "payoff replay verdict (2026-07-06): NAKED is the only structure that "
+                        "passes on ORB signals — the 4R tail pays; spreads cap or sell it. "
+                        "Debit/credit shown for reference with their FAIL gates.",
            "structures": {}}
     for k, p in plays.items():
         out["structures"][k] = {"legs": [f"{l.side} {l.right}{l.strike:g}@{l.price}" for l in p.legs],
+                                "gate": gates.get(k, "untested"),
                                 "cost_or_credit_usd": p.cost_or_credit_usd, "max_loss_usd": p.max_loss_usd,
                                 "max_profit_usd": ("unlimited" if p.max_profit_usd == float("inf") else p.max_profit_usd),
                                 "breakeven": p.breakeven, "rr": p.rr, "exit": exits[k]}

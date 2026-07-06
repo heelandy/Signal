@@ -138,6 +138,11 @@ def webull_bars(symbol: str, tf: str = "5m", count: int = 800) -> pd.DataFrame:
         from webull.data.common.timespan import Timespan
     except ImportError:
         return _normalize(None, "webull")                       # SDK not installed -> empty
+    # QUIET the SDK's internal ERROR spam (2026-07-05): an entitlement 401 is an EXPECTED,
+    # handled fallback path — the SDK logs a full request dump at ERROR before our catch.
+    import logging as _logging
+    for _n in ("webull", "webull.core", "webull.core.client"):
+        _logging.getLogger(_n).setLevel(_logging.CRITICAL)
     sym = symbol.upper()
     is_fut = sym in _WB_FUT
     if is_fut and _WB_FUT_OFF["v"]:                             # futures entitlement missing -> stay disabled
@@ -151,6 +156,10 @@ def webull_bars(symbol: str, tf: str = "5m", count: int = 800) -> pd.DataFrame:
             except Exception as e:
                 if "401" in str(e) or "permission" in str(e).lower():
                     _WB_FUT_OFF["v"] = True                     # no US-futures data entitlement -> disable, fall back
+                    _logging.getLogger(__name__).warning(
+                        "webull: US_FUTURES quotes not in your subscription — futures disabled "
+                        "for this session, falling back to the next provider (subscribe at "
+                        "developer.webull.com to enable)")
                 return _normalize(None, "webull")
         else:
             cat = (Category.US_ETF if sym in _WB_ETF else Category.US_STOCK).name

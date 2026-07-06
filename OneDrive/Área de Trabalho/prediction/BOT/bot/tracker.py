@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS decisions(
 def _con():
     DB.parent.mkdir(parents=True, exist_ok=True)   # fresh checkout has no data/ (it's git-ignored)
     c = sqlite3.connect(str(DB), check_same_thread=False)
+    # scan thread + API thread + paper autotrade all write this DB — WAL keeps readers unblocked
+    # and busy_timeout retries instead of throwing "database is locked" (PAPER_TO_LIVE prereq)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=5000")
     c.executescript(_SCHEMA); c.commit()
     for col in ("mfe_r", "mae_r"):                    # study: max favorable / adverse excursion (R) — best-effort migrate
         try:

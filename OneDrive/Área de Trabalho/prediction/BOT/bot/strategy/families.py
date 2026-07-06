@@ -49,8 +49,13 @@ FAMILIES = [
     # alignment drives the GRADE (A+/A/B) + GRADE_MULT size (unconfirmed=B=0.4x, confirmed=A/A+=full/1.5x = scale-in),
     # NOT a veto. Matches the STACK Pine default (trend gate Off). Set gate="trend" to REQUIRE structure again.
     Family("breakout", "breakout / vol-expansion", "validated", "none", "close"),
-    Family("trend", "trend / momentum", "equity_only", "trend", "close"),
-    Family("smc", "structure / order-flow (SMC OB)", "equity_only", "trend", "close", ob=True),
+    # TREND/MOMENTUM FINALIZED (user 2026-07-06): its edge IS the canonical equity entry — the
+    # struct_vwap arming gate (QQQ +0.507 / SPY +0.448 canonical vs +0.389/+0.355 for this coarser
+    # replica, F73). As a separate TRADEABLE family it only near-duplicated every equity breakout
+    # in the tracker/scorecard (F58/F62: filters, ~0 additive) -> info-only. Same for SMC-OB
+    # (adds ~0 net of honest fills, F58). One system of record: the breakout family.
+    Family("trend", "trend / momentum (merged into breakout ctx)", "equity_only", "trend", "close", tradeable=False),
+    Family("smc", "structure / order-flow (SMC OB)", "equity_only", "trend", "close", ob=True, tradeable=False),
     Family("meanrev", "mean-reversion / range-fade", "negative", "none", "fade", tradeable=False),
 ]
 
@@ -200,6 +205,18 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
             with np.errstate(invalid="ignore"):
                 d["trend_up"] = (st == 1) & (cl_arr > vw_arr)
                 d["trend_down"] = (st == 2) & (cl_arr < vw_arr)
+        elif fam.key == "breakout" and mode == "mid":
+            d["trend_up"] = True     # 07.3 futures: OR-MID (watch machine) is the ONE obligatory
+            d["trend_down"] = True   # arm gate — VWAP/STRUCT/SLOPE grade, never block (user rule)
+        elif fam.key == "breakout" and vw_arr is not None and mode == "abc":
+            # DIR-FAST A∨B∨C (user 2026-07-05): any engine aligned arms — A = VWAP side (+the
+            # obligatory mid via watch), B = structure state, C = combined slope strong (>=0.30)
+            from bot.strategy.orb_state import slope_series, SLOPE_STRONG
+            _S = slope_series(op_arr, cl_arr, d["atr14"].to_numpy(float)) if "atr14" in d else \
+                np.zeros(len(cl_arr))
+            with np.errstate(invalid="ignore"):
+                d["trend_up"] = (cl_arr > vw_arr) | (st == 1) | (_S >= SLOPE_STRONG)
+                d["trend_down"] = (cl_arr < vw_arr) | (st == 2) | (_S <= -SLOPE_STRONG)
         else:
             d["trend_up"] = (st == 1) if fam.gate == "trend" else True
             d["trend_down"] = (st == 2) if fam.gate == "trend" else True
@@ -212,19 +229,26 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
             # the breakout family FILTERS narrow-OR (min_or_width=2.4, the graduated vol-expansion filter) exactly
             # like the STACK Pine (volexp_filter ON) — same signal set on both surfaces. Info families stay 0.
             reentry = fam.tradeable
-            vx = OR_WIDTH_WIDE if fam.key == "breakout" else 0.0
+            # F75 (2026-07-06): the narrow-OR filter is DEMOTED to grade-only — under the full
+            # layered entry its blocked cohort is positive on every symbol (QQQ +0.37, SPY +0.42,
+            # NQ +0.10, ES ~0). vol_expansion still rides every proposal as the GRADE flag.
+            vx = 0.0
             # ENTRY STANDARD Layer 3 (canonical docs 2026-07-04) on the close-confirm families:
             # live WATCH at the OR mid + cooldown after a watch cancel + stale/RANGE rule + the
             # PULLBACK retest (don't chase an extended break). Mirrors the Pine + orb_state FSM.
             lsig, ssig, or_lo, or_hi, *_ = B._orb_signals(d, or_s, or_e, 0.0, cut, fam.execm, tradeday, reentry,
                                             ob_l=obl, ob_s=obs, entry_delay=a.entry_delay, chase_atr=a.chase_atr,
-                                            strong_body=(SB if cl else 0.0), ft_confirm=cl, dir_seq=cl,
+                                            strong_body=(SB if cl else 0.0), ft_confirm=(cl and a.ft_confirm), dir_seq=cl,
                                             max_entries=a.max_entries,
                                             # LIVE mid supersedes the FROZEN day bias on mid-armed
                                             # assets (user screenshots 2026-07-05: 'OR-mid: short
                                             # day' blocked a live-aligned long)
+                                            # "abc" belongs in the exclusion set (07.3 rule: the
+                                            # LIVE mid supersedes the frozen bias on mid-armed
+                                            # assets) — it was missed at the 07.4 rename and
+                                            # futures silently regained the frozen bias (F75)
                                             or_mid_bias=(fam.key == "breakout" and
-                                                         mode not in ("mid_vwap", "mid_only")),
+                                                         mode not in ("mid", "mid_vwap", "mid_only", "abc")),
                                             min_or_width=vx,
                                             instant_aligned=(fam.key == "breakout" and a.instant_fill),
                                             watch_live=(cl and ES.watch_gate),
@@ -235,6 +259,19 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
                                             min_pullback_atr=ES.min_pullback_atr,
                                             pullback_timeout=ES.pullback_timeout,
                                             vol_confirm_x=ES.vol_confirm_x)
+            # F76 MACRO/REGIME GATES ON LIVE SIGNALS (2026-07-06): the canonical backtest ANDs
+            # _orb_signals with macro_allow & macro_long/short_ok & the per-asset chop block —
+            # the live scan never did (7th live≠backtest divergence: the SPY stand-down existed
+            # only in backtest+Pine while paper autotrade would trade against it). Missing
+            # columns stay permissive (live macro fetch can fail — never break the scan).
+            _ones = np.ones(n, dtype=bool)
+            _ma = d["macro_allow_trades"].fillna(True).to_numpy(bool) if "macro_allow_trades" in d else _ones
+            _ml = d["macro_long_ok"].fillna(True).to_numpy(bool) if "macro_long_ok" in d else _ones
+            _ms = d["macro_short_ok"].fillna(True).to_numpy(bool) if "macro_short_ok" in d else _ones
+            _rg = ((d["local_regime"] != 2).to_numpy() if ("local_regime" in d and a.block_range)
+                   else _ones)
+            lsig = lsig & _ma & _ml & _rg
+            ssig = ssig & _ma & _ms & _rg
             for i in range(max(0, n - bars_back), n):
                 sign = 1 if lsig[i] else (-1 if ssig[i] else 0)
                 if sign == 0:
@@ -263,14 +300,16 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
                                        symbol=symbol)
                 except Exception:
                     pit = None
-                # LIVE SIMILARITY (advisory): nearest historical pattern cluster for this setup's
-                # 64-bar window — scored here (only the result rides on the proposal; None when no
-                # fitted clusters or not enough bars).
+                # LIVE SIMILARITY + NN SEQUENCE (advisory): nearest historical pattern cluster AND
+                # the calibrated NN-champion confidence for this setup's 64-bar window. Both are
+                # champion-gated — None until a model passes gates and is promoted (AITP).
                 sim = None
+                nn_conf = None
                 try:
                     if i >= 63:
                         from bot.nn.dataset import _bar_channels
                         from bot.nn.similarity import similarity_score
+                        from bot.nn.train import predict_sequence
                         M = _bar_channels(d, or_hi, or_lo)
                         seq = M[i - 63:i + 1].copy()
                         if sign == -1:                      # mirror shorts onto the long frame
@@ -278,6 +317,7 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
                             seq[:, [7, 8]] = seq[:, [8, 7]]
                             seq[:, [2, 3]] = seq[:, [3, 2]]
                         sim = similarity_score(seq)
+                        nn_conf = predict_sequence(seq)     # None until an NN champion exists
                 except Exception:
                     sim = None
                 ts = pd.Timestamp(d["ts"].iloc[i]); gen = ts.tz_convert("UTC").isoformat()
@@ -290,7 +330,7 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
                                 "asset_status": a.status, "asset_note": a.note, "session": sname,
                                 "bars_ago": n - 1 - i, "struct_aligned": aligned,
                                 "slope_grade": sgrade, "slope_S": eng["S"], "pit_features": pit,
-                                "similarity": sim,
+                                "similarity": sim, "nn_seq": nn_conf,
                                 "vol_expansion": vol_exp, "or_width_atr": round(orw, 2) if orw == orw else None,
                                 # OR levels at the signal bar — the zone state machine (orb_state)
                                 # uses these to invalidate a stale proposal at the CURRENT price

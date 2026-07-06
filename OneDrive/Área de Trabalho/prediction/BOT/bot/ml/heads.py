@@ -43,7 +43,10 @@ def _regressor_zoo() -> dict:
             def _impute(self, X):
                 X = np.atleast_2d(np.asarray(X, float))
                 if self.med is None:
-                    med = np.nanmedian(X, axis=0)
+                    med = np.zeros(X.shape[1])        # all-NaN cols (l2_*) expected -> 0
+                    ok = np.isfinite(X).any(axis=0)
+                    if ok.any():
+                        med[ok] = np.nanmedian(X[:, ok], axis=0)
                     self.med = np.where(np.isfinite(med), med, 0.0)
                 return np.where(np.isfinite(X), X, self.med)
 

@@ -152,7 +152,7 @@ class EntryStandard:
     stale_bars: int = 24         # max bars in WATCH without a fill -> RANGE (0 = off; 24 = 2h on 5m)
     chase_atr: float = 1.0       # extension beyond the edge that flips WATCH -> PULLBACK (0 = off)
     retest_atr: float = 0.5      # pullback satisfied when price returns within this ATR of the target
-    max_entries: int = 2         # two-entry limit per side per session (futures override to 3)
+    max_entries: int = 1         # per-side entry limit per session (F76: equity 1 — re-entries lose; futures override to 3)
     strong_body: float = 0.25    # fill: min body/range of the breakout candle (no wick-only fills)
     ft_confirm: bool = True      # fill: next-candle continuation (F59c)
     dir_seq: bool = True         # fill: direction sequence c>c1>c2 / mirror (F61)
@@ -418,6 +418,35 @@ def _reg_slope(y: np.ndarray) -> float:
     return float((xm * (y - y.mean())).sum() / denom) if denom > 0 else 0.0
 
 
+def slope_series(opens, closes, atr, n: int = 12) -> np.ndarray:
+    """Vectorized combined-S per bar — the ARRAY twin of slope_engine for backtest gating
+    (DIR-FAST C, user 2026-07-05: a third arming engine; fire when A, B or C aligns).
+    S[i] is computed from the n bars ENDING at i (causal), 0 while the window is short or ATR
+    is invalid. Matches slope_engine's Sc/Sm/BP weights exactly (self-tested below)."""
+    o = np.asarray(opens, float); c = np.asarray(closes, float)
+    a = np.asarray(atr, float)
+    N = len(c)
+    S = np.zeros(N)
+    if N < n or n < 3:
+        return S
+    k = np.arange(n, dtype=float)
+    xm = k - k.mean()
+    ker = xm / float((xm * xm).sum())                 # regression weights: slope = ker · window
+    sc = np.correlate(c, ker, "valid")                # slope of closes, window ending at i
+    sm = np.correlate((o + c) / 2.0, ker, "valid")    # slope of body midpoints
+    w = 1.0 + k / max(n - 1, 1)                       # recency weights (oldest 1x .. newest 2x)
+    body = c - o
+    num = np.correlate(body, w, "valid")
+    den = np.correlate(np.abs(body), w, "valid")
+    bp = np.divide(num, den, out=np.zeros_like(num), where=den > 0)
+    atr_end = a[n - 1:]
+    ok = np.isfinite(atr_end) & (atr_end > 0)
+    out = np.zeros_like(sc)
+    out[ok] = 0.50 * sc[ok] / atr_end[ok] + 0.30 * sm[ok] / atr_end[ok] + 0.20 * bp[ok]
+    S[n - 1:] = out
+    return S
+
+
 def slope_engine(opens, closes, atr: float, n: int = 12) -> dict:
     """Combined slope read over the last n candles (causal, symmetric, div-by-zero safe).
     Returns Sc_atr, Sm_atr, body_pressure, S (combined), plus persistence + efficiency of the
@@ -540,10 +569,22 @@ def fast_direction(closes_1m, or_high: float | None = None, or_low: float | None
             and np.isfinite(or_high) and np.isfinite(or_low):
         v_mid = 1 if px > (or_high + or_low) / 2.0 else -1
     a_score = v_mid + v_vwap
+    # DIR-FAST C (user 2026-07-05, 07.4): the combined-slope STRONG read (|S| >= 0.30). The
+    # A∨B∨C arm on futures fires when ANY of A (vwap side), B (structure), C (slope strong)
+    # agrees — an OR, not an alignment; only one of the three needs to be true.
+    v_c = 0
+    if eng is not None:
+        v_c = 1 if eng["S"] >= SLOPE_STRONG else (-1 if eng["S"] <= -SLOPE_STRONG else 0)
+    abc_up = v_vwap > 0 or v_st > 0 or v_c > 0
+    abc_dn = v_vwap < 0 or v_st < 0 or v_c < 0
     out = {"zone": v_zone, "vwap": v_vwap, "slope": v_slope, "struct_1m": v_st,
            "score": score, "read": read,
            "dir_a": {"mid": v_mid, "vwap": v_vwap,
                      "read": "up" if a_score >= 2 else ("down" if a_score <= -2 else "mixed")},
+           "dir_c": v_c,
+           "abc": {"up": bool(abc_up), "down": bool(abc_dn),
+                   "read": "up" if abc_up and not abc_dn else
+                           ("down" if abc_dn and not abc_up else "mixed")},
            "aligned": v_zone != 0 and v_zone == v_slope == v_st}   # OR+SLOPE+STRUC agree
     if eng is not None:
         out["slope_engine"] = eng

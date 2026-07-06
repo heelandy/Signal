@@ -54,6 +54,20 @@
   .b-pass{background:rgba(45,212,167,.15);color:var(--good)} .b-fail{background:rgba(240,89,106,.15);color:var(--bad)}
   .chartbox{position:relative;height:230px}
   .note{font-size:11px;color:var(--mut);margin-top:8px}
+  /* approval ladder must FIT its card (user screenshot 2026-07-05): wrap every cell, fixed
+     column widths, no horizontal spill */
+  #approvals table{table-layout:fixed;width:100%}
+  #approvals td, #approvals th{white-space:normal;word-break:break-word;vertical-align:top}
+  #approvals td:first-child{width:34%}
+  #approvals td:last-child{width:86px}
+  #approvals .badge{white-space:nowrap}
+  /* the version dropdown + the STRATEGY DUEL table must also FIT the card (user 2026-07-06):
+     fixed layout, wrapped cells, compact numerics — nothing spills out of the div */
+  #apprversel{max-width:100%;font-size:11px}
+  #duel table{table-layout:fixed;width:100%;font-size:10px}
+  #duel td, #duel th{white-space:normal;word-break:break-word;vertical-align:top;padding:3px 4px}
+  #duel td:first-child, #duel th:first-child{width:26%}
+  #duel .badge{white-space:normal;font-size:9px;padding:1px 4px}
 </style>
 </head>
 <body>
@@ -104,6 +118,8 @@
       <button onclick="run('parity')">9 · Replay parity</button>
       <button onclick="run('threshold')">10 · Threshold study</button>
       <button onclick="run('pairs')">11 · DIR-fast pairs</button>
+      <button onclick="run('geometry')" title="ultimate-goal check: WR/PF/DD per TP×stop geometry (45t futures / $4 equities)">12 · Target geometry</button>
+      <button onclick="run('nqwr')" title="futures high-WR search: stop budget × TP × regime grid (NQ/ES)">13 · Futures 75% WR</button>
       <span class="mut" id="runhint">ALL = pooled multi-symbol · one subprocess at a time</span>
     </div>
     <div class="log" id="runlog">—</div>
@@ -141,11 +157,14 @@
       <div id="approvals">loading…</div>
       <div class="runrow" style="margin-top:10px">
         <button id="bigapprove" style="background:#123a2a;border-color:var(--good);font-weight:700"
-                onclick="approveAndPaper()">✓ APPROVE strategy + enable PAPER trade</button>
+                onclick="approveAndPaper()">✓ APPROVE + paper + continuous learning</button>
       </div>
       <div class="note" id="paperstat"></div>
-      <div class="note">paper autotrade stays <b>blocked</b> until the paper stage is approved;
-        live is hard-locked in config regardless.</div></div>
+      <div class="note">one click = ladder approved for the SELECTED version + paper autotrade +
+        continuous training armed + the lineage joins the STRATEGY DUEL below; live stays
+        hard-locked in config regardless.</div>
+      <h2 style="margin-top:12px">Strategy duel <span class="r mut">approved lineages, head-to-head</span></h2>
+      <div id="duel">—</div></div>
     <div class="card col4"><h2>Pending models (gate-passed, awaiting approval)</h2>
       <div class="scroll" id="pending">—</div></div>
     <div class="card col12"><h2>Historical data QA <span class="r">run 0 · Data QA to refresh</span></h2>
@@ -241,7 +260,7 @@ async function run(kind, extraArgs){
   const sym = document.getElementById('sym').value;
   const tf = document.getElementById('tf').value;
   let args = extraArgs || '';
-  if (!extraArgs && ['dataset','ml','nn','heads'].includes(kind) && tf !== '5m') args = `--tf=${tf}`;
+  if (!extraArgs && ['dataset','ml','nn','heads','sweep'].includes(kind) && tf !== '5m') args = `--tf=${tf}`;
   const log = document.getElementById('runlog');
   try{
     const res = await fetch(`/api/training/run?kind=${kind}&sym=${sym}&args=${encodeURIComponent(args)}`,
@@ -297,10 +316,16 @@ async function contToggle(){
 }
 window.contToggle = contToggle;
 
-/* ---- approvals ---- */
+/* ---- approvals (multi-lineage: ORB core + each gauntlet-passed module) ---- */
+let _apprVer = '';
 async function loadApprovals(){
-  const st = await j('/api/approval/status');
-  document.getElementById('apprver').textContent = st.strategy_version;
+  const st = await j('/api/approval/status' + (_apprVer ? `?version=${encodeURIComponent(_apprVer)}` : ''));
+  _apprVer = st.strategy_version;
+  const vers = st.available_versions || [st.strategy_version];
+  document.getElementById('apprver').innerHTML = vers.length > 1
+    ? `<select id="apprversel" onchange="_apprVer=this.value;loadApprovals()">` +
+      vers.map(v => `<option${v === st.strategy_version ? ' selected' : ''}>${v}</option>`).join('') + `</select>`
+    : st.strategy_version;
   const ab = st.about || {};
   const ev = st.evidence || {};
   const evline = Object.entries(ev).map(([k,v]) =>
@@ -308,7 +333,8 @@ async function loadApprovals(){
   const meaning = ab.stage_meaning || {};
   const rows = Object.entries(st.stages).map(([stage, rec]) => {
     const done = !!rec;
-    return `<tr><td title="${(meaning[stage]||'').replace(/"/g,'&quot;')}">${stage} <span class="mut">?</span></td>
+    return `<tr><td style="white-space:normal;max-width:260px"><b>${stage}</b>
+        <div class="note" style="margin:2px 0 0">${meaning[stage] || ''}</div></td>
       <td>${done ? `<span class="badge b-pass">APPROVED</span> <span class="mut">${fmtET(rec.at, true)} ${rec.notes||''}</span>` : '<span class="mut">pending</span>'}</td>
       <td>${done ? `<button onclick="appr('revoke','${stage}')">Revoke</button>` : `<button onclick="appr('approve','${stage}')">Approve</button>`}</td></tr>`;
   }).join('');
@@ -329,9 +355,9 @@ async function loadApprovals(){
     <table><tr><th>stage</th><th>status</th><th></th></tr>${rows}</table><div class="note">${evline}</div>`;
 }
 async function appr(action, stage){
-  let url = `/api/approval/${action}?stage=${stage}`;
+  let url = `/api/approval/${action}?stage=${stage}&version=${encodeURIComponent(_apprVer)}`;
   if (action === 'approve'){
-    const notes = prompt(`Approve stage "${stage}" for the current strategy version?\nOptional notes:`, '');
+    const notes = prompt(`Approve stage "${stage}" for ${_apprVer}?\nOptional notes:`, '');
     if (notes === null) return;
     url += `&notes=${encodeURIComponent(notes)}`;
   }
@@ -340,17 +366,39 @@ async function appr(action, stage){
 }
 window.appr = appr;
 
-/* one-click: approve the whole ladder, then arm paper autotrade */
+/* one-click: approve the whole ladder for the SELECTED version, arm paper autotrade AND
+   continuous training; the lineage joins the strategy duel (user 2026-07-06) */
 async function approveAndPaper(){
-  if (!confirm('Approve this strategy version for research → replay → PAPER trading,\n' +
-               'and turn PAPER autotrade ON?\n\n(Paper account only — live stays hard-locked.)')) return;
+  if (!confirm(`Approve ${_apprVer} for research → replay → PAPER trading,\n` +
+               'arm PAPER autotrade + CONTINUOUS TRAINING, and enter it in the strategy duel?\n\n' +
+               '(Paper account only — live stays hard-locked.)')) return;
   const notes = prompt('Approval notes (recorded in the audit trail):', 'one-click approval') ?? '';
-  await fetch(`/api/approval/approve_paper_all?notes=${encodeURIComponent(notes)}`, {method: 'POST'});
+  const st = await (await fetch(`/api/approval/approve_paper_all?notes=${encodeURIComponent(notes)}&version=${encodeURIComponent(_apprVer)}`, {method: 'POST'})).json();
   const p = await (await fetch('/api/control/paper_autotrade?on=1', {method: 'POST'})).json();
-  document.getElementById('paperstat').innerHTML = p.error
-    ? `<span class="no">strategy approved, but paper autotrade NOT armed: ${p.error}</span>`
-    : `<span class="ok">strategy approved · PAPER AUTOTRADE ON (${p.placed||0} orders placed so far)</span>`;
-  loadApprovals();
+  document.getElementById('paperstat').innerHTML = (p.error
+    ? `<span class="no">approved, but paper autotrade NOT armed: ${p.error}</span>`
+    : `<span class="ok">approved · PAPER AUTOTRADE ON (${p.placed||0} orders so far)</span>`)
+    + ` · <span class="ok">continuous training ${st.continuous_training||''}</span>`;
+  loadApprovals(); loadDuel();
+}
+async function loadDuel(){
+  let d; try{ d = await j('/api/duel'); }catch(e){ return }
+  const el = document.getElementById('duel');
+  const mods = Object.keys(d.lineage || {});
+  if (!mods.length){ el.textContent = '—'; return }
+  el.innerHTML = '<table><tr><th>module</th><th class="num">n</th><th class="num">WR%</th><th class="num">avgR</th><th class="num">totR</th><th class="num">PF</th><th class="num">open</th><th>status</th></tr>' +
+    mods.map(m => {
+      const r = (d.results || {})[m];
+      const joined = (d.joined || {})[m];
+      const opt = (d.options || {})[m];
+      return `<tr><td title="${(d.lineage||{})[m]||''}">${m.replace(/_/g,' ')}` +
+        (opt ? `<div class="mut" style="font-size:9px;margin-top:2px" title="gate-passed options expression (payoff replay F74)">⚡ ${opt}</div>` : '') + `</td>` +
+        (r ? `<td class="num">${r.n}</td><td class="num">${r.win_pct}</td><td class="num">${r.avg_r}</td><td class="num">${r.total_r}</td><td class="num">${r.pf ?? '—'}</td>`
+           : `<td class="num" colspan="5">no resolved trades yet</td>`) +
+        `<td class="num">${(d.open_positions||{})[m]||0}</td>` +
+        `<td>${joined ? '<span class="badge b-pass">IN THE DUEL</span>' : '<span class="mut">awaiting approval</span>'}</td></tr>`;
+    }).join('') + '</table>' +
+    `<div class="note">shadow only — daily rules on completed bars, no orders · last day ${d.last_day || '—'}</div>`;
 }
 window.approveAndPaper = approveAndPaper;
 
@@ -611,8 +659,11 @@ async function l2register(){
   const sym = document.getElementById('l2sym').value;
   if (!path){ document.getElementById('l2msg').textContent = 'paste a full path first'; return; }
   const r = await (await fetch(`/api/data/register?path=${encodeURIComponent(path)}&symbol=${sym}`, {method:'POST'})).json();
+  // folder registrations return {folder, registered, sources[]}; single files return {kind, size_mb, id}
   document.getElementById('l2msg').innerHTML = r.error ? `<span class="no">${r.error}</span>`
-    : `<span class="ok">registered ${r.kind} (${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
+    : r.registered !== undefined
+      ? `<span class="ok">folder scanned: ${r.registered} data file(s) registered — click SYNC ALL to synthesize</span>`
+      : `<span class="ok">registered ${r.kind} (${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
   loadL2();
 }
 window.l2register = l2register;
@@ -621,10 +672,56 @@ async function l2sync(id){
   if (r.error) document.getElementById('l2msg').textContent = r.error; else poll();
 }
 window.l2sync = l2sync;
+async function l2syncAll(){
+  const res = await fetch('/api/data/sync_all', {method:'POST'});
+  if (res.status === 404){
+    document.getElementById('l2msg').textContent =
+      'ERROR 404: the SERVER IS RUNNING OLD CODE — close the old server window and start BOT\\run_server.bat.';
+    return;
+  }
+  const r = await res.json();
+  document.getElementById('l2msg').textContent = r.error ? r.error : 'sync-all started — progress below';
+  l2syncPoll();
+}
+window.l2syncAll = l2syncAll;
+let _l2poll = null;
+async function l2syncPoll(){
+  const s = await j('/api/data/sync_status');
+  const el = document.getElementById('l2msg');
+  if (s.on){
+    el.innerHTML = `<span class="ok">SYNC ALL ${s.done}/${s.total}</span> — now: ${s.current || '…'}` +
+      (s.errors.length ? ` · <span class="no">${s.errors.length} error(s)</span>` : '');
+    if (!_l2poll) _l2poll = setInterval(l2syncPoll, 4000);
+  } else if (s.training && !s.training.startsWith('done')){
+    el.innerHTML = `<span class="ok">sync finished ${s.done}/${s.total} — AUTO-TRAINING: ${s.training}</span>` +
+      ' (dataset → ML → NN per synced symbol, --no-promote; watch the run log + Pending models)';
+    if (!_l2poll) _l2poll = setInterval(l2syncPoll, 4000);
+  } else {
+    if (_l2poll){ clearInterval(_l2poll); _l2poll = null; }
+    if (s.total) el.innerHTML = `<span class="ok">sync-all finished ${s.done}/${s.total}</span>` +
+      (s.errors.length ? ` — <span class="no">${s.errors.join(' · ').slice(0, 300)}</span>` : '') +
+      (s.training ? ` — <span class="ok">datasets + ML + NN retrained automatically</span> (gate-passers appear under Pending models)` :
+                    ' — now Rebuild datasets so the l2_* features join in');
+    loadL2();
+  }
+}
+async function l2retrain(){
+  const res = await fetch('/api/data/retrain_synced', {method:'POST'});
+  const r = res.status === 404 ? {error:'404 — SERVER RUNNING OLD CODE, restart run_server.bat'} : await res.json();
+  document.getElementById('l2msg').textContent = r.error ? r.error :
+    `retrain started for ${(r.symbols||[]).join(', ')} — dataset → ML → NN`;
+  if (!r.error) l2syncPoll();
+}
+window.l2retrain = l2retrain;
 async function loadL2(){
   const d = await j('/api/data/sources');
   const el = document.getElementById('l2sources');
+  const n_reg = (d.sources || []).filter(s => s.status === 'registered').length;
   el.innerHTML = (d.sources && d.sources.length) ?
+    `<div class="runrow" style="margin-bottom:8px">` +
+    (n_reg > 1 ? `<button class="primary" onclick="l2syncAll()">⟳ SYNC ALL (${n_reg} pending)</button>` : '') +
+    ((d.sources || []).some(s => s.status === 'synthesized') ? `<button onclick="l2retrain()" title="dataset → ML → NN for every symbol with synthesized depth features (runs automatically after SYNC ALL — this button re-runs it on demand)">⚙ Rebuild + retrain synced</button>` : '') +
+    `</div>` +
     '<table><tr><th>sym</th><th>kind</th><th class="num">MB</th><th>status</th><th class="num">feat rows</th><th></th></tr>' +
     d.sources.map(s => `<tr><td>${s.symbol}</td><td>${s.kind}</td><td class="num">${s.size_mb}</td>
       <td>${s.status === 'synthesized' ? '<span class="badge b-pass">SYNTHESIZED</span>' : s.status}</td>
@@ -689,7 +786,7 @@ async function loadAudit(){
 
 async function loadAll(){ loadDataset(); loadLatest(); loadAB(); loadRegistry();
                           loadApprovals(); loadPending(); loadDataQA(); loadSweep(); loadPaperStat();
-                          loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); }
+                          loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); loadDuel(); }
 document.getElementById('sym').addEventListener('change', loadDataset);
 loadAll(); poll();
 </script>

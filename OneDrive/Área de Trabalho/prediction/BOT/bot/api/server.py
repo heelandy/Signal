@@ -34,6 +34,36 @@ _broker_cache = {}
 STATIC = Path(__file__).parent / "static"
 STATIC.mkdir(exist_ok=True)
 
+# RESTART RECOVERY (AITP phase 7, pulled forward 2026-07-05): safety toggles + paper dedup keys
+# survive a server restart — a kill-switch must NOT silently reset to off, and a restart must not
+# re-place paper orders already sent this session. Mode is NOT restored (live requires its double
+# gate every boot by design).
+_RUNTIME_STATE = Path(__file__).resolve().parents[2] / "data" / "runtime_state.json"
+
+
+def _persist_runtime():
+    try:
+        _RUNTIME_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _RUNTIME_STATE.write_text(json.dumps(
+            {"kill_switch": _state.get("kill_switch", False),
+             "paper_autotrade": _state.get("paper_autotrade", False),
+             "paper_placed": sorted(_paper["placed"])[-500:],
+             "saved_at": _now()}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _restore_runtime():
+    try:
+        if not _RUNTIME_STATE.exists():
+            return
+        st = json.loads(_RUNTIME_STATE.read_text(encoding="utf-8"))
+        _state["kill_switch"] = bool(st.get("kill_switch", False))
+        _state["paper_autotrade"] = bool(st.get("paper_autotrade", False))
+        _paper["placed"].update(st.get("paper_placed") or [])
+    except Exception:
+        pass
+
 
 _REQUIRE_AUTH = os.environ.get("API_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
 
@@ -149,6 +179,7 @@ def _paper_autotrade():
                                  tif=TimeInForce.DAY, idempotency_key=key)
             ev = b.submit(order)
             _paper["placed"].add(key)
+            _persist_runtime()              # restart must not re-place this order
             _paper["log"].append({"ts": _now(), "symbol": s["symbol"], "side": s["side"], "qty": qty,
                                   "grade": s["grade"], "entry": s["entry"], "stop": s["stop"], "tp2": s["tp2"],
                                   "order": str(getattr(ev, "broker_order_id", "") or getattr(ev, "status", "submitted"))})
@@ -183,6 +214,11 @@ def _autotrack_acceptable():
                              # decision so resolved outcomes become training rows (bot.ml.live_labels)
                              "pit_features": s.get("pit_features"),
                              "slope_grade": s.get("slope_grade"),
+                             # OPTIONS-LEG SHADOW RECORD (audit gap 2026-07-05): the translated
+                             # option structure (strikes/expiry/type/est. cost) rides with every
+                             # tracked signal — the data the standalone options strategy needs,
+                             # collected through paper before any options module goes live.
+                             "options": s.get("options"),
                              "ai_decision": s.get("ai_decision")}, taken=True, auto=True)
         except Exception:
             pass
@@ -197,13 +233,37 @@ def _scan_loop():
         if not _state["kill_switch"]:
             _latest["scanning"] = True
             try:
-                _latest["signals"] = scan_watchlist(_WATCH, bars_back=4, persist=False)
+                # bars_back=12 (1 hour): the autotracker dedups per bar, so a wider window costs
+                # nothing but makes signal capture survive server restarts — with 4 (20 min) the
+                # NQ B-long on 2026-07-06 fired during a reload storm and was never recorded
+                _latest["signals"] = scan_watchlist(_WATCH, bars_back=12, persist=False)
                 _latest["ts"] = _now(); _latest["error"] = None
                 _autotrack_acceptable()          # shadow-track ACCEPTABLE signals -> Candidates/Performance/scorecard update
                 _paper_autotrade()               # STUDY: place paper orders when the toggle is on
                 track_outcomes()                 # resolve first-touch outcomes of tracked signals each cycle
+                try:                             # persist flow scores each cycle (data-first — future feature backfill)
+                    from bot.orderflow.persist import snapshot as _of_snap
+                    _of_snap(list(dict.fromkeys(s.get("symbol") for s in (_latest.get("signals") or [])
+                                                if s.get("symbol"))) or ["SPY", "QQQ"])
+                except Exception:
+                    pass
                 if _mkt_tick["n"] % 10 == 0:      # market context every ~10 cycles (slow daily data)
                     _latest["market"] = market_context()
+                    # PERIODIC RECONCILE (phase-7 pulled forward): compare tracked open decisions
+                    # vs the paper broker's positions every ~10 min while autotrade is armed
+                    if _state.get("paper_autotrade"):
+                        try:
+                            from bot.reconcile import reconcile_once
+                            _latest["reconcile"] = reconcile_once(_paper_broker())
+                        except Exception as e:
+                            _latest["reconcile"] = {"error": str(e)[:120]}
+                    # STRATEGY DUEL (user 2026-07-06): approved module lineages shadow-trade
+                    # their daily rules head-to-head; idempotent per completed trading day
+                    try:
+                        from bot.strategy.duel import run_duel_once
+                        _latest["duel_tick"] = run_duel_once()
+                    except Exception as e:
+                        _latest["duel_tick"] = {"error": str(e)[:120]}
                 _mkt_tick["n"] += 1
             except Exception as e:
                 _latest["error"] = str(e)
@@ -323,6 +383,7 @@ def datasources(probe: int = 0):
 
 @app.on_event("startup")
 def _startup():
+    _restore_runtime()                      # kill-switch/paper toggles + dedup keys survive restarts
     if os.environ.get("BOT_AUTOSCAN", "1") != "0":
         _threading.Thread(target=_scan_loop, daemon=True).start()
     # AUTO-ARM continuous training on boot (opt-in): set BOT_CONT_TRAINING=1 (+ optional
@@ -331,6 +392,17 @@ def _startup():
         _cont["interval_min"] = max(30, int(os.environ.get("BOT_CONT_INTERVAL_MIN", "360")))
         _cont["on"] = True
         _threading.Thread(target=_cont_loop, daemon=True).start()
+    # report retention (ENGINEERING_AUDIT): timestamped training reports older than 90 days go;
+    # un-timestamped study reports (gauntlet/sweep/geometry/...) are latest-only and always kept
+    try:
+        from bot.config import BOT_ROOT
+        import re as _re2, time as _t2
+        cutoff = _t2.time() - 90 * 86400
+        for f in (BOT_ROOT / "data" / "ml" / "reports").glob("*_*T*.json"):
+            if _re2.search(r"_\d{8}T\d{6}\.json$", f.name) and f.stat().st_mtime < cutoff:
+                f.unlink()
+    except Exception:
+        pass
 
 
 @app.get("/api/health")
@@ -566,6 +638,7 @@ def kill(on: bool = True, x_api_token: str | None = Header(default=None)):
     if not on:
         auth(x_api_token)
     _state["kill_switch"] = bool(on)        # consulted by the orchestrator before any submit
+    _persist_runtime()                      # survives a restart (phase-7 recovery)
     from bot.audit import log as _audit
     _audit("kill_switch", on=bool(on))
     return {"kill_switch": _state["kill_switch"]}
@@ -586,6 +659,7 @@ def paper_autotrade_toggle(on: int = 0, _=Depends(auth)):
                              f"approve research → replay → paper on /training first",
                     "paper_autotrade": False}
     _state["paper_autotrade"] = bool(on)
+    _persist_runtime()                      # survives a restart (phase-7 recovery)
     from bot.audit import log as _audit
     _audit("paper_autotrade", on=bool(on))
     return {"paper_autotrade": _state["paper_autotrade"], "placed": len(_paper["placed"])}
@@ -593,9 +667,31 @@ def paper_autotrade_toggle(on: int = 0, _=Depends(auth)):
 
 @app.get("/api/paper_log")
 def paper_log():
-    """Study log — what the paper-autotrade placed (and any errors)."""
+    """Study log — what the paper-autotrade placed (and any errors), PLUS the exact blocker when
+    it is not trading (user 2026-07-05: 'paper account is set up but I don't see where this is
+    doing') — every gate in _paper_autotrade's order, diagnosed."""
+    why = "trading — orders appear below as breakout signals fire"
+    if not settings.alpaca_paper:
+        why = "Alpaca keys not in paper mode — set ALPACA_PAPER=true + API keys, restart"
+    elif not _state.get("paper_autotrade"):
+        why = "toggle is OFF — flip 'Paper autotrade' on this dashboard"
+    else:
+        try:
+            from bot.approval import paper_approved
+            from bot.strategy.orb_candidates import STRATEGY_VERSION
+            if not paper_approved(STRATEGY_VERSION):
+                why = (f"strategy {STRATEGY_VERSION} has NO 'paper' approval — the rule version "
+                       "moved (each bump needs a fresh research→replay→paper approval on /training)")
+            else:
+                try:
+                    if not _paper_broker().is_market_open():
+                        why = "market closed — arms itself at the next session"
+                except Exception as e:
+                    why = "broker unreachable: " + str(e)[:100]
+        except Exception as e:
+            why = "approval check failed: " + str(e)[:100]
     return {"on": _state.get("paper_autotrade", False), "alpaca_paper": settings.alpaca_paper,
-            "placed": len(_paper["placed"]), "log": _paper["log"][-40:]}
+            "why": why, "placed": len(_paper["placed"]), "log": _paper["log"][-40:]}
 
 
 @app.post("/api/control/mode")
@@ -726,12 +822,17 @@ class OptionReq(BaseModel):
 def options(o: OptionReq):
     """Compute the naked/debit/credit call-and-put plays for a signal (Python, not Pine)."""
     from bot.options.translate import options_for_candidate
+    from bot.options.exit_plan import STRUCTURE_GATES
     try:
         c = TradeCandidate(symbol=o.symbol.upper(), side=o.side, timeframe="manual", setup="manual",
                            entry=o.entry, stop=o.stop, tp1=o.tp1, tp2=o.tp2, strategy_version="ui")
     except ValueError as e:
         return {"error": str(e)}
-    return options_for_candidate(c, iv=o.iv, dte=o.dte, sel_n=o.sel_n)
+    out = options_for_candidate(c, iv=o.iv, dte=o.dte, sel_n=o.sel_n)
+    if isinstance(out, dict):
+        out["gates"] = STRUCTURE_GATES          # every UI shows the gate each structure passed
+        out["recommended"] = "naked"
+    return out
 
 
 @app.post("/api/exit_plan")
@@ -925,7 +1026,10 @@ def _train_cmds(kind: str, sym: str, promote: bool = True, extra: list[str] | No
             "ab": ([_sys.executable, str(root / "research" / "ab_entry_standard.py"),
                     "QQQ", "SPY", "NQ", "ES"], root),
             "sweep": ([_sys.executable, str(root / "research" / "sweep_entry_params.py")]
-                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
+                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym])
+                      + (extra or []), root),
+            "nqwr": ([_sys.executable, str(root / "research" / "nq_winrate.py")]
+                     + (["NQ", "ES"] if sym == "ALL" else [sym]), root),
             "heads": ([_sys.executable, "-m", "bot.ml.heads", sym] + flag, BOT_ROOT),
             "similarity": ([_sys.executable, "-m", "bot.nn.similarity", sym], BOT_ROOT),
             "l2sync": ([_sys.executable, "-m", "bot.ml.l2_features", "sync", sym], BOT_ROOT),
@@ -936,6 +1040,8 @@ def _train_cmds(kind: str, sym: str, promote: bool = True, extra: list[str] | No
             "gauntlet": ([_sys.executable, str(root / "research" / "gauntlet.py"), sym]
                          + (extra or []), root),
             "threshold": ([_sys.executable, str(root / "research" / "threshold_study.py"), sym], root),
+            "geometry": ([_sys.executable, str(root / "research" / "target_geometry.py")]
+                         + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
             "pairs": ([_sys.executable, str(root / "research" / "dirfast_pairs.py")]
                       + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root)}
     return cmds.get(kind)
@@ -954,8 +1060,12 @@ def training_run(kind: str = "ml", sym: str = "QQQ", args: str = "", _=Depends(a
         return {"error": f"bad symbol '{sym}'"}
     hit = _train_cmds(kind, sym, extra=_safe_args(args))
     if hit is None:
-        return {"error": f"unknown kind {kind}",
-                "kinds": ["dataset", "rejects", "ml", "nn", "dataqa", "ab"]}
+        known = ["dataset", "rejects", "ml", "nn", "dataqa", "ab", "sweep", "heads", "similarity",
+                 "l2sync", "report", "parity", "gauntlet", "threshold", "geometry", "nqwr", "pairs"]
+        return {"error": f"unknown kind {kind}" + (
+                    " — this kind EXISTS in the current code: the SERVER IS RUNNING OLD CODE, "
+                    "restart it (run_server.bat)" if kind in known else ""),
+                "kinds": known}
     cmd, cwd = hit
     proc = _subprocess.Popen(cmd, cwd=str(cwd), stdout=_subprocess.PIPE,
                              stderr=_subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -990,9 +1100,11 @@ def _cont_run(kind: str, sym: str) -> int:
 
 
 def _cont_loop():
+    sig: dict = {}          # sym -> dataset-build tail (row count + span = content signature)
     while _cont["on"]:
         _cont["last_start"] = _now()
         _cont["cycle"] += 1
+        changed = False
         try:
             for sym in list(_cont["syms"]):
                 if not _cont["on"]:
@@ -1001,7 +1113,29 @@ def _cont_loop():
                     _time.sleep(30)
                     continue
                 if sym != "ALL":
-                    _cont_run("dataset", sym)
+                    rc = _cont_run("dataset", sym)
+                    tail = _cont["history"][-1]["tail"] if _cont["history"] else None
+                    # signature = dataset tail (rows/span) + the l2 feature-store mtimes — an L2
+                    # sync changes column VALUES without changing row counts, so the tail alone
+                    # would wrongly skip the retrain that the sync exists to trigger
+                    try:
+                        from bot.config import BOT_ROOT as _BR
+                        l2sig = ",".join(f"{f.name}:{int(f.stat().st_mtime)}" for f in
+                                         sorted((_BR / "data" / "ml" / "features").glob(f"l2feat_{sym}*")))
+                    except Exception:
+                        l2sig = ""
+                    key = (tuple(tail) if tail else None, l2sig)
+                    if rc == 0 and tail and key == sig.get(sym):
+                        _cont["history"].append({"ts": _now(), "job": f"skip {sym}", "rc": 0,
+                                                 "tail": ["dataset unchanged — ml/nn skipped"]})
+                        continue
+                    sig[sym] = key
+                elif not changed and sig.get("ALL_ran"):   # pooled inputs unchanged too
+                    _cont["history"].append({"ts": _now(), "job": "skip ALL", "rc": 0,
+                                             "tail": ["no per-symbol dataset changed"]})
+                    continue
+                changed = changed or sym != "ALL"
+                sig["ALL_ran"] = sig.get("ALL_ran") or sym == "ALL"
                 _cont_run("ml", sym)
                 _cont_run("nn", sym)
         except Exception as e:
@@ -1054,14 +1188,47 @@ def training_approve_model(name: str, version: str, _=Depends(auth)):
 
 # ── STRATEGY APPROVAL WORKFLOW (AITP — paper trading stays blocked until manually approved) ──
 
+def _approval_versions() -> dict:
+    """Every approvable strategy LINEAGE: the ORB entry standard + each gauntlet-passed module
+    (swing/volbreak/connors… — user 2026-07-05: modules get their OWN ladder from research)."""
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    from bot.strategy.modules import STRATEGY_MODULES
+    out = {STRATEGY_VERSION: {"what_it_is": "ORB day-trading entry standard (the core system)",
+                              "evidence": "A/B + gauntlet + parity reports on this page"}}
+    for m in STRATEGY_MODULES:
+        v = m.get("strategy_version")
+        if v and v != STRATEGY_VERSION and m.get("status") == "gauntlet_pass":
+            out[v] = {"what_it_is": f"{m['id']} — {m.get('notes', '')[:220]}",
+                      "evidence": "swing_gauntlet.json / strat_daily run (research reports)"}
+    return out
+
+
+@app.get("/api/approval/versions")
+def approval_versions():
+    return {"versions": _approval_versions()}
+
+
 @app.get("/api/approval/status")
-def approval_status():
+def approval_status(version: str = ""):
     """Approval ladder + WHAT IS BEING APPROVED (user 2026-07-05: 'I need to know what was used
-    and how') — the strategy version, its rules, and the evidence reports behind each stage."""
+    and how') — the strategy version, its rules, and the evidence reports behind each stage.
+    version = any lineage from /api/approval/versions (default: the ORB entry standard)."""
     from bot.approval import status
     from bot.strategy.orb_candidates import STRATEGY_VERSION
     from bot.ml.registry import REPORTS_DIR
+    versions = _approval_versions()
+    ver = version if version in versions else STRATEGY_VERSION
+    if ver != STRATEGY_VERSION:                     # module lineage: lighter about-block
+        st = status(ver)
+        st["about"] = {"strategy_version": ver, **versions[ver],
+                       "stage_meaning": {"research": "you reviewed the module's gauntlet evidence",
+                                         "replay": "you reviewed its rules vs the research replay",
+                                         "paper": "you authorize paper execution for this module",
+                                         "live": "real money — also needs LIVE_APPROVED.lock"}}
+        st["available_versions"] = list(versions)
+        return st
     st = status(STRATEGY_VERSION)
+    st["available_versions"] = list(versions)
     about = {
         "strategy_version": STRATEGY_VERSION,
         "what_it_is": "ORB day-trading entry standard: ARMED (context) -> WATCH (close beyond OR "
@@ -1103,22 +1270,27 @@ def approval_status():
 
 
 @app.post("/api/approval/approve")
-def approval_approve(stage: str, notes: str = "", approved_by: str = "user", _=Depends(auth)):
+def approval_approve(stage: str, notes: str = "", approved_by: str = "user", version: str = "",
+                     _=Depends(auth)):
     from bot.approval import approve, status
     from bot.strategy.orb_candidates import STRATEGY_VERSION
+    versions = _approval_versions()
+    ver = version if version in versions else STRATEGY_VERSION   # whitelist — no junk keys
     try:
-        approve(STRATEGY_VERSION, stage, approved_by=approved_by, notes=notes)
+        approve(ver, stage, approved_by=approved_by, notes=notes)
     except ValueError as e:
-        return {"error": str(e), **status(STRATEGY_VERSION)}
-    return status(STRATEGY_VERSION)
+        return {"error": str(e), **status(ver)}
+    return status(ver)
 
 
 @app.post("/api/approval/revoke")
-def approval_revoke(stage: str, _=Depends(auth)):
+def approval_revoke(stage: str, version: str = "", _=Depends(auth)):
     from bot.approval import revoke, status
     from bot.strategy.orb_candidates import STRATEGY_VERSION
-    revoke(STRATEGY_VERSION, stage)
-    return status(STRATEGY_VERSION)
+    versions = _approval_versions()
+    ver = version if version in versions else STRATEGY_VERSION
+    revoke(ver, stage)
+    return status(ver)
 
 
 @app.get("/api/training/report_matrix")
@@ -1172,19 +1344,47 @@ def training_gauntlet():
 
 
 @app.post("/api/approval/approve_paper_all")
-def approval_approve_paper_all(notes: str = "", approved_by: str = "user", _=Depends(auth)):
-    """ONE-CLICK strategy approval (user request 2026-07-04): walk the whole ladder —
-    research -> replay -> paper — for the current strategy version. This is the MANUAL
-    sign-off AITP requires; the caller then arms paper autotrade separately."""
+def approval_approve_paper_all(notes: str = "", approved_by: str = "user", version: str = "",
+                               _=Depends(auth)):
+    """ONE-CLICK strategy approval (user request 2026-07-04, extended 2026-07-06): walk the
+    whole ladder — research -> replay -> paper — for the given lineage AND arm the learning
+    loop: continuous training starts (challengers retrain on every data change, --no-promote)
+    and the approved module joins the STRATEGY DUEL (daily shadow head-to-head)."""
     from bot.approval import approve, status
     from bot.strategy.orb_candidates import STRATEGY_VERSION
-    st = status(STRATEGY_VERSION)
+    versions = _approval_versions()
+    ver = version if version in versions else STRATEGY_VERSION
+    st = status(ver)
     for stage in ("research", "replay", "paper"):
         if not st["stages"].get(stage):
-            approve(STRATEGY_VERSION, stage, approved_by=approved_by,
+            approve(ver, stage, approved_by=approved_by,
                     notes=notes or "one-click approval from Training Lab")
-            st = status(STRATEGY_VERSION)
+            st = status(ver)
+    # LEARNING LOOP (user 2026-07-06: "continuous train and learning from the approval, one
+    # click"): arm the continuous-training worker if it isn't running yet
+    started_training = False
+    if not _cont["on"]:
+        _cont["on"] = True
+        _threading.Thread(target=_cont_loop, daemon=True).start()
+        started_training = True
+        from bot.audit import log as _audit
+        _audit("continuous_training", state="started", via="one_click_approval",
+               interval_min=_cont["interval_min"], syms=_cont["syms"])
+    st["continuous_training"] = "started" if started_training else "already running"
+    st["duel"] = "this lineage now shadow-trades daily in the strategy duel (/api/duel)"
     return st
+
+
+@app.get("/api/duel")
+def duel_leaderboard():
+    """STRATEGY DUEL leaderboard — approved lineages' daily shadow results head-to-head
+    (bot/strategy/duel.py; a module joins after its lineage's research approval)."""
+    from bot.strategy.duel import leaderboard, run_duel_once
+    try:
+        run_duel_once()                      # idempotent catch-up (no-op if today already ran)
+    except Exception:
+        pass
+    return leaderboard()
 
 
 @app.get("/api/training/dataqa")
@@ -1211,6 +1411,74 @@ def data_register(path: str, symbol: str = "NQ", _=Depends(auth)):
     kind=l2sync with sym=<source id> to synthesize its features."""
     from bot.ml.l2_features import register
     return register(path, symbol)
+
+
+_l2sync = {"on": False, "current": None, "done": 0, "total": 0, "errors": [], "training": None}
+
+
+def _post_sync_train(symbols: list[str]):
+    """AUTO-PIPELINE after a sync (user 2026-07-05: 'after synchronise, does the dataset and
+    test run automatically?' — now YES): rebuild the dataset then retrain ml+nn for every symbol
+    whose depth features changed. --no-promote as always; progress rides /api/data/sync_status."""
+    for sym in symbols:
+        for kind in ("dataset", "ml", "nn"):
+            while _train_state["proc"] is not None:   # never fight a manual run
+                _time.sleep(15)
+            _l2sync["training"] = f"{kind} {sym}"
+            try:
+                _cont_run(kind, sym)
+            except Exception as e:
+                _l2sync["errors"].append(f"train {kind} {sym}: {str(e)[:120]}")
+    _l2sync["training"] = "done — check Pending models / reports"
+
+
+def _sync_all_worker():
+    from bot.ml.l2_features import sources, synthesize
+    todo = [s for s in sources() if s.get("status") == "registered"]
+    _l2sync.update(on=True, done=0, total=len(todo), errors=[], training=None)
+    for s in todo:
+        _l2sync["current"] = f"{s['symbol']} {s['path'].split(chr(92))[-1]} ({s['size_mb']} MB)"
+        try:
+            r = synthesize(s["id"])
+            if "error" in r:
+                _l2sync["errors"].append(f"{s['id']}: {r['error']}")
+        except Exception as e:
+            _l2sync["errors"].append(f"{s['id']}: {str(e)[:120]}")
+        _l2sync["done"] += 1
+    _l2sync.update(on=False, current=None)
+    synced_syms = sorted({s["symbol"] for s in todo})
+    if synced_syms and _l2sync["done"] > len(_l2sync["errors"]):
+        _post_sync_train(synced_syms)             # datasets + ml + nn fire automatically
+
+
+@app.post("/api/data/retrain_synced")
+def data_retrain_synced(syms: str = "", _=Depends(auth)):
+    """Manual trigger for the post-sync pipeline (the automatic run also uses this path).
+    syms = comma list; empty = every symbol that has synthesized depth features."""
+    from bot.ml.l2_features import sources
+    symbols = ([x.strip().upper() for x in syms.split(",") if x.strip()] or
+               sorted({s["symbol"] for s in sources() if s.get("status") == "synthesized"}))
+    if not symbols:
+        return {"error": "no synthesized sources — sync first"}
+    _threading.Thread(target=_post_sync_train, args=(symbols,), daemon=True).start()
+    return {"started": True, "symbols": symbols, "steps": ["dataset", "ml", "nn"]}
+
+
+@app.post("/api/data/sync_all")
+def data_sync_all(_=Depends(auth)):
+    """Synthesize EVERY registered-but-unsynced L2/L3 source sequentially in the background
+    (user 2026-07-05: ~10 MBO files per folder — one click instead of ten)."""
+    if _l2sync["on"]:
+        return {"error": "sync-all already running", **{k: _l2sync[k] for k in ("done", "total", "current")}}
+    _threading.Thread(target=_sync_all_worker, daemon=True).start()
+    from bot.audit import log as _audit
+    _audit("l2_sync_all_started")
+    return {"started": True}
+
+
+@app.get("/api/data/sync_status")
+def data_sync_status():
+    return _l2sync
 
 
 @app.post("/api/data/synthesize_upload")
@@ -1301,16 +1569,23 @@ def training_ab():
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+_NO_CACHE = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+# ^ the pages are read fresh from disk per request, but BROWSERS were caching them — a fixed bug
+#   kept "still showing" until a hard refresh (user screenshot 2026-07-05). Never cache the UI.
+
+
 @app.get("/training", response_class=HTMLResponse)
 def training_page():
     f = STATIC / "training.html"
-    return f.read_text(encoding="utf-8") if f.exists() else "<h1>training.html missing</h1>"
+    body = f.read_text(encoding="utf-8") if f.exists() else "<h1>training.html missing</h1>"
+    return HTMLResponse(body, headers=_NO_CACHE)
 
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     f = STATIC / "dashboard.html"
-    return f.read_text(encoding="utf-8") if f.exists() else "<h1>HIGHSTRIKE BOT</h1><p>dashboard.html missing</p>"
+    body = f.read_text(encoding="utf-8") if f.exists() else "<h1>HIGHSTRIKE BOT</h1><p>dashboard.html missing</p>"
+    return HTMLResponse(body, headers=_NO_CACHE)
 
 
 if (STATIC).exists():

@@ -350,7 +350,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              min_or_width=0.0, ext_long=None, ext_short=None, or_mid_bias=False,
              watch_live=False, cooldown_bars=0, stale_bars=0, retest_atr=0.0,
              retest_mode="edge", min_pullback_atr=0.0, pullback_timeout=0, vol_confirm_x=0.0,
-             instant_aligned=False):
+             instant_aligned=False, block_range=True):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -380,9 +380,13 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
         daykey = (_et.dt.year * 10000 + _et.dt.month * 100 + _et.dt.day).to_numpy()
         tod_ = (_et.dt.hour * 60 + _et.dt.minute).to_numpy()
     # V44 firing: grade floor (encodes struct+bias+zone/sweep/pattern) AND trigger AND macro/regime gates
+    # F76 (2026-07-06): the RANGE-regime (chop) block is now per-asset — futures trade it (the
+    # blocked cohort is POSITIVE: NQ +0.194x309, ES +0.178x326, OOS up on both); equities keep
+    # the block (their OOS degrades without it).
     or_low = or_high = lvl_l = lvl_s = None
-    gate_l = (d["macro_allow_trades"] & d["macro_long_ok"] & (d["local_regime"] != 2)).to_numpy()
-    gate_s = (d["macro_allow_trades"] & d["macro_short_ok"] & (d["local_regime"] != 2)).to_numpy()
+    regime_ok = (d["local_regime"] != 2) if block_range else True
+    gate_l = (d["macro_allow_trades"] & d["macro_long_ok"] & regime_ok).to_numpy()
+    gate_s = (d["macro_allow_trades"] & d["macro_short_ok"] & regime_ok).to_numpy()
     t1 = TP1_RR if tp1_rr is None else tp1_rr
     t2 = TP2_RR if tp2_rr is None else tp2_rr
     sf = scale_frac                               # fraction of the position banked at TP1 (rest runs to TP2/BE)

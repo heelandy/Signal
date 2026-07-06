@@ -83,12 +83,29 @@ def detect_format(path: str) -> tuple[str, list[str]]:
     return "unknown", cols
 
 
-def _ts_expr(cols: list[str]) -> str | None:
-    """Minute-bucket expression for the file's timestamp column (Databento ns ints or ISO)."""
+def _ts_expr(cols: list[str], con=None, path: str | None = None) -> str | None:
+    """Minute-bucket expression for the file's timestamp column. PROBES the actual DuckDB type
+    when a connection is given — DuckDB's CSV sniffer parses Databento's ISO ts_event straight to
+    TIMESTAMPTZ, and dividing a timestamp by 1e9 was the Binder Error that failed all 51 MBO
+    syncs (user 2026-07-05). Integer epochs get magnitude-based unit detection (ns/µs/ms/s)."""
     for c in ("ts_event", "ts_recv", "ts", "timestamp", "time"):
-        if c in cols:
-            return (f"date_trunc('minute', to_timestamp({c} / 1000000000.0))"
-                    if c.startswith("ts_") else f"date_trunc('minute', CAST({c} AS TIMESTAMP))")
+        if c not in cols:
+            continue
+        if con is not None and path is not None:
+            try:
+                t, v = con.execute(f"SELECT typeof({c}), {c} FROM '{path}' LIMIT 1").fetchone()
+                tu = str(t).upper()
+                if "TIMESTAMP" in tu or "DATE" in tu:
+                    return f"date_trunc('minute', {c})"
+                if "VARCHAR" in tu:
+                    return f"date_trunc('minute', CAST({c} AS TIMESTAMP))"
+                x = abs(float(v))
+                div = 1e9 if x > 1e17 else 1e6 if x > 1e14 else 1e3 if x > 1e11 else 1.0
+                return f"date_trunc('minute', to_timestamp({c} / {div}))"
+            except Exception:
+                pass
+        return (f"date_trunc('minute', to_timestamp({c} / 1000000000.0))"
+                if c.startswith("ts_") else f"date_trunc('minute', CAST({c} AS TIMESTAMP))")
     return None
 
 
@@ -150,6 +167,10 @@ def register(path: str, symbol: str) -> dict:
             {"error": f"no data files ({'/'.join(DATA_EXTS)}) found under {p}"}
     kind, cols = _detect_any(str(p))
     rows = _load()
+    dup = next((r for r in rows if r.get("path") == str(p)), None)
+    if dup is not None:                              # re-registering the same file is a no-op —
+        return dup                                   # repeated folder scans duplicated 12 files
+                                                     # into 21 registry rows (found 2026-07-06)
     src = {"id": uuid.uuid4().hex[:8], "path": str(p), "symbol": symbol.upper(), "kind": kind,
            "size_mb": round(p.stat().st_size / 1e6, 1), "added_at": pd.Timestamp.now("UTC").isoformat(),
            "status": "registered" if kind != "unknown" else "unknown_format",
@@ -192,7 +213,7 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
                     return {"error": "zip synthesis produced no rows"}
                 allf = (pd.concat(agg, ignore_index=True)
                         .groupby("minute", as_index=False).mean(numeric_only=True))
-                FeatureStore().save(f"l2feat_{src['symbol']}", "v1", allf)
+                _save_merged(src['symbol'], allf)
                 res = {"symbol": src["symbol"], "feature_rows": int(len(allf)),
                        "span": [str(allf['minute'].iloc[0])[:16], str(allf['minute'].iloc[-1])[:16]]}
         if "error" not in res:
@@ -208,11 +229,12 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
     import duckdb
     path = _duck_path(src["path"])
     cols = _columns(src["path"])
-    ts = _ts_expr(cols)
-    if ts is None:
-        return {"error": f"no timestamp column found in {cols[:10]}"}
     kind = src["kind"]
     con = duckdb.connect()
+    ts = _ts_expr(cols, con, path)      # type-probed (TIMESTAMPTZ vs int epoch vs ISO string)
+    if ts is None:
+        con.close()
+        return {"error": f"no timestamp column found in {cols[:10]}"}
     try:
         if kind == "mbp":
             lvl10 = "bid_sz_09" in cols and "ask_sz_09" in cols
@@ -251,8 +273,7 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
         if c not in df.columns:
             df[c] = np.nan
     df = df[["minute", *L2_COLUMNS]]
-    ver = "v1"
-    FeatureStore().save(f"l2feat_{src['symbol']}", ver, df)
+    store_rows = _save_merged(src['symbol'], df)
     for r in rows:
         if r["id"] == source_id:
             r["status"] = "synthesized"
@@ -312,9 +333,27 @@ def synthesize_frame(df: pd.DataFrame, symbol: str, save: bool = True) -> dict:
     g = g[["minute", *L2_COLUMNS]]
     if not save:
         return {"symbol": symbol.upper(), "feature_rows": int(len(g)), "frame": g}
-    FeatureStore().save(f"l2feat_{symbol.upper()}", "v1", g)
+    _save_merged(symbol.upper(), g)
     return {"symbol": symbol.upper(), "feature_rows": int(len(g)),
             "span": [str(g['minute'].iloc[0])[:16], str(g['minute'].iloc[-1])[:16]]}
+
+
+def _save_merged(symbol: str, df: pd.DataFrame) -> int:
+    """APPEND-MERGE a synthesis result into the symbol's store. Each source file covers ONE day —
+    a plain save clobbered the previous days, so 51 synced files left a 1-day store (bug found
+    2026-07-06 on the first full sync). Dedup by minute keeps the newest synthesis."""
+    fs = FeatureStore()
+    df = df.copy()
+    df["minute"] = pd.to_datetime(df["minute"], utc=True)
+    try:
+        old = fs.load(f"l2feat_{symbol}", "v1")
+        old["minute"] = pd.to_datetime(old["minute"], utc=True)
+        df = pd.concat([old, df], ignore_index=True)
+    except FileNotFoundError:
+        pass
+    df = df.drop_duplicates("minute", keep="last").sort_values("minute").reset_index(drop=True)
+    fs.save(f"l2feat_{symbol}", "v1", df)
+    return int(len(df))
 
 
 def attach_l2(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -329,7 +368,10 @@ def attach_l2(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     feat = feat.copy()
     feat["minute"] = pd.to_datetime(feat["minute"], utc=True)
     key = pd.to_datetime(df["ts"], utc=True).dt.floor("min")
-    merged = df.copy()
+    # the PIT snapshot already carries NaN l2_* placeholder columns — drop them BEFORE the merge
+    # or pandas suffixes both sides to l2_*_x/_y and the schema reader sees 100% NaN (bug found
+    # 2026-07-06 on the first real post-sync rebuild)
+    merged = df.drop(columns=[c for c in L2_COLUMNS if c in df.columns]).copy()
     merged["__minute"] = key
     merged = merged.merge(feat, left_on="__minute", right_on="minute", how="left")
     return merged.drop(columns=["__minute", "minute"], errors="ignore")

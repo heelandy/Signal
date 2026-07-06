@@ -29,9 +29,17 @@ class Asset:
     sessions: tuple = (RTH_EQ,)  # OR windows to scan (futures = 3, equity = 1)
     options_root: str | None = None   # OPRA root for the options play (None = futures-only)
     status: str = "validated"   # "validated" | "unverified"
-    max_entries: int = 1        # entries per side per SESSION with re-test re-arm (user: futures 3, equity 2)
+    max_entries: int = 1        # entries per side per SESSION with re-arm. F76: futures 3 / EQUITY 1 (equity re-entry cohorts lose: QQQ -0.093R, SPY -0.524R)
     sl_max_atr: float = 2.5     # MAX stop width (reversal cap): equity 1.5 (tight — arm-timing test), futures 2.5 (need room, tight whipsaws)
-    chase_atr: float = 1.0      # no-chase guard (F57): only fire within N*ATR of the level, else wait for a retest near it
+    chase_atr: float = 1.0      # no-chase guard: fire within N*ATR of the level, else wait for the
+                                # retest. F75 BLOCKER-EDGE (2026-07-06): the chased entries ARE the
+                                # winners on QQQ/SPY (+0.59/+0.70R cohorts) and ES loses 62% of its
+                                # expectancy to the cap -> QQQ/SPY/ES = 0 (off). NQ/MNQ KEEP 1.0 as
+                                # the DD-halver (avg -14% for maxDD -39%): a risk knob, not edge.
+    block_range: bool = True    # RANGE-regime (chop) hard block. F76 (2026-07-06): the blocked
+                                # cohort is POSITIVE on futures (NQ +0.194x309 ES +0.178x326,
+                                # OOS up on both) -> futures trade the chop; equities KEEP the
+                                # block (their OOS degrades without it).
     ladder: bool = False        # F66 SIZING LADDER (AUTO per side-of-edge): EQUITIES take the UNCONFIRMED break as a
                                 # 0.4x STARTER tranche (that cohort is +0.34R QQQ / +0.16R SPY) and ADD to full on
                                 # structure confirm; FUTURES stay BINARY (wait for structure — their unconfirmed
@@ -51,11 +59,25 @@ class Asset:
                                        # keeps the F59c wait: instant flipped it +0.090 -> +0.057
                                        # avg R (rebuild A/B 2026-07-05) — the fragile-execution
                                        # instrument needs the continuation confirm.
-    ctx_mode: str | None = None        # DIR-FAST A (user 2026-07-05): Layer-1 arming pair.
-                                       # "mid_vwap" = OR-MID side + VWAP side (the NEW standard; structure
-                                       # and slope become GRADES: struct aligned = A+, slope aligned = A).
-                                       # "struct_vwap" = the previous standard (fallback B). "none" = plain.
-                                       # None = derive from ctx_gate (True->struct_vwap, False->none).
+    ft_confirm: bool = True            # next-candle continuation on UNALIGNED fills. F77
+                                       # (2026-07-06): QQQ fills the breakout candle itself
+                                       # (False) — the wait-created trades LOSE there
+                                       # (-0.538R lost-cohort); SPY/NQ/ES keep the wait.
+    ctx_mode: str | None = None        # Layer-1 arming gate (user 2026-07-05: OR_MID obligatory;
+                                       # then "DIR-fast fires when EITHER of A, B, C aligns"):
+                                       # "abc" = A∨B∨C (07.4, FUTURES standard) — arm when ANY
+                                       #   engine aligns: A = VWAP side (+obligatory mid via the
+                                       #   watch machine), B = structure state, C = combined slope
+                                       #   STRONG (|S|>=0.30, the user's slope research). Blocks
+                                       #   only when every engine disagrees. A/B 2026-07-05:
+                                       #   NQ +0.172->+0.173 (identical), ES +0.087->+0.090 (trims
+                                       #   2 junk trades) — the user rule at zero cost.
+                                       # "mid" = OR-MID only (07.3 futures gate, fallback).
+                                       # "mid_vwap" = OR-MID + VWAP side (07.2 fallback).
+                                       # "struct_vwap" = STRUCT+VWAP — EQUITIES keep it: A/B shows
+                                       #   it IS the equity edge (QQQ +0.507 vs +0.320 under abc,
+                                       #   SPY +0.448 vs +0.208 — any-of-three guts equities).
+                                       # "none" = plain. None = derive from ctx_gate.
     note: str = ""
 
 
@@ -76,18 +98,18 @@ _FUT3 = (ASIA_FUT, LON_FUT, RTH_FUT)     # futures trade all 3 sessions
 ASSETS = {
     # NQ gauntlet 7/7 (07.2, 2026-07-05): cd0/stale12/retest0.25 — OOS +0.117 vs +0.109, PF 1.20,
     # maxDD -9.8 vs -11.1R (fewer trades: 174 vs 226 OOS — per-trade quality over volume). MNQ mirrors.
-    "NQ":  Asset("NQ",  True,  20.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, clean_air=True, ctx_gate=True, ctx_mode="mid_vwap",
-                 cooldown_bars=0, stale_bars=12, retest_atr=0.25),
-    "MNQ": Asset("MNQ", True,   2.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="mid_vwap",
-                 cooldown_bars=0, stale_bars=12, retest_atr=0.25),
-    "ES":  Asset("ES",  True,  50.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="mid_vwap", instant_fill=False),
+    "NQ":  Asset("NQ",  True,  20.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, clean_air=True, ctx_gate=True, ctx_mode="abc", block_range=False,
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+    "MNQ": Asset("MNQ", True,   2.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="abc", block_range=False,
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+    "ES":  Asset("ES",  True,  50.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="abc", instant_fill=False, chase_atr=0.0, block_range=False),
     # QQQ gauntlet 7/7 (07.2, 2026-07-05): cd5/stale12/retest0.25 — OOS +0.419 vs +0.374, PF 1.66,
     # maxDD -6.2 vs -9.1R (fewer trades: 61 vs 82 OOS — per-trade quality over volume).
-    "QQQ": Asset("QQQ", False,  1.0, 0.75, 0, sessions=(RTH_EQ,), options_root="QQQ", status="validated", max_entries=2, sl_max_atr=1.5, ladder=True, clean_air=True, ctx_mode="struct_vwap",
-                 cooldown_bars=5, stale_bars=12, retest_atr=0.25),
-    "SPY": Asset("SPY", False,  1.0, 0.75, 0, sessions=(RTH_EQ,), options_root="SPY", status="validated", max_entries=2, sl_max_atr=1.5, ladder=True, clean_air=True, ctx_mode="struct_vwap",
-                 cooldown_bars=0, stale_bars=12, retest_atr=0.25),
-    "GC":  Asset("GC",  True, 100.0, 0.50, 0,  sessions=(RTH_FUT,), options_root="GLD", status="unverified", max_entries=3, ctx_gate=True, ctx_mode="mid_vwap",
+    "QQQ": Asset("QQQ", False,  1.0, 0.75, 0, sessions=(RTH_EQ,), options_root="QQQ", status="validated", max_entries=1, sl_max_atr=1.5, ladder=True, clean_air=True, ctx_mode="struct_vwap", chase_atr=0.0, ft_confirm=False,
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+    "SPY": Asset("SPY", False,  1.0, 0.75, 0, sessions=(RTH_EQ,), options_root="SPY", status="validated", max_entries=1, sl_max_atr=1.5, ladder=True, clean_air=True, ctx_mode="struct_vwap", chase_atr=0.0, instant_fill=False,
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+    "GC":  Asset("GC",  True, 100.0, 0.50, 0,  sessions=(RTH_FUT,), options_root="GLD", status="unverified", max_entries=3, ctx_gate=True, ctx_mode="abc", block_range=False,
                  note="F30 gold edge NOT reproduced under the current engine (fails all configs "
                       "2026-06-29) — US-morning only, signals shown for context, edge NOT validated"),
 }

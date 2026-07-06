@@ -29,14 +29,29 @@ sys.path.insert(0, str(REPO_ROOT / "engine"))
 
 # production ORB-stack config (matches the shipped Pine default + F61)
 ORS, ORE, CUT, EOD = 570, 600, 900, 958
-T1, T2, DELAY, STRONG = 1.0, 4.0, 60, 0.25
+T1, T2, DELAY, STRONG = 1.5, 4.0, 0, 0.25   # 07.5: TP1 1.5R (F64, was 1.0) · delay-0 (user-adopted, was 60)
 _SESS = {"rth": Session.RTH, "asia": Session.ASIA, "london": Session.LONDON}
 # CANONICAL ENTRY STANDARD: the replay emits the same entry the Pine + live BOT trade.
 # The ML layer trains against ONE rule version at a time — bump this string whenever entry rules change.
 # .1 (2026-07-05): pullback refinements — retest modes, min pullback depth 0.05 ATR, timeout 8 bars.
 # .2 (2026-07-05): INSTANT FILL when the arming pair is aligned (no next-candle wait — user rule);
 #     frozen OR-mid day bias superseded by the LIVE mid (watch machine) on mid-armed assets.
-STRATEGY_VERSION = "orb-standard-2026.07.2"
+# .3 (2026-07-05): OR_MID-OBLIGATORY arming on FUTURES (user rule: everything else grades, never
+#     blocks) — ctx_mode "mid": the VWAP arm-gate dropped (A/B: NQ +0.180->+0.172, ES ~flat, and
+#     it wrongly blocked live arms). Equities KEEP struct_vwap (A/B: it IS their edge).
+# .4 (2026-07-05): DIR-FAST C + A∨B∨C arming on FUTURES (user: "fire when either of A, B, C
+#     aligns") — C = combined-slope STRONG (|S|>=0.30). Arm unless EVERY engine disagrees.
+#     A/B: NQ identical, ES +0.087->+0.090. Equities unchanged (any-of-three guts their edge).
+# .5 (2026-07-06): LIVE==BACKTEST (F75) — canonical now carries the live gates: delay-0,
+#     re-entry+max_entries, per-asset chase (QQQ/SPY/ES 0 - the chased entries ARE the
+#     winners; NQ/MNQ 1.0 as the DD-halver), narrow-OR filter DEMOTED to grade-only,
+#     equity frozen OR-mid bias in canonical, TP1 1.5R. Six divergences closed.
+# .6 (2026-07-06): F77 cooldown/stale/next-candle cohorts under the live-identical base —
+#     STALE/RANGE stand-down dropped on QQQ/SPY/NQ (blocked cohorts +0.58/+0.24/+0.18,
+#     kept on ES where it earns) · QQQ cooldown 5->0 + fills the breakout candle itself
+#     (ft_confirm off; the wait-created trades lose -0.54R) · SPY INSTANT FILL OFF —
+#     always waits for continuation (avg 0.444 flat but OOS 0.386->0.620, n +79%).
+STRATEGY_VERSION = "orb-standard-2026.07.6"
 
 
 @contextlib.contextmanager
@@ -62,15 +77,20 @@ def _bars_tf(con, sym: str, tf: str, sess: str):
     import pandas as pd
     if tf not in RESAMPLE_TF:
         return hs_db.bars(con, tf, sess, sym=sym)
+    def _from_continuous():
+        raw = con.execute(f"SELECT * FROM {sym.lower()}_1m ORDER BY 1").df()
+        tcol = next((c for c in ("ts_utc", "ts_et", "ts") if c in raw.columns), None)
+        # keep ONLY one timestamp column — a view carrying ts + ts_et produced duplicate 'ts'
+        # keys after rename ("cannot assemble with duplicate keys", user crash 2026-07-05)
+        keep = [tcol] + [c for c in ("open", "high", "low", "close", "volume") if c in raw.columns]
+        return raw[keep].rename(columns={tcol: "ts"})
+
     if tf == "1m":
-        b = con.execute(f"SELECT * FROM {sym.lower()}_1m ORDER BY 1").df()
-        tcol = next((c for c in ("ts_utc", "ts_et", "ts") if c in b.columns), None)
-        b = b.rename(columns={tcol: "ts"})
+        b = _from_continuous()
     else:
         src = _TF_SRC[tf]
-        b = (con.execute(f"SELECT * FROM {sym.lower()}_1m ORDER BY 1").df()
-             .rename(columns=lambda c: "ts" if c in ("ts_utc", "ts_et") else c)
-             if src == "1m" else hs_db.bars(con, src, sess, sym=sym))
+        b = _from_continuous() if src == "1m" else hs_db.bars(con, src, sess, sym=sym)
+        b = b.loc[:, ~b.columns.duplicated()]
     b["ts"] = pd.to_datetime(b["ts"], utc=True)
     if tf in ("1m", "3m"):                      # continuous 1m is full-session -> clip to RTH
         et = b["ts"].dt.tz_convert("America/New_York")
@@ -102,45 +122,64 @@ def load_state(sym: str = "QQQ", tf: str = "5m", sess: str = "rth"):
     import numpy as np
     d = H.compute_state(bars, H.P(struct_lb_fix=struct_lb(sym)))   # futures lb=3 / equity lb=5
     d.attrs["sym"] = sym
-    # ENTRY STANDARD Layer 1 — Market Context PAIR per asset (DIR-FAST A, user 2026-07-05):
-    # mid_vwap = VWAP side here (the OR-MID side is enforced by the watch machine);
-    # struct_vwap = previous standard (fallback B); none = plain ORB.
+    # ENTRY STANDARD Layer 1 — arming gate per asset (user 2026-07-05: "OR_MID IS OBLIGATORY"):
+    # mid  = OR-MID side ONLY (the watch machine enforces it) — futures standard; VWAP/STRUCT/
+    #        SLOPE become grades, never blockers (A/B: costs ~nothing on NQ/ES).
+    # mid_vwap = + VWAP side (07.2 futures gate, fallback); struct_vwap = equities (their edge);
+    # abc  = DIR-FAST A∨B∨C (user 2026-07-05): fire when ANY engine aligns — A = VWAP side
+    #        (+the obligatory mid via the watch machine), B = 1m-fed structure state,
+    #        C = the COMBINED SLOPE ENGINE strong read (S >= 0.30, user's slope research).
+    #        Blocks only when every engine disagrees/neutral.
+    # none = plain ORB.
     mode = resolve_ctx_mode(asset_config(sym)) if ES.ctx_gate else "none"
-    if mode != "none" and "vwap_sess" in d and "st_state" in d:
+    if mode not in ("none", "mid") and "vwap_sess" in d and "st_state" in d:
         st = d["st_state"].to_numpy(); cl = d["close"].to_numpy(float)
         vw = d["vwap_sess"].to_numpy(float)
         with np.errstate(invalid="ignore"):
             if mode == "mid_vwap":
                 d["trend_up"] = cl > vw
                 d["trend_down"] = cl < vw
+            elif mode == "abc":
+                from bot.strategy.orb_state import slope_series, SLOPE_STRONG
+                S = slope_series(d["open"].to_numpy(float), cl, d["atr14"].to_numpy(float))
+                d["trend_up"] = (cl > vw) | (st == 1) | (S >= SLOPE_STRONG)
+                d["trend_down"] = (cl < vw) | (st == 2) | (S <= -SLOPE_STRONG)
             else:
                 d["trend_up"] = (st == 1) & (cl > vw)
                 d["trend_down"] = (st == 2) & (cl < vw)
     else:
-        d["trend_up"] = True
-        d["trend_down"] = True                   # F58 plain-ORB gate (pre-standard default)
+        d["trend_up"] = True                     # "mid": watch machine = the one obligatory gate
+        d["trend_down"] = True                   # "none": F58 plain-ORB gate (pre-standard default)
     return d
 
 
 def run_backtest(d):
     """The ONE canonical backtest call (entry standard) — candidates, the ML dataset and any
     research replay must all come through here so they see the identical rule version.
-    Per-asset Layer-3 overrides (gauntlet-adopted, e.g. SPY cd0/stale12/retest0.25) come from
-    asset_config keyed by the frame's symbol."""
+    07.5 (F75): the canonical call now carries EXACTLY the gates the LIVE scan enforces — the
+    blocker-edge audit found six silent divergences (chase, min-OR-width, entry delay, re-entry,
+    OR-mid bias, TP1) that made every prior number describe a system live never traded."""
     import hs_backtest as B
     from bot.strategy.orb_state import ENTRY_STANDARD as ES
-    from bot.strategy.asset_config import asset_config
+    from bot.strategy.asset_config import asset_config, resolve_ctx_mode
     a = asset_config(str(d.attrs.get("sym", "")))
+    mode = resolve_ctx_mode(a)
     return B.backtest(d, "tp2_full", "both", False, "orb", 0, T1, T2, ORS, ORE, 0.0, CUT, "close",
-                      eod_min=EOD, stop_mode="struct", entry_delay=DELAY,
-                      strong_body=STRONG, ft_confirm=True, dir_seq=True,
+                      eod_min=EOD, stop_mode="struct",
+                      entry_delay=a.entry_delay,                     # user-adopted delay-0 (was 60)
+                      strong_body=STRONG, ft_confirm=a.ft_confirm, dir_seq=True,   # F77: QQQ fills same-candle
+                      reentry=True, max_entries=a.max_entries,       # live re-arm (was single-entry)
+                      chase_atr=a.chase_atr,                         # F75: QQQ/SPY/ES 0 · NQ/MNQ 1.0
+                      # frozen OR-mid day bias: equities only (mid-armed modes use the LIVE mid)
+                      or_mid_bias=(mode not in ("mid", "mid_vwap", "mid_only", "abc")),
                       watch_live=ES.watch_gate,
                       cooldown_bars=a.cooldown_bars if a.cooldown_bars is not None else ES.cooldown_bars,
                       stale_bars=a.stale_bars if a.stale_bars is not None else ES.stale_bars,
                       retest_atr=a.retest_atr if a.retest_atr is not None else ES.retest_atr,
                       retest_mode=ES.retest_mode, min_pullback_atr=ES.min_pullback_atr,
                       pullback_timeout=ES.pullback_timeout, vol_confirm_x=ES.vol_confirm_x,
-                      instant_aligned=a.instant_fill)
+                      instant_aligned=a.instant_fill,
+                      block_range=a.block_range)                   # F76: futures trade the chop
 
 
 def emit_from_state(d, sym: str = "QQQ", tf: str = "5m", sess: str = "rth",

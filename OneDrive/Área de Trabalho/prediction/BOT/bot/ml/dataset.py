@@ -188,6 +188,10 @@ if __name__ == "__main__":
     sym = args[0] if args else "QQQ"
     tf = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--tf=")), "5m")
     df = build(sym, tf=tf)
+    if not len(df) or "y_win" not in df.columns:
+        print(f"{sym} tf={tf}: 0 labeled candidates — no signals on this timeframe/config "
+              f"(nothing saved)")
+        raise SystemExit(0)
     print(f"{sym}: {len(df)} labeled candidates | win-rate {df['y_win'].mean():.3f} | "
           f"tp2 {df['y_tp2'].mean():.3f} | stop {df['y_stop'].mean():.3f} | "
           f"avg net {df['net_r'].mean():+.3f}R | span {df['ts'].iloc[0].date()}..{df['ts'].iloc[-1].date()}")

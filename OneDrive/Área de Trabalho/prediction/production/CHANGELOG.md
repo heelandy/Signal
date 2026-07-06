@@ -5,6 +5,327 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-06 (v13) — RULE orb-standard-2026.07.6: cooldown/stale/next-candle verdicts (F77)
+
+⚠️ STACK + AUTO changed (stale default + tooltips) — **TradingView compile needed.**
+
+* **User ask: "test against cooldown, stale, next-candle"** — cohorts under the live-identical
+  base, combined configs verified before adoption:
+  **STALE/RANGE dropped on QQQ/SPY/NQ** (blocked cohorts +0.58/+0.24/+0.18R — standing down cost
+  real money), **kept on ES** (cohort negative, DD explodes without it) · **QQQ cooldown 5→0** ·
+  **QQQ fills the breakout candle itself** (ft_confirm off — the wait-created trades lose
+  −0.54R) · **SPY instant fill OFF** (always waits for continuation: OOS 0.386→**0.620**) ·
+  NQ keeps instant (always-wait collapses its OOS) · ES untouched — every ES blocker earns.
+* **07.6 canonical (= live · parity 100% ×4 · 123 tests green):**
+  QQQ n287 **+0.552R PF 1.88 total +158.4R** OOS +0.718 · SPY n269 +0.442R **total +118.9R
+  OOS +0.620** · NQ n1327 +0.194R **total +257.6R** OOS +0.286 · ES n1226 +0.088R (unchanged).
+  Day-one of the audit the system earned +74/+67/+225/+107 total R — two rounds of honest
+  blocker testing later it earns **+158/+119/+258/+108**.
+* **Pines**: stale_n default 24→**0** (ES charts: set 24 — its cohort is negative), wait_ft
+  tooltip carries the QQQ-off exception, instant_fill tooltip now says OFF on **ES and SPY**
+  charts.
+* **AUTO PER-ASSET KNOBS (user: "make them automatic on the script")** — one new toggle
+  (`auto_asset`, default ON) in STACK + AUTO applies every cohort-adopted per-asset value by
+  SYMBOL, no manual per-chart setup: NQ/MNQ chase 1.0 · ES stale 24 + cooldown 3 · QQQ no
+  next-bar wait · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 /
+  others 0.25. Detection via syminfo.root (futures) / ticker (equities, MES covered). Matches
+  BOT asset_config exactly; OFF restores the seven manual inputs (renamed *_in internally).
+  Identifier wiring machine-verified (each input renamed once, each derived once).
+
+---
+
+## 2026-07-06 (v12) — RULE orb-standard-2026.07.5: SEVEN live≠backtest divergences closed, LIVE == BACKTEST gate-for-gate (F75/F76)
+
+⚠️ STACK + AUTO defaults changed — **TradingView compile needed.** 07.5 re-keys datasets/models;
+approvals reset by design (re-approve on /training).
+
+* **THE AUDIT (user: "fix the blocker, run backtest against the other blockers")** — seven
+  divergences found and closed: chase-cap + narrow-OR were LIVE-only; canonical ran DELAY=60
+  (live 0), single-entry (live re-arm), no equity bias (live ON), TP1 1.0 (live 1.5); and the
+  live scan NEVER applied the macro/regime gates — the SPY stand-down existed only in
+  backtest+Pine while paper autotrade would have traded against it. Every prior number described
+  a system nobody traded.
+* **COHORT-DRIVEN ADOPTIONS (blocker_edge + blocker_edge2)**: chase OFF on QQQ/SPY/ES (the
+  chased entries ARE the winners: +0.59/+0.70/+0.16 cohorts), KEPT 1.0 on NQ/MNQ as the DD-halver
+  · narrow-OR filter → GRADE-only everywhere (blocked cohorts positive on all four) · equity
+  re-entries dropped (max_entries 1: cohorts QQQ −0.093, SPY −0.524; OOS better single), futures
+  keep 3 (NQ cohort +0.164) · delay-0 confirmed everywhere · equity frozen OR-mid bias KEPT
+  (OOS 0.68 vs 0.396 without) · CHOP-regime block dropped on FUTURES (cohorts +0.19/+0.18,
+  OOS up on both), kept on equities · 07.3 bias-supersede regression on "abc" fixed.
+* **07.5 canonical (= live, parity 100% ×4, 123 tests green)**:
+  QQQ n170 +0.435R PF 1.66 DD −9.9R OOS **+0.747** · SPY n150 +0.444R PF 1.73 DD −7.1 OOS +0.386
+  · NQ n1147 +0.196R **total +224.9R** (was +127) OOS +0.235 · ES n1226 +0.088R total +107.5
+  (was +64) OOS +0.167. Every symbol improves on its judge metrics.
+* **Pines (STACK + AUTO)**: chase_max default 1.0 → **0.0** (NQ/MNQ charts: set 1.0 for the DD
+  halving) · volexp_filter default → **off** (grade-only) · auto max-entries equity 2 → **1**
+  (AUTO input default 1; futures charts set 3).
+* **SCRIPTS FULLY RE-BASED ON THE NEW RESEARCH (user)** — every stale claim rewritten to
+  F75/F76: chase tooltip now states the blocked-cohort evidence + the NQ/MNQ exception ·
+  vol-exp tooltip explains the grade-only demotion (graduation was vs plain ORB) · re-entry +
+  auto-max-entries tooltips carry the per-asset cohorts (equity 1 / futures 3) · block_range
+  gained per-asset guidance (futures OFF / equities ON) · delay tooltip carries the F76
+  first-hour re-confirmation · EntryStandard.max_entries default 2 → 1 (BOT reference aligned).
+  No "ADOPTED 1.0" / "equity 2" / "default ON" claims remain in either script. 123 tests green.
+
+---
+
+## 2026-07-06 (v10) — OPTIONS MODULE FINISHED: payoff replay verdict = NAKED-ONLY (options-0.1) · one-click approve+learn · STRATEGY DUEL · dashboard banner removed
+
+* **OPTIONS PAYOFF REPLAY (the module's gauntlet — research/options_replay.py)**: every canonical
+  QQQ/SPY trade priced through the three 0DTE plays (Black-Scholes entry/exit, per-leg spread +
+  commission, IV sensitivity 0.15/0.20/0.30). **NAKED BUY PASSES both** (QQQ +0.268 ret/premium
+  PF 2.05 9/9 yrs CIlo +0.157, IV-robust · SPY +0.123 PF 1.5 9/9, marginal at IV .30);
+  **debit + credit verticals FAIL everywhere** — capping the 4R tail / selling the breakout
+  direction destroys the low-WR big-winner edge. Module `options_day_orb` → gauntlet_pass,
+  lineage **options-0.1** (approvable on /training). IV is model-approximated: paper verifies
+  real fills before sizing.
+* **ONE-CLICK APPROVE + LEARN** — the big button approves the SELECTED lineage's ladder AND arms
+  paper autotrade AND starts continuous training AND enters the lineage in the duel.
+* **STRATEGY DUEL** (user: "put them against each other") — approved lineages shadow-trade their
+  daily rules head-to-head (bot/strategy/duel.py, /api/duel, panel under the approval ladder):
+  R-normalized per module, resolved on completed daily bars, no orders. Duel + version dropdown
+  now FIT their card (fixed layout, wrapped cells).
+* **Dashboard: OPTIONS SIGNAL ENGINE banner removed** (user request) — Account + Live Market
+  share the top row; nav link + engine KPI code deleted.
+* **123 tests green.** STACK compiled by user ✓ · AUTO compile still pending.
+* **OPTIONS CROSS-TEST + OPTIONS-ONLY SEARCH (F74, same day)** — which strategy makes it as
+  options: **volbreak → 0DTE naked is the standout** (QQQ +1.01 ret/premium PF 3.30 9/9 yrs
+  OOS +1.11, n=1,940; SPY +0.63 PF 2.51 9/9); **swing QQQ @21DTE passes naked AND debit** (the
+  only stream carrying a vertical); Connors converts to nothing; **credit spreads fail all five
+  streams**. Options-ONLY search: the **variance risk premium** (short daily ATM straddle,
+  VIX-priced) passes the numeric gate huge (SPY PF 5.35 win 82% 9/9) but is registered as
+  `options_native_vrp` **research_candidate only** — VIX-as-daily-IV likely inflates the short
+  side and the tail is unbounded (worst day −7.15×premium); needs real 0DTE chain IV.
+* **OPTIONS SHOWN BY GATE (user)** — every surface now presents each structure with the gate it
+  passed: live proposals' option plans recommend NAKED always (was regime-based debit default —
+  contradicted the replay), each structure carries its PASS/FAIL verdict inline; the DUEL panel
+  shows each module's validated expression (⚡ volbreak → 0DTE naked · swing → QQQ 21DTE
+  naked+debit · connors → underlying only).
+* **DASHBOARD GATE DISPLAY (user: "this needs to show on the dashboard")** — the gate map is now
+  ONE source (`bot/options/exit_plan.STRUCTURE_GATES`) consumed everywhere: `/api/options`
+  attaches gates + recommended; the SHOW-OPTIONS-PLAY table gained a GATE column with a
+  "◄ VALIDATED" marker on naked; the Bot Strategies panel now lists the REAL module lineup from
+  /api/duel — each module with its duel status (IN THE DUEL / awaiting approval), running shadow
+  R, and its ⚡ gate-passed options expression; the stale hardcoded "Trend/Momentum" row dropped
+  (merged into the breakout per v9). **123 tests green.**
+* **"NO SIGNAL but price moved 1.5%" (user 2026-07-06) — diagnosed per symbol**: QQQ = the
+  CHASE-CAP stood down correctly (gap ran >1 ATR past the OR high, retest never came — F57 by
+  design) · SPY = NARROW-OR vol-expansion block (width 1.97 < 2.4 ATR — the dead cohort, by
+  design) · **NQ = a real grade-B breakout long (30021.75, ~10:20 ET) fired but was MISSED**:
+  the scan captured only the last 4 bars (20-min window) and that window fell inside a server
+  reload storm (every code save restarts uvicorn and kills in-flight scans). FIXES: scan window
+  widened to 12 bars (1h — the per-bar dedup makes it idempotent, restarts can no longer drop a
+  signal); the missed NQ signal was recovered into the tracker (outcome tracking live). NOTES:
+  NQ live bars come from Yahoo (15-min delayed) while Webull futures stays unentitled; two
+  Jun-30 QQQ phantom candidates at entry=100.0 flagged — no synthetic provider is active today,
+  watch for recurrence.
+* **BLOCKER-EDGE STUDY (F75, user: "test the blockers to find edge") — MAJOR FINDING**: the
+  canonical backtest NEVER carried the chase-cap or the narrow-OR filter (live enforces both) —
+  every 07.x number includes trades live refuses. Cohorts under 07.4: the CHASE-CAP blocks the
+  BEST equity trades (QQQ cohort +0.591R n127 · SPY +0.698R n132 — live SPY runs +0.113 avg vs
+  +0.448 canonical!), while on futures it's ~neutral per-trade but HALVES max-DD; the NARROW-OR
+  filter's blocked cohort is positive on every symbol now (the layered entry already does its
+  job — the 07-01 graduation was vs plain ORB). RECOMMENDED (pending gauntlet + user sign-off,
+  chase was a user rule): equities chase OFF · futures chase kept (DD knob) · narrow-OR →
+  grade-only · then run_backtest carries the SAME gates as live = rule 07.5.
+* **FEATURE INVENTORY + TEST PLAN** — docs/FEATURE_TEST_PLAN.md: every feature D1–D20 (dashboard),
+  T1–T19 (training lab), E1–E13 (engine), M1–M13 (ML/governance) with per-row test procedure,
+  expected result and current status; §6 = the ordered manual pass.
+
+---
+
+## 2026-07-06 (v9) — MODULE LADDERS live (swing/volbreak/connors) · L2 store bugs fixed (full re-sync) · zone-bounce + gold CLOSED dead · sweepgo unstable
+
+* **MULTI-LINEAGE APPROVALS** — the ladder now covers every gauntlet-passed module, each with its
+  own version key approvable research→replay→paper on /training (version dropdown):
+  `swing-1d-0.1` (QQQ pullback 7/7) · `swing-fut-1d-0.1` (NQ breakout 7/7) ·
+  `volbreak-1d-0.1` · `connors-1d-0.1`. Endpoints take ?version= (whitelisted).
+* **VOLBREAK + CONNORS RE-CONFIRMED under the current engine** (strat_daily 2026-07-06):
+  volbreak k0.3 — NQ +0.094R PF 1.54 **17/17 yrs**, QQQ 9/9, SPY 9/9 (ES/GC fail; slippage
+  caveat); Connors RSI-2 — QQQ PF 1.97, SPY PF 2.14, both 7/8 yrs (equities-only, regime
+  caveat). Both registered as modules (gauntlet_pass).
+* **L2 STORE BUGS (found on the first real post-sync rebuild)** — (1) each file's synthesis
+  OVERWROTE the per-symbol store: 51 "synced files" left ONE day of features → saves now
+  APPEND-MERGE (dedup by minute); (2) attach_l2 double-merged against the PIT schema's NaN l2_*
+  placeholders → l2_*_x/_y suffixes, models saw 100% NaN → placeholders dropped pre-merge;
+  (3) the registry held the same 12 disk files as 21 rows (repeated folder scans) → deduped +
+  register() is now idempotent by path. Full re-sync of the 12 real sources running; the
+  post-sync auto-pipeline retrains with the FIXED join when it lands.
+* **RESEARCH CLOSED (F73)**: zone-bounce step 2 FAILS (NQ −0.035R CIlo −0.13 · ES −0.137R —
+  zones predict location, fading into them is not an entry; clean-air keeps earning) · GOLD
+  FINAL-dead under canonical 07.4 with its own config (n 664, −0.136R, PF 0.83, DD −112R) ·
+  sweep-then-go UNSTABLE (QQQ pass→fail, SPY fail→pass across rule versions on n≈100 — 
+  watchlist, not adoptable) · trend/momentum family now passes BOTH equities strongly
+  (QQQ +0.389 CI +0.208 9/9 · SPY +0.355 8/9) — optional selectivity, still a breakout filter.
+* **123 tests green.**
+* **TREND/MOMENTUM FINALIZED (user 2026-07-06)** — verdict: its edge already IS the canonical
+  equity entry (the struct_vwap arming gate; canonical QQQ +0.507 / SPY +0.448 beat the family
+  replica's +0.389/+0.355 because of the watch machine + per-asset knobs). The separate "trend"
+  and "smc" scan families were near-duplicating every equity breakout in the tracker (F58/F62:
+  filters, ~0 additive) → both now INFO-ONLY; the breakout family is the one system of record.
+* **L2 post-fix verification** — merge fix confirmed: QQQ store 8 days / 7,562 minute-rows,
+  NQ 5 days (the "51 files" were 12 real files registered repeatedly). Remaining gap is DATA
+  COVERAGE, not code: the depth files span Jun 9–25 while the bar store (and its candidates)
+  ends Jun 5–8 → zero overlap to join yet. Next: extend the bar store past Jun 9 (ingest),
+  then the auto-pipeline picks the l2_* values up on its own.
+
+---
+
+## 2026-07-05 (v8) — RULE orb-standard-2026.07.4: DIR-FAST C + A∨B∨C arming on futures
+
+⚠️ STACK + AUTO changed again — **TradingView compile needed.** 07.4 re-keys datasets/approvals.
+
+* **DIR-FAST C (user ask: "create the entry rule… it will be Dir fast C")** — built from the
+  user's own slope research: C aligned = the COMBINED SLOPE ENGINE strong read, S = 0.50·Sc/ATR +
+  0.30·Sm/ATR + 0.20·BP at **|S| ≥ 0.30** toward the side (1m-fed on any chart TF in Pine;
+  vectorized `slope_series` in the engine — self-tested identical to `slope_engine` per bar).
+* **A∨B∨C arming (user: "DIR-fast can fire when either one is aligned between A, B and C")** —
+  a side ARMS when ANY engine aligns: **A** = VWAP side (+ the obligatory OR-mid via the watch
+  machine), **B** = swing-structure state, **C** = slope strong. Blocks only when EVERY engine
+  disagrees/neutral.
+* **A/B → adopted on FUTURES, rejected on equities**: NQ +0.172→+0.173 (identical, −1 trade),
+  ES +0.087→+0.090 PF 1.13→1.14 (trims 2 junk trades) — the user rule at zero cost. QQQ
+  +0.507→+0.320 / SPY +0.448→+0.208 under any-of-three — the STRUCT+VWAP AND-gate stays the
+  equity arm. `ctx_mode="abc"` on NQ/MNQ/ES/GC.
+* **Pines**: ctx option "Any engine aligned (A∨B∨C, 07.4)", Auto = equities Struct+VWAP ·
+  futures A∨B∨C; dir-C computed from the existing 1m slope feed; dashboard DIR-fast row now
+  shows "A … ∨B∨C ← ARMS (any engine)" + a C▲/▼ STRONG marker; why-string "context: no engine
+  aligned (A∨B∨C)".
+* **Verified: 123 tests green · replay parity 100% ×4 (NQ 710 / ES 711).** Re-approve the
+  ladder for 07.4 before paper.
+* **BOT live read parity (user: "update the BOT script as well")** — `fast_direction` now carries
+  `dir_c` (slope-strong vote) + an `abc` {up/down/read} block, so live proposals show the same
+  A∨B∨C read as the STACK dashboard; the arming arrays in the live scan + canonical backtest
+  were already switched (families/orb_candidates ctx_mode "abc").
+* **POST-SYNC AUTO-PIPELINE (user: "does the dataset and test run automatically?") — now YES**:
+  when SYNC ALL finishes, the server automatically runs dataset → ML → NN (--no-promote) for
+  every synced symbol; progress shows in the L2 panel ("AUTO-TRAINING: ml QQQ"), gate-passers
+  land under Pending models. Manual re-run button "⚙ Rebuild + retrain synced" (endpoint
+  /api/data/retrain_synced). Also fixed: the continuous-training skip signature now includes the
+  l2 feature-store mtimes — an L2 sync changes column VALUES without changing row counts, so the
+  old rows/span signature would have skipped exactly the retrain the sync exists to trigger.
+
+---
+
+## 2026-07-05 (v7) — L2 SYNC FIXED (all 51 were failing) · SWING GAUNTLET: QQQ + NQ PASS 7/7 · NN-seq live scoring · orderflow persistence · options-leg recording · restart recovery
+
+* **L2 Binder Error (user report: 51/51 sync errors)** — DuckDB's CSV sniffer parses Databento's
+  ISO `ts_event` straight to TIMESTAMPTZ; dividing a timestamp by 1e9 was the Binder Error.
+  `_ts_expr` now PROBES the column type (TIMESTAMPTZ → direct trunc; VARCHAR → cast; int epoch →
+  magnitude-based ns/µs/ms/s). Verified on a real 340 MB MBO file (913 minute-rows) — re-sync of
+  the full folder re-triggered. NOTE: a `--reload` server restart kills an in-flight sync worker
+  (progress is in-memory) — avoid editing `bot/` while a long sync runs.
+* **SWING MODULE — first two full-gauntlet passes** (research/swing_gauntlet.py, 7 checks incl.
+  2×-cost stress + year consistency): **QQQ pullback-reclaim 7/7** (+0.538R, PF 2.23, OOS +0.687,
+  8/9 years) and **NQ 20-day breakout 7/7** (+0.123R, 2×-cost +0.103, 11/17 years — the pullback
+  rules fail futures dailies, the breakout variant is the futures setup). SPY 5/7, ES 6/7 — not
+  adopted. modules.py → gauntlet_pass; next: swing-1d-0.x approval ladder.
+* **NN sequence live scoring wired** — every proposal's 64-bar window now runs through the NN
+  champion (`predict_sequence`, champion-gated → None until one passes gates); `nn_seq` rides
+  the proposal and votes in the ensemble alongside P(win)/heads/similarity/grade.
+* **Orderflow persistence** — `bot/orderflow/persist.py`: minute-deduped flow scores appended per
+  scan cycle to `data/orderflow_scores.csv` (data-first; schema join deferred until live history
+  exists to backfill an `of_score` feature honestly).
+* **Options-leg shadow recording** — every auto-tracked signal now stores its translated option
+  structure in the tracker (the standalone options module's future training data).
+* **Restart recovery (phase-7 pulled forward)** — kill-switch + paper toggle + paper dedup keys
+  persist to `data/runtime_state.json` and restore on boot (mode intentionally NOT restored);
+  `reconcile_once` runs every ~10 scan cycles while paper autotrade is armed.
+* **Screenshot double-check (user)** — STACK 07.3 confirmed live on chart: A-row "MID▼ ← ARMS
+  (obligatory) · VWAP grade C"; the remaining SHORT blocker is the SPY stand-down (validated
+  keeper, v6). **123 tests green.**
+
+---
+
+## 2026-07-05 (v6) — RULE orb-standard-2026.07.3: OR_MID-OBLIGATORY arming (futures) · leakage fixes + canaries · swing research PASSES QQQ/SPY · reversal-veto verdict · paper "why" · WR symmetry · BOT audit
+
+⚠️ STACK + AUTO changed — **TradingView compile needed.** ⚠️ 07.3 REVOKES the 07.2 paper approval
+(by design) — re-run A/B and re-approve research→replay→paper on /training.
+
+* **07.3 (user, twice: "OR_MID IS OBLIGATORY")** — futures arming = OR-mid side ONLY (watch
+  machine); VWAP/STRUCT/SLOPE grade (C/B/A/A+), never block or delay (fixes the NQ short where
+  VWAP▲ blocked an armed breakdown). A/B: costs ~nothing on futures (NQ +0.180→+0.172, ES ~flat,
+  +4 trades); equities KEEP struct_vwap (it IS their edge: QQQ +0.507 vs +0.314 mid-only, SPY
+  +0.448 vs +0.203). ctx_mode="mid" on NQ/MNQ/ES/GC; Pines: ctx gate, dir-A row, tooltips.
+  **Verified: 121 tests green · replay parity 100% ×4 (NQ 711 / ES 713 trades).**
+* **LEAKAGE (user ask)** — two real leaks fixed in pipeline.py: (1) champion-challenger duel
+  retrained the challenger on ALL data incl. the frozen holdout it was scored on → duel model now
+  trains on the first 70% only (raw-p AUC; isotonic is rank-preserving); (2) calibration table was
+  judged on the rows the calibrator was fit on → honest 70/30 split with note. Plus
+  tests/test_leakage_canary.py: shuffled-label null canary (must score ~0.5) + signal canary —
+  both PASS, the purged-WF harness itself is leak-free.
+* **WIN-RATE SYMMETRY (user ask)** — per side: QQQ 40.6/36.0 (gap 4.6pts), NQ 43.2/36.5 (6.8,
+  expectancy symmetric +0.168/+0.178), SPY 42.4/31.6 (**10.8**), ES 42.6/32.5 (**10.2**). Long-
+  biased decade explains part; SPY/ES short WR is the watch item — slice gates already block a
+  model that only works one side.
+* **REVERSAL DETECTORS AS FILTERS (expectancy gauntlet, user ask)** — research/reversal_filters.py:
+  NO detector qualifies as a hard veto on any symbol (veto cohorts POSITIVE OOS — a veto would cut
+  winners; most detectors never oppose a fresh breakout). They stay MODEL FEATURES.
+* **SWING MODULE RESEARCH (user ask)** — research/swing_rules.py (daily EMA20>50 pullback-reclaim,
+  1.5ATR/2R/20-bar triple barrier): **QQQ PASS n77 +0.538R PF 2.23 OOS +0.687 · SPY PASS OOS
+  +0.689** (IS negative — OOS-driven, verify) · NQ FAIL dd · ES FAIL. modules.py: equities_swing →
+  research_pass. Next: full gauntlet + swing-1d-0.x ladder.
+* **PAPER "WHY" (user: "don't see where this is doing")** — /api/paper_log now diagnoses the exact
+  blocker (keys → toggle → approval-for-CURRENT-version → market hours) and the dashboard paper
+  panel shows it; the flow is: approve ladder on /training → flip "Paper autotrade" on / →
+  fills land in the paper log + scorecard.
+* **SPY STAND-DOWN A/B (user's NQ no-fill screenshots, round 2)** — tested "stand-down as grade"
+  under the 07.3 philosophy: REJECTED, the gate stays. OFF collapses every instrument (NQ avg R
+  +0.172→+0.023, PF 1.29→1.04, DD −42.6→−75.4R; ES +0.087→−0.051; QQQ +0.507→+0.264; SPY
+  +0.448→+0.208). Counter-SPY-trend breakouts ARE the losers — this veto earns ~0.15R/trade.
+* **Ops** — stale-server "unknown kind" now says RESTART (dynamic kinds list); sync-all UI 404
+  hint; docs/BOT_FEATURE_AUDIT.md (per-file gaps by section).
+
+---
+
+## 2026-07-05 (v5) — NQ 75%-WR search (768 cells) · per-security scoreboard · champion-gate diagnosis · cont-training skips unchanged data · WAL · sweep --tf · retention
+
+* **NQ ≥75% WR (user ask)** — `research/nq_winrate.py` + `nq_scratch.py` (run kind **nqwr**,
+  button 13): NQ reaches 75–81% WR only at 2×ATR stops (~136t median) and PF tops at **0.91**;
+  BE-move/time-stop/soft-abort all reduce PF (they clip winners more than losses). ES is the
+  closest futures cell today (60t stop, TP 0.25×: **76.8% WR, PF 1.12**). Concrete NQ path:
+  veto ~24% of losers → ~81% WR / PF 1.2 — the first modest selectivity target for the
+  no-trade/L2 stack. Full analysis → DEVELOPMENT_PLAN §0.
+* **Champion-gate diagnosis (user: "still no champion")**: 104 reports; every candidate fails
+  AUC ≤ 0.52 (SPY 0.496, ES 0.518) or Brier-vs-base-rate (QQQ 0.535 AUC/0.296 Brier vs 0.238
+  base; NQ 0.551/0.249 vs 0.242). Same data → same result every cycle: **continuous training
+  now skips ml/nn when the rebuilt dataset's rows/span are unchanged** (server `_cont_loop`
+  signature check). The gate math is honest — new DATA (L2 sync, live labels, 15m lineage)
+  is the only lever, not more retrains.
+* **Ops/readiness (ENGINEERING_AUDIT items)**: tracker SQLite **WAL + busy_timeout 5s** (scan
+  thread + API + paper autotrade share the DB) · **90-day retention** for timestamped training
+  reports at boot · sweep `--tf=` pass-through (15m lineage from the web: TF selector now applies
+  to button 5) · Training-Lab buttons **12 Target geometry** and **13 Futures 75% WR**.
+
+---
+
+## 2026-07-05 (v4) — ULTIMATE-GOAL geometry study · L2 Sync-all · bug batch (3m resample, empty dataset, LGBM spam, folder-register UI, approval-card fit)
+
+* **Target-geometry study** (`research/target_geometry.py`, Training-Lab run kind **geometry**):
+  measures the user goal *WR 85% · PF 1.8–1.9 · adverse ≤45 ticks futures / $4 equities* against
+  the canonical entries. Math: PF = WR·W/((1−WR)·L) ⇒ TP ≈ **0.33× stop**; a driftless random
+  walk already wins ~75.4% at that shape, so the entry+model stack must add ~10 WR points after
+  costs. Study sweeps TP ∈ {0.25…1.0}×stop, first-touch walk, stop-first ambiguity, EOD flat,
+  honest costs; flags `meets_goal` cells. Pursuit plan → DEVELOPMENT_PLAN.md §0.
+* **L2 SYNC ALL** — `/api/data/sync_all` + `/api/data/sync_status` + background worker; the L2
+  panel shows a SYNC ALL button when ≥2 sources are unsynced, with live per-file progress (built
+  for the ~10 registered QQQ MBO files on D:).
+* **Bug batch** (all user-reported): tf=3m dataset crash ("duplicate keys" — 1m continuous view
+  carried ts **and** ts_et; `_from_continuous()` keeps exactly one) · empty-dataset build now
+  prints "0 labeled candidates" instead of KeyError y_win · LGBM "X does not have valid feature
+  names" silenced module-wide in models.py · folder registration UI showed "registered undefined"
+  (folder responses have `{registered, sources[]}` shape — handled) · approval-ladder table now
+  fits its card (fixed layout + word-wrap) · UI routes send Cache-Control no-store (stale-page
+  class of bugs closed).
+* **pandas 3.0 unit trap** (second sighting — now a convention): datetime64[**us**] series make
+  `.astype("int64")` return µs while `Timestamp.value` is ns → searchsorted misses everything.
+  Rule: compare `datetime64[ns]` on both sides (`to_numpy("datetime64[ns]")` +
+  `.as_unit("ns").to_datetime64()`), never raw int64 epochs. Fixed in target_geometry.py;
+  l2_features.py already guards by magnitude.
+* **121 tests green** after the batch.
+
+---
+
 ## 2026-07-05 (v3) — 07.2 VERIFIED: parity 100% · similarity clusters PROMOTED (first live model) · QQQ + NQ gauntlet adoptions · triples lose to pairs · auto-reload launcher · CI
 
 * **07.2 verification chain** (research/verify_072.py — parity → matrix → similarity → 8 combos →

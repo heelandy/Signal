@@ -12,9 +12,16 @@ the registry and the explainability layer treat them identically.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from bot.ml.predictor import DirectionModel
+
+# LightGBM's sklearn wrapper stamps feature names at fit; scoring with plain numpy then warns on
+# EVERY predict call ("X does not have valid feature names...") — cosmetic, and it flooded the
+# threshold-study log (user 2026-07-05). All our arrays are schema-ordered by construction.
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 
 class TabularModel:
@@ -28,7 +35,12 @@ class TabularModel:
     def _impute(self, X):
         X = np.atleast_2d(np.asarray(X, float))
         if self.med is None:
-            med = np.nanmedian(X, axis=0)
+            # all-NaN columns are EXPECTED (l2_* before depth data is registered) -> median 0;
+            # mask them out first so nanmedian never sees an all-NaN slice (no warning spam)
+            med = np.zeros(X.shape[1])
+            ok = np.isfinite(X).any(axis=0)
+            if ok.any():
+                med[ok] = np.nanmedian(X[:, ok], axis=0)
             self.med = np.where(np.isfinite(med), med, 0.0)
         X = np.where(np.isfinite(X), X, self.med)
         return X

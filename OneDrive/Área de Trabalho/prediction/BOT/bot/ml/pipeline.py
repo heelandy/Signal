@@ -92,7 +92,19 @@ def _train_impl(sym: str, n_splits: int, embargo: int, auto_promote: bool, tf: s
     p_cal = np.clip(calib.transform(wf["oos_p"]), 0, 1)
     buckets = bucket_expectancy(p_cal, net_r[wf["oos_idx"]])
     report["buckets"] = buckets
-    report["calibration"] = calibration_table(wf["oos_y"], p_cal)
+    # LEAKAGE FIX (user 2026-07-05): the DISPLAYED calibration table must not judge the calibrator
+    # on the rows it was fit on — fit on the first 70% of OOS predictions (time order), tabulate
+    # on the last 30%. (The bucket gate is rank-safe: isotonic is monotone, ordering unchanged.)
+    order = np.argsort(wf["oos_idx"])
+    cut = int(0.7 * len(order))
+    if len(order) - cut >= 30:
+        cal_h = IsotonicCalibrator().fit(wf["oos_p"][order[:cut]], wf["oos_y"][order[:cut]])
+        report["calibration"] = calibration_table(
+            wf["oos_y"][order[cut:]], np.clip(cal_h.transform(wf["oos_p"][order[cut:]]), 0, 1))
+        report["calibration_note"] = "honest split: fit on first 70% of OOS, table on last 30%"
+    else:
+        report["calibration"] = calibration_table(wf["oos_y"], p_cal)
+        report["calibration_note"] = "in-sample calibration table (too few OOS rows to split)"
     if not buckets["monotone_ok"]:
         return {**report, "promote": False,
                 "reason": "high-confidence trades do not out-earn low-confidence OOS — model not useful"}
@@ -112,13 +124,17 @@ def _train_impl(sym: str, n_splits: int, embargo: int, auto_promote: bool, tf: s
         return {**report, "promote": False,
                 "reason": f"slice gate: inverted expectancy in {bad} — model not uniform enough to deploy"}
 
-    # 3) challenger = best model retrained on ALL data + the OOS-fitted calibrator
-    challenger = CalibratedModel(zoo[best]().fit(X, y), calib)
-    # 4) champion-challenger on the frozen last-30% holdout (same for both sides)
+    # 3) champion-challenger duel on the frozen last-30% holdout. LEAKAGE FIX (user 2026-07-05):
+    # the duel model trains on the FIRST 70% ONLY — retraining on ALL data and then scoring the
+    # holdout graded the challenger on rows it had seen (inflated ch_auc). Raw probabilities are
+    # used for AUC (isotonic is rank-preserving, the calibrator cannot change AUC).
     k = int(len(X) * 0.7)
-    ch_auc = auc(y[k:], challenger.predict_proba(X[k:]))
+    duel = zoo[best]().fit(X[:k], y[:k])
+    ch_auc = auc(y[k:], duel.predict_proba(X[k:]))
     champ, meta = _reg.champion(MODEL_NAME)
     cm_auc = auc(y[k:], champ.predict_proba(X[k:])) if champ is not None else float("-inf")
+    # the DEPLOYED challenger still trains on all data (best live model) + the OOS calibrator
+    challenger = CalibratedModel(zoo[best]().fit(X, y), calib)
     promote = champ is None or (ch_auc == ch_auc and ch_auc >= cm_auc)
     report.update({"challenger_auc": round(float(ch_auc), 3),
                    "champion_auc": (round(float(cm_auc), 3) if cm_auc == cm_auc and cm_auc != float("-inf") else None),

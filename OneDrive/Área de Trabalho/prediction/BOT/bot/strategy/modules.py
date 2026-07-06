@@ -46,10 +46,26 @@ STRATEGY_MODULES = [
      **_ORB_CONTRACT,
      "setup_rules": _ORB_CONTRACT["setup_rules"] + " — F30 gold edge NOT reproduced; signals for context only"},
     {"id": "options_day_orb", "asset_class": "options", "style": "options_trading",
-     "symbols": ["QQQ", "SPY"], "status": "implemented_translation",
-     "strategy_version": STRATEGY_VERSION, **_ORB_CONTRACT,
-     "entry_logic": "underlying ORB signal translated to 0-4 DTE structures "
-                    "(naked/debit/credit via bot.options; exit plan at underlying TP1/TP2/stop)"},
+     "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass",
+     "strategy_version": "options-0.1", **_ORB_CONTRACT,
+     "entry_logic": "underlying ORB signal -> NAKED 0DTE buy (call long / put short) ONLY — the "
+                    "payoff replay (research/options_replay.py 2026-07-06) PASSES naked on both "
+                    "(QQQ +0.268 ret/premium PF 2.05 9/9 yrs, IV-robust; SPY +0.123 PF 1.5 9/9, "
+                    "marginal at IV .30) and REJECTS debit+credit verticals (capping the 4R tail "
+                    "/ selling the breakout direction kills the low-WR big-winner edge). IV is "
+                    "model-approximated — paper must verify real fills before sizing",
+     "notes": "ladder lineage: options-0.1; translation layer bot/options; leg shadow-recording "
+              "already rides every tracked signal"},
+    {"id": "options_native_vrp", "asset_class": "options", "style": "options_trading",
+     "symbols": ["SPY", "QQQ"], "status": "research_candidate",
+     "notes": "OPTIONS-ONLY strategy search (research/options_native.py 2026-07-06): short daily "
+              "ATM straddle (variance risk premium) PASSES the numeric gate huge — SPY +0.376 "
+              "ret/premium win 81.6% PF 5.35 9/9 yrs OOS +0.412; QQQ +0.307 PF 3.69 9/9. "
+              "NOT adoptable from this test: VIX (30d implied) priced a 1-DAY straddle, which "
+              "likely OVERPRICES premium and inflates the short side; worst day -7.15x premium "
+              "(unbounded tail, no sizing model). Long straddle = dead (mirror confirms VRP). "
+              "Needs real 0DTE chain IV + tail-risk sizing before any ladder",
+     "approval_requirements": "real chain data confirm -> then full AITP ladder from research"},
     {"id": "equities_scalping", "asset_class": "equities", "style": "scalping",
      "symbols": [], "status": "spec_only",
      "notes": "requires 1m execution loop + tighter cost model; research not started",
@@ -59,12 +75,40 @@ STRATEGY_MODULES = [
      "notes": "candidate base: 1m ORB micro-breaks + L2 flow features once depth data is wired",
      "approval_requirements": "full AITP ladder from research"},
     {"id": "equities_swing", "asset_class": "equities", "style": "swing_trading",
-     "symbols": [], "status": "spec_only",
-     "notes": "daily-bar structure + regime module; labels = multi-day triple-barrier",
+     "symbols": ["QQQ"], "status": "gauntlet_pass", "strategy_version": "swing-1d-0.1",
+     "notes": "FULL 7/7 GAUNTLET PASS (research/swing_gauntlet.py 2026-07-05): QQQ daily EMA20>50 "
+              "pullback-reclaim, stop 1.5ATR tgt 2R horizon 20 — n77 +0.538R PF 2.23 OOS +0.687 "
+              "dd -7R, survives 2x costs, 8/9 years positive. SPY FAILS (4/9 years, IS half "
+              "negative) — not adopted. OPTIONS (cross-test 2026-07-06): 21-DTE passes in TWO "
+              "structures — naked +0.311 ret/risk 6/6 yrs AND debit vertical +0.236 6/6 (the "
+              "higher-WR defined-target profile carries a spread; the only stream where one "
+              "works). Ladder lineage: swing-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
     {"id": "futures_swing", "asset_class": "futures", "style": "swing_trading",
-     "symbols": [], "status": "spec_only",
-     "notes": "needs continuous-contract roll handling in the execution layer (data already rolls)",
+     "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "swing-fut-1d-0.1",
+     "notes": "FULL 7/7 GAUNTLET PASS (2026-07-05): NQ daily 20-day BREAKOUT + EMA50 side (the "
+              "pullback rules fail futures dailies) — n222 +0.123R PF 1.21 dd -12.6R, 2x-cost "
+              "+0.103, 11/17 years positive. ES FAILS years (9/17). Execution still needs "
+              "continuous-contract roll handling before paper. Ladder lineage: swing-fut-1d-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "daily_volbreak", "asset_class": "multi", "style": "day_trading",
+     "symbols": ["NQ", "QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "volbreak-1d-0.1",
+     "notes": "F52 GRADUATE re-confirmed under the current engine 2026-07-05 (research/"
+              "strat_daily.py): volatility breakout, stop-entry at open ± 0.3x prior-day range, "
+              "EOD exit, gap-aware fills. NQ +0.094R PF 1.54 17/17 YEARS · QQQ +0.103R PF 1.69 "
+              "9/9 · SPY +0.086R PF 1.55 9/9, all OOS+. ES/GC FAIL — not included. CAVEAT: thin "
+              "(~12 bps/trade) => slippage-sensitive; paper must verify live fills before sizing. "
+              "OPTIONS (cross-test 2026-07-06): 0DTE NAKED is its BEST expression — QQQ +1.01 "
+              "ret/premium PF 3.30 9/9 yrs OOS +1.11, SPY +0.63 PF 2.51 9/9 (debit/credit fail). "
+              "Ladder lineage: volbreak-1d-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "equities_connors_rsi2", "asset_class": "equities", "style": "swing_trading",
+     "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "connors-1d-0.1",
+     "notes": "F52 GRADUATE re-confirmed 2026-07-05: Connors RSI-2 (close>SMA200 & RSI2<10 long / "
+              "mirror short), 1-5 day hold. QQQ +0.325R PF 1.97 win 73% 7/8 years · SPY +0.334R "
+              "PF 2.14 win 77% 7/8, both OOS+. CAVEAT: REGIME-DEPENDENT — rides the post-2018 "
+              "dip-buy regime, fails NQ/ES over 2010+ history; equities-only, size small, revisit "
+              "if the dip-buy regime breaks. Ladder lineage: connors-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
 ]
 

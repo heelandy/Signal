@@ -252,7 +252,8 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
             try:
                 from bot.ml.ensemble import decide_ensemble
                 ai = decide_ensemble(rd.approved, ml_p=conf if isinstance(conf, float) else None,
-                                     heads=heads_out, similarity=sim_out, grade=grade)
+                                     heads=heads_out, similarity=sim_out, grade=grade,
+                                     nn_p=s.get("nn_seq"))
             except Exception:
                 ai = None
             proposals.append({
@@ -281,6 +282,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "tp2": (plan["underlying"]["tp2"] if plan else round(c.entry + c.side.sign * 4.0 * c.risk, 2)),
                 "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats, "iv_est": iv_est,
                 "heads": heads_out or None, "ai_decision": ai, "ml_explain": ml_explain,
+                "nn_seq": s.get("nn_seq"), "similarity": sim_out,
                 # KELLY (advisory, quarter-Kelly of the risk budget): P(win) from the champion/prior,
                 # payoff b from the symbol's backtest matrix when available (fallback 4R-cap profile)
                 "kelly": _kelly_advice(sym, conf),

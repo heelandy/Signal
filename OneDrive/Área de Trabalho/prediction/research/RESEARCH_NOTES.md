@@ -4,6 +4,127 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
+## F77 — cooldown / stale / next-candle cohorts → rule 07.6 (2026-07-06)
+`blocker_edge3.py` (user: "test against cooldown, stale, next-candle") under the live-identical
+07.5 base — the prior cd/stale gauntlet adoptions were made under the DIVERGENT old config.
+- **STALE/RANGE stand-down: DROPPED on QQQ/SPY/NQ** — blocked cohorts +0.584×123 / +0.241×135 /
+  +0.182×180; **KEPT on ES** (cohort −0.046, maxDD −47→−71 without it).
+- **COOLDOWN: QQQ 5→0** (n-small but avg/OOS/PF all better; SPY/NQ already 0; ES keeps default 3).
+- **NEXT-CANDLE, both directions tested**: QQQ — the WAIT-created trades LOSE (−0.538R lost
+  cohort) → **ft_confirm OFF on QQQ** (fills the breakout candle itself). SPY — the OPPOSITE:
+  **instant fill OFF** (always wait): avg flat but OOS 0.386→**0.620**, n +79%. NQ keeps
+  instant (always-wait collapses its OOS 0.235→0.082); ES unchanged (instant already off,
+  no-wait blows DD to −75R).
+- Combined configs CONFIRMED before adoption (interactions checked).
+**07.6 canonical (= live, parity 100% ×4, 123 tests):** QQQ n287 **+0.552R PF 1.88** total
++158.4 OOS +0.718 · SPY n269 +0.442 total +118.9 **OOS +0.620** · NQ n1327 +0.194 **total
++257.6** OOS +0.286 · ES unchanged (its blockers all earn). Pines: stale default 0 (ES: set 24),
+wait_ft tooltip QQQ-off, instant_fill off on ES AND SPY charts.
+
+## F76 — SEVEN DIVERGENCES CLOSED → rule 07.5 (LIVE == BACKTEST) + round-2 blocker verdicts (2026-07-06)
+`blocker_edge2.py` + the F75 fixes, adopted in one wave. The audit found SEVEN live≠backtest
+divergences: (1) chase-cap live-only, (2) narrow-OR live-only, (3) canonical DELAY=60 vs live 0,
+(4) canonical single-entry vs live re-arm 2/3, (5) canonical no equity OR-mid bias vs live ON,
+(6) canonical TP1=1.0R vs live 1.5R, (7) **live scan NEVER applied macro/regime gates** (the SPY
+stand-down existed only in backtest+Pine — paper would trade against it). Round-2 cohorts (07.5
+baseline): equity RE-ENTRIES lose (QQQ −0.093x24, SPY −0.524x20; OOS better single) → equities
+max_entries 1; DELAY-0 earns everywhere (first-hour cohorts +0.35/+0.30/+0.20/+0.05) → keep 0;
+equity FROZEN BIAS kept (OOS 0.68 vs 0.396 without); CHOP (regime-2) BLOCK dropped on FUTURES
+(cohorts NQ +0.194x309 ES +0.178x326, OOS up both) and kept on equities (OOS degrades).
+ADOPTED (07.5): run_backtest == live scan gate-for-gate (chase per-asset QQQ/SPY/ES 0 · NQ/MNQ
+1.0 DD-knob; narrow-OR grade-only; delay-0; re-arm futures-only; equity bias; per-asset
+block_range; macro gates applied to live signals; TP1 1.5R). Pines: chase default 0, volexp
+filter default off, equity max-entries 1.
+**07.5 canonical (= live):** QQQ n170 +0.435R PF 1.66 DD −9.9 OOS **+0.747** · SPY n150 +0.444
+PF 1.73 DD −7.1 OOS +0.386 · NQ n1147 +0.196 **total +224.9R** OOS +0.235 · ES n1226 +0.088
+total +107.5 OOS +0.167. 123 tests green · parity 100% ×4. Datasets/models re-key to 07.5;
+approvals reset by design.
+
+## F75 — BLOCKER-EDGE STUDY: the live gates cost edge + live≠backtest divergence (2026-07-06)
+`research/blocker_edge.py` (user: "run tests against the blockers-by-design to find edge").
+**DIVERGENCE FOUND FIRST**: canonical `run_backtest` NEVER carried `chase_atr` (live 1.0) or
+`min_or_width` (live 2.4) — every 07.x validation number includes trades LIVE refuses (2026-07-06
+session: QQQ blocked all day by the chase-cap, SPY by narrow-OR, while price ran 1.5%).
+Cohort results under 07.4 (blocked-cohort avg R; positive = the blocker removes GOOD trades):
+| sym | chase-blocked cohort | narrow-OR-blocked cohort | live D vs canonical A |
+|---|---|---|---|
+| QQQ | n127 **+0.591** | n61 +0.373 | avg 0.507→0.448, OOS 0.501→0.228 |
+| SPY | n132 **+0.698** | n105 +0.419 | avg 0.448→0.113 (!) |
+| NQ  | n294 +0.204 | n200 +0.098 | avg ~flat, DD −42.6→−22.6 |
+| ES  | n344 +0.159 | n327 +0.004 | avg ~flat, DD −56.5→−22.1 |
+READS: (1) the CHASE-CAP is destroying the equity edge live — the chased entries ARE the winners
+(consistent with F61's "no-chase re-tested, stays OFF... the late confirmed entries are the
+winners"; the arm-timing adoption contradicted it). On futures chase is ~neutral per-trade but
+HALVES max-DD — a risk knob, not an edge knob. (2) NARROW-OR: under the full layered 07.4 entry
+the blocked cohort is positive everywhere (the 2026-07-01 graduation was vs PLAIN ORB — the
+watch machine + strong-body + continuation now do its job); per-trade/DD still improve slightly
+on QQQ. RECOMMENDATION (needs gauntlet + user sign-off — chase was a user-adopted rule):
+equities chase OFF; futures chase KEPT as the DD-halver; narrow-OR filter → GRADE-only
+everywhere; then close E13 (run_backtest carries the same gates live enforces) = rule 07.5.
+
+## F74 — OPTIONS: payoff replay + cross-strategy test + the options-only search (2026-07-06)
+Three studies complete the options module (user: "finish options", "test the other strategies
+as well, find which one will make it", "look for a strategy for options only"):
+- **ORB core payoff replay** (`options_replay.py`, BS entry/exit, per-leg costs, IV 0.15/0.20/0.30):
+  **NAKED 0DTE PASSES both** (QQQ +0.268 ret/premium PF 2.05 9/9, IV-robust; SPY +0.123 PF 1.5
+  9/9, marginal at IV .30); debit + credit verticals FAIL everywhere. Structural: the ORB's
+  low-WR/big-winner profile needs convexity — spreads cap the 4R tail that pays; credit sells
+  the predicted direction. Module `options_day_orb` -> gauntlet_pass, lineage **options-0.1**.
+- **Cross-strategy** (`options_cross.py`): **volbreak -> 0DTE naked is the standout** (QQQ +1.01
+  ret/premium PF 3.30 CIlo +0.90 9/9 OOS +1.11 on n=1,940; SPY +0.63 PF 2.51 9/9) — a daily
+  momentum thrust with EOD exit is what a 0DTE option amplifies. **Swing QQQ @21DTE passes in
+  TWO structures** (naked +0.311 AND debit +0.236, both 6/6) — the only stream where a vertical
+  works (higher WR + defined 2R target). Connors: nothing passes. **CREDIT fails all five
+  streams** — never sell premium against these signals.
+- **Options-only** (`options_native.py`, VIX-priced daily ATM straddle): the VARIANCE RISK
+  PREMIUM shows exactly as the literature says — short straddle SPY +0.376 ret/prem win 81.6%
+  PF 5.35 9/9 OOS +0.412; QQQ +0.307 PF 3.69 9/9; long straddle dead (mirror confirms).
+  **RESEARCH CANDIDATE ONLY**: VIX (30d) pricing a 1-day straddle likely OVERPRICES premium
+  (bias favors the short), worst day −7.15x premium, no tail sizing. Registered as
+  `options_native_vrp` (research_candidate); needs real 0DTE chain IV to confirm. The
+  VIX-regime variants (rich/calm) had too few days at ±10% of SMA5 — widen thresholds when
+  chain data exists.
+
+## F73 — Strategy-survey follow-through: modules ladders + re-confirmations (2026-07-06)
+User: "do 1,2,3; run the necessary for 5,6,7,8" (from the strategy survey).
+- **Module approval lineages LIVE** — the approval ladder now supports multiple strategy
+  versions: `swing-1d-0.1` (QQQ pullback 7/7), `swing-fut-1d-0.1` (NQ breakout 7/7),
+  `volbreak-1d-0.1`, `connors-1d-0.1` — each approvable research→replay→paper on /training
+  (version dropdown; endpoints take ?version=).
+- **Volbreak k0.3 RE-CONFIRMED under the current engine** (strat_daily 2026-07-06): NQ +0.094R
+  PF 1.54 **17/17 yrs** · QQQ +0.103R PF 1.69 9/9 · SPY +0.086R PF 1.55 9/9, all OOS+. ES/GC
+  fail. Registered as module `daily_volbreak` (gauntlet_pass; slippage caveat stands).
+- **Connors RSI-2 RE-CONFIRMED equities-only**: QQQ +0.325R PF 1.97 7/8 · SPY +0.334R PF 2.14
+  7/8 (only 2020 negative). NQ/ES still fail years. Module `equities_connors_rsi2`
+  (gauntlet_pass; regime-dependence caveat recorded).
+- **Sweep-then-go (F62 follow-up) = UNSTABLE, watchlist only**: under 07.4 the QQQ pass FLIPPED
+  to fail (n=80, CI −0.113) while SPY flipped to pass (n=116, +0.361R, 6/6 yrs). A small-n edge
+  that swaps symbols across rule versions is not adoptable. NOTE: the trend/momentum family now
+  passes BOTH equities strongly (QQQ +0.389 CI +0.208 9/9 · SPY +0.355 8/9) — still a breakout
+  filter per F58, but the strongest optional selectivity yet measured.
+- **GOLD FINAL: DEAD** — canonical 07.4, GC's own config (delay-0, RTH session): n 664,
+  −0.136R, PF 0.83, 6/17 yrs, DD −112R. F30 does not reproduce; GC stays no-trade.
+- **L2 store bugs (found on the first full 51-file sync)**: (1) each file's synthesis
+  OVERWROTE the l2feat store → only the last day survived; now APPEND-MERGED (dedup by minute).
+  (2) attach_l2 double-merged because the PIT schema already carries NaN l2_* placeholders →
+  l2_*_x/_y suffixes, schema read 100% NaN; placeholders now dropped pre-merge. Full re-sync
+  required (statuses reset); the post-sync auto-pipeline retrains when it lands.
+- **Zone-bounce step 2 = FAIL** (`research/zone_bounce.py`, NQ/ES 1m full history): MAJOR/STRONG
+  zone touch + six-check reversal-machine confirm, stop 0.5 ATR beyond zone, 2R target —
+  NQ n=415 −0.035R CIlo −0.133 (9/17 yrs) · ES n=324 −0.137R CIlo −0.246. Zones predict
+  LOCATION (step 1 stands, clean-air keeps earning) but fading into them is NOT a tradeable
+  entry after costs — consistent with the F18/F53/F62/F72 mean-reversion graveyard. Closed.
+
+## F72 — Wyckoff spring + ICT cluster: verdicts recorded (2026-07-05, strategy-survey run)
+The two unrun scripts from the Jul-1 batch, executed under the standard gauntlet:
+- **Wyckoff SPRING/UPTHRUST (NQ): DEAD every variant** — base ER<.35 −0.162R (yr+ 4/17), tight
+  −0.168, +vol-test −0.202. Fading a swept range extreme gets run over — consistent with the
+  F53/F18 mean-reversion graveyard and the F33 false-breakout study. Do not pursue.
+- **ICT cluster (QQQ)**: OTE +0.233 CIlo −0.02 FAIL · Judas −0.004 DEAD · SMT = futures-pair only.
+  **Silver Bullet (10-11 ET) +0.382R PF 1.58 — but FAILS the gate**: n=81, shorts +0.01 (both-sides
+  fail), 5/8 yrs. It is mostly the F38 time-of-day effect re-observed on a thin slice; a weak lead
+  at best, not adoptable.
+
 ## F67 — PROBABLE liquidity-zone engine + bounce-vs-reversal machine (user research 2026-07-03)
 
 **NUMBERS IN (2026-07-03, steps 1+2 run): CLEAN-AIR = a VALIDATED CANDIDATE on NQ+QQQ.**

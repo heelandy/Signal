@@ -20,8 +20,9 @@ SIM_GOOD_R = 0.15        # nearest-cluster avg R above this = looks like winners
 
 def decide_ensemble(risk_approved: bool, ml_p: float | None = None,
                     heads: dict | None = None, similarity: dict | None = None,
-                    grade: str | None = None) -> dict:
-    """Blend the advisory reads. Absent models simply don't vote (prior-only = low confidence)."""
+                    grade: str | None = None, nn_p: float | None = None) -> dict:
+    """Blend the advisory reads. Absent models simply don't vote (prior-only = low confidence).
+    nn_p = the NN sequence champion's calibrated confidence (None until one is promoted)."""
     heads = heads or {}
     reasons: list[str] = []
     if not risk_approved:
@@ -44,6 +45,13 @@ def decide_ensemble(risk_approved: bool, ml_p: float | None = None,
             votes_dn += 1; reasons.append(f"no-trade model dislikes it ({nt:.2f})")
         else:
             reasons.append(f"no-trade {nt:.2f} ok")
+    if nn_p is not None:
+        if nn_p >= HIGH_P:
+            votes_up += 1; reasons.append(f"NN sequence {nn_p:.2f} >= {HIGH_P}")
+        elif nn_p < 0.45:
+            votes_dn += 1; reasons.append(f"NN sequence {nn_p:.2f} weak")
+        else:
+            reasons.append(f"NN sequence {nn_p:.2f} neutral")
     if similarity and similarity.get("avg_r") is not None:
         if similarity["avg_r"] >= SIM_GOOD_R:
             votes_up += 1
