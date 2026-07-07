@@ -32,9 +32,55 @@ def _store_name(sym: str, tf: str) -> str:
     return f"{DATASET_NAME}_{sym}" + ("" if tf == "5m" else f"_{tf}")
 
 
-def build(sym: str = "QQQ", tf: str = "5m", sess: str = "rth", save: bool = True) -> pd.DataFrame:
+def attach_live_journal(seed: pd.DataFrame, sym: str, tf: str) -> pd.DataFrame:
+    """THE JOURNAL IS THE TRAINING LAB (user 2026-07-07): union the growing LIVE trade journal
+    into the historical seed. Every taken+resolved live decision that rode with a PIT feature
+    snapshot becomes a training row — so the corpus GROWS with live data over time and the ONLY
+    persisted substrate is the journal (bars stay transient; the live scan is persist=False).
+    tf-matched: a 15m journal row only feeds the 15m lineage. Deduped by (ts,symbol,side)."""
+    try:
+        from bot.ml.live_labels import build_live_labels
+        lj = build_live_labels(save=False)
+    except Exception:
+        return seed
+    if not len(lj):
+        return seed
+    feat0 = FEATURE_COLUMNS[0]
+    lj = lj[(lj["symbol"].str.upper() == sym.upper()) & (lj["taken"] == 1)
+            & (lj.get("tf", "5m").astype(str) == tf) & lj[feat0].notna()
+            & lj["net_r"].notna()
+            # LINEAGE SEPARATION (review 2026-07-07): worker/emergent shadow trades carry TIGHT-
+            # TARGET geometry (TP = b x stop) — unioning them here would train the CORE lineage
+            # on outcomes from a different trade geometry, and a worker row sharing (ts,symbol,
+            # side) with its core twin could even REPLACE the canonical row in the dedup. Only
+            # core-family rows feed the core dataset; worker lineages are judged by the Boss.
+            & ~lj["family"].astype(str).str.startswith(("worker-", "emergent-"))]
+    if not len(lj):
+        return seed
+    from bot.strategy.orb_candidates import STRATEGY_VERSION, T2
+    rows = []
+    for _, r in lj.iterrows():
+        net = float(r["net_r"])
+        rows.append({"ts": pd.Timestamp(r["ts"]), "symbol": sym, "side": r["side"],
+                     "strategy_version": STRATEGY_VERSION, "session": r.get("session", "rth"),
+                     **{k: r.get(k, np.nan) for k in FEATURE_COLUMNS},
+                     "y_win": int(net > 0), "y_tp2": int(net >= 0.99 * T2),
+                     "y_stop": int(net <= -0.99), "net_r": net, "gross_r": net,
+                     "mfe_r": r.get("mfe_r", np.nan), "mae_r": r.get("mae_r", np.nan),
+                     "hold_bars": 0, "tf": tf, "src": "live_journal"})
+    live = pd.DataFrame(rows)
+    seed = seed.copy()
+    seed["src"] = seed.get("src", "backtest_seed")
+    both = pd.concat([seed, live], ignore_index=True)
+    both = both.drop_duplicates(subset=["ts", "symbol", "side"], keep="last")  # live wins on overlap
+    return both.sort_values("ts").reset_index(drop=True)
+
+
+def build(sym: str = "QQQ", tf: str = "5m", sess: str = "rth", save: bool = True,
+          include_live: bool = True) -> pd.DataFrame:
     """Replay `sym` through the canonical entry standard -> one row per executed candidate:
-    meta (ts/symbol/side/version) + FEATURE_COLUMNS + labels.
+    meta (ts/symbol/side/version) + FEATURE_COLUMNS + labels. When include_live (default), the
+    GROWING live trade journal is unioned in (the journal-is-training-lab feed).
     tf=1d/1w routes to the SWING dataset (triple-barrier daily/weekly candidates)."""
     if tf in ("1d", "1w"):
         from bot.ml.swing_dataset import build_swing
@@ -74,6 +120,9 @@ def build(sym: str = "QQQ", tf: str = "5m", sess: str = "rth", save: bool = True
         from bot.ml.l2_features import attach_l2
         df = attach_l2(df, sym)                  # l2_* columns (NaN when no depth store exists)
         df["tf"] = tf
+    if include_live:                             # THE JOURNAL IS THE TRAINING LAB — grow with live data
+        df = attach_live_journal(df if len(df) else pd.DataFrame(columns=["ts", "symbol", "side"]),
+                                 sym, tf)
     if save and len(df):
         FeatureStore().save(_store_name(sym, tf), _version_slug(), df)
     return df
@@ -117,17 +166,24 @@ def build_rejects(sym: str = "QQQ", tf: str = "5m", sess: str = "rth", save: boo
     reason, PIT features, and the HYPOTHETICAL outcome (first-touch walk of the standard trade
     geometry) -> missed_winner / missed_loser labels. Analysis + future no-trade model; these rows
     are NOT mixed into the executed-candidate training set."""
-    from bot.strategy.orb_candidates import (load_state, ORS, ORE, CUT, DELAY, STRONG, T2,
+    from bot.strategy.orb_candidates import (load_state, ORS, ORE, CUT, STRONG, T2,
                                              STRATEGY_VERSION)
-    from bot.strategy.orb_state import ENTRY_STANDARD as ES
+    from bot.strategy.asset_config import asset_config, resolve_ctx_mode, layer3_kwargs
     import hs_backtest as B
     d = load_state(sym, tf, sess)
     rejects: list = []
-    B._orb_signals(d, ORS, ORE, 0.0, CUT, "close", False, False, entry_delay=DELAY,
-                   chase_atr=1.0, strong_body=STRONG, ft_confirm=True, dir_seq=True,
-                   watch_live=ES.watch_gate, cooldown_bars=ES.cooldown_bars,
-                   stale_bars=ES.stale_bars, retest_atr=ES.retest_atr,
-                   collect_rejects=rejects)
+    # CANONICAL GATES (fixed 2026-07-06 code-review): the reject labels are keyed to
+    # STRATEGY_VERSION, so they must be produced by the SAME per-asset gate set the canonical
+    # backtest trades — the old hardcoded set (chase 1.0 / cooldown 3 / stale 24 / ft_confirm on,
+    # single-entry) labeled "why no trade" under a rule that no surface trades anymore.
+    a = asset_config(sym)
+    mode = resolve_ctx_mode(a)
+    B._orb_signals(d, ORS, ORE, 0.0, CUT, "close", False, True, entry_delay=a.entry_delay,
+                   chase_atr=a.chase_atr, strong_body=STRONG, ft_confirm=a.ft_confirm,
+                   dir_seq=True, max_entries=a.max_entries,
+                   or_mid_bias=(mode not in ("mid", "mid_vwap", "mid_only", "abc")),
+                   instant_aligned=a.instant_fill,
+                   collect_rejects=rejects, **layer3_kwargs(a))
     if not rejects:
         return pd.DataFrame()
     orh, orl, mins = or_levels(d, ORS, ORE)

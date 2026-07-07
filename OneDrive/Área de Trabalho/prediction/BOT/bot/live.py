@@ -103,13 +103,16 @@ B_SKIP_SYMBOLS = {"ES", "SPY"}       # grade-B expectancy is negative on these -
 
 
 def scan_watchlist(symbols: list[str], provider: str | None = None, equity: float = 100_000.0,
-                   bars_back: int = 2, with_options: bool = True, persist: bool = True) -> list[dict]:
-    """Signal-engine scan: data -> 4 families -> P(win) -> order-flow -> options exit-plan. No trades."""
+                   bars_back: int = 2, with_options: bool = True, persist: bool = True,
+                   tf: str = "5m") -> list[dict]:
+    """Signal-engine scan: data -> 4 families -> P(win) -> order-flow -> options exit-plan. No trades.
+    tf selects the signal timeframe (5m default; the 15m pass drives the 15m lineage's live journal)."""
     proposals = []
+    _period = "20d" if tf in ("15m", "30m", "1h") else "5d"    # wider window so higher-TF bars fill
     for sym in symbols:
         sym = sym.upper()
         try:
-            bars = get_bars(sym, "5m", period="5d", provider=provider)
+            bars = get_bars(sym, tf, period=_period, provider=provider)
         except Exception as e:
             proposals.append({"symbol": sym, "error": str(e)})
             continue
@@ -292,6 +295,12 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "skip_reco": skip_reco,
                 "risk_pct_sized": round(100 * sized_qty * risk_per_unit / equity, 2),
                 "risk_ok": rd.approved, "risk_reason": rd.reason_code.value,
+                "timeframe": tf,                   # journal->training-lab tf tag (5m / 15m lineages)
+                # BAR IDENTITY (journal fix 2026-07-07): the candidate's id + SIGNAL-BAR time ride
+                # with the proposal — without them the autotrack dedup key degenerated to one row
+                # per (sym,family,session,side,tf) EVER and signal_at was NULL, so outcomes never
+                # resolved (every journal row stuck 'open'). This one field feeds both.
+                "candidate": {"candidate_id": c.candidate_id, "generated_at": c.generated_at},
                 "options": plan})
     return proposals
 

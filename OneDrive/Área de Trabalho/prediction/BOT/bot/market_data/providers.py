@@ -6,7 +6,9 @@ The bot doesn't care where bars come from; it asks the router and gets a normali
   • yahoo       — yfinance, free, works now (primary free fallback).
   • databento   — premium 1m/MBO (the validated source; via databento_feed).
   • webull      — OFFICIAL Webull OpenAPI (developer.webull.com). pip install webull-openapi-python-sdk
-                  + WEBULL_APP_KEY/SECRET in .env. Adapter ready, returns [] until both are set.
+                  + WEBULL_APP_KEY/SECRET in .env. A live EQUITIES source (QQQ/SPY bars work now);
+                  US-FUTURES quotes are NOT entitled on this account at the moment (2026-07-07), so
+                  the router skips it for futures (NQ/ES → yahoo). Re-include when futures is enabled.
   • tradingview — NO official API. Live = the webhook alerts the AUTO Pine already sends (ingested
                   elsewhere); historical = optional unofficial `tvdatafeed`. Adapter documents both.
 
@@ -257,10 +259,19 @@ _FALLBACK_ORDER = ["alpaca", "yahoo", "webull", "tradestation", "tradingview"]  
 
 def _default_order() -> list[str]:
     """Priority order, overridable via PROVIDER_ORDER in .env (e.g. 'webull,alpaca,yahoo') so you can
-    promote Webull to primary the moment you paste prod keys — no code edit needed."""
+    promote Webull to primary the moment you paste prod keys — no code edit needed.
+    ENV-READY (user 2026-07-07: "when I have them ready I'll add the API key in .env, they just
+    need to be ready"): a provider whose credentials land in .env JOINS the chain automatically,
+    appended AFTER your explicit priorities (fallback position — your order always wins)."""
     from bot.config import settings
     custom = [p.strip() for p in (settings.provider_order or "").split(",") if p.strip() in _PROVIDERS]
-    return custom or _FALLBACK_ORDER
+    order = list(custom or _FALLBACK_ORDER)
+    ok = lambda v: bool(v) and "PUT_YOUR" not in str(v)      # local: _is_set is defined below us
+    if "databento" not in order and ok(settings.databento_api_key):
+        order.append("databento")
+    if "tradestation" not in order and ok(settings.tradestation_refresh_token):
+        order.append("tradestation")
+    return order
 
 
 DEFAULT_ORDER = _default_order()
@@ -272,9 +283,14 @@ def get_bars(symbol: str, tf: str = "5m", period: str = "5d", provider: str | No
     if provider:
         order = [provider]
     else:
-        # Alpaca is equities-only (skip for futures). Webull CAN do futures (NQmain via futures_market_data) but
-        # needs a US-futures data entitlement; it self-disables + falls back until that's enabled on the account.
-        order = [p for p in _default_order() if not (p == "alpaca" and symbol.upper() in FUTURES)]
+        # EQUITIES-ONLY providers skipped for futures symbols. Alpaca is equities-only. Webull IS a
+        # valid data source for equities (QQQ/SPY — live bars work) but its US-FUTURES quotes are NOT
+        # entitled on this account yet — ENV-READY (user 2026-07-07: "when I have them ready I'll add
+        # the API key in .env, they just need to be ready"): set WEBULL_FUTURES=true in .env the day
+        # the entitlement lands and Webull rejoins the futures chain with zero code changes.
+        from bot.config import settings
+        _eq_only = ("alpaca",) if settings.webull_futures else ("alpaca", "webull")
+        order = [p for p in _default_order() if not (p in _eq_only and symbol.upper() in FUTURES)]
     last = pd.DataFrame()
     for name in order:
         fn = _PROVIDERS[name]

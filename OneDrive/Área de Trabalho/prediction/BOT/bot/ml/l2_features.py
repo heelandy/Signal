@@ -147,9 +147,35 @@ def _detect_any(path: str) -> tuple[str, list[str]]:
     return detect_format(path)
 
 
-def register(path: str, symbol: str) -> dict:
+def detect_symbols(path: str, sample_rows: int = 200_000) -> list[str]:
+    """AUTO-LABEL probe (user 2026-07-06: "synthesis filters and assigns the label instead of
+    user selection"): distinct values of the file's `symbol` column over a bounded head sample
+    (LIMIT stops the scan early — cheap even on a 67M-row day). [] = no symbol column/unreadable."""
+    try:
+        import duckdb
+        con = duckdb.connect()
+        try:
+            con.execute("SET memory_limit='512MB'; SET threads=1")
+            p = _duck_path(path)
+            cols = _columns(path)
+            if "symbol" not in cols:
+                return []
+            q = (f"SELECT DISTINCT symbol FROM (SELECT symbol FROM '{p}' LIMIT {sample_rows}) "
+                 f"WHERE symbol IS NOT NULL")
+            return sorted(str(s[0]).upper() for s in con.execute(q).fetchall())
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+
+def register(path: str, symbol: str | None = None) -> dict:
     """Register an on-disk L2/L3 file OR a whole FOLDER (auto-scans for data files, including
-    zips — nothing is copied or extracted to disk). Run sync per source to synthesize."""
+    zips — nothing is copied or extracted to disk). Run sync per source to synthesize.
+    LABELING (2026-07-06): the file's own `symbol` column decides the label — one source row per
+    symbol FOUND (multi-symbol venue files split; the synthesis filter isolates each). The
+    `symbol` argument is only a FALLBACK for files without a symbol column (label_source shows
+    which path was taken). This kills the mislabel class (QQQ ITCH data registered as NQ)."""
     p = Path(path)
     if not p.exists():
         return {"error": f"path not found: {path}"}
@@ -159,27 +185,44 @@ def register(path: str, symbol: str) -> dict:
             name = f.name.lower()
             if f.is_file() and any(name.endswith(e) for e in DATA_EXTS):
                 r = register(str(f), symbol)
-                if "error" not in r:
-                    found.append({k: r[k] for k in ("id", "path", "kind", "size_mb")})
+                for s in (r.get("sources") or ([r] if "error" not in r else [])):
+                    found.append({k: s[k] for k in ("id", "path", "symbol", "kind", "size_mb")})
             if len(found) >= 50:
                 break
         return {"folder": str(p), "registered": len(found), "sources": found} if found else \
             {"error": f"no data files ({'/'.join(DATA_EXTS)}) found under {p}"}
     kind, cols = _detect_any(str(p))
+    detected = detect_symbols(str(p)) if kind in ("mbo", "mbp", "trades") else []
+    if detected:
+        labels, label_source = detected, "auto"
+        if symbol and symbol.upper() not in detected:
+            label_source = f"auto (user pick {symbol.upper()} not in file — ignored)"
+    elif symbol:
+        labels, label_source = [symbol.upper()], "user"
+    else:
+        return {"error": "no symbol column in file and no fallback symbol given"}
     rows = _load()
-    dup = next((r for r in rows if r.get("path") == str(p)), None)
-    if dup is not None:                              # re-registering the same file is a no-op —
-        return dup                                   # repeated folder scans duplicated 12 files
-                                                     # into 21 registry rows (found 2026-07-06)
-    src = {"id": uuid.uuid4().hex[:8], "path": str(p), "symbol": symbol.upper(), "kind": kind,
-           "size_mb": round(p.stat().st_size / 1e6, 1), "added_at": pd.Timestamp.now("UTC").isoformat(),
-           "status": "registered" if kind != "unknown" else "unknown_format",
-           "zipped": str(p).lower().endswith(".zip"), "columns": cols[:24]}
-    rows.append(src)
+    made = []
+    for sym in labels:
+        dup = next((r for r in rows if r.get("path") == str(p)
+                    and str(r.get("symbol", "")).upper() == sym), None)
+        if dup is not None:                          # same file+symbol is a no-op — repeated
+            made.append(dup)                         # folder scans duplicated 12 files into 21
+            continue                                 # registry rows (found 2026-07-06)
+        src = {"id": uuid.uuid4().hex[:8], "path": str(p), "symbol": sym, "kind": kind,
+               "size_mb": round(p.stat().st_size / 1e6, 1),
+               "added_at": pd.Timestamp.now("UTC").isoformat(),
+               "status": "registered" if kind != "unknown" else "unknown_format",
+               "label_source": label_source,
+               "zipped": str(p).lower().endswith(".zip"), "columns": cols[:24]}
+        rows.append(src)
+        made.append(src)
+        from bot.audit import log as _audit
+        _audit("l2_source_registered", **{k: src[k] for k in ("id", "path", "symbol", "kind",
+                                                              "size_mb", "label_source")})
     _save(rows)
-    from bot.audit import log as _audit
-    _audit("l2_source_registered", **{k: src[k] for k in ("id", "path", "symbol", "kind", "size_mb")})
-    return src
+    return made[0] if len(made) == 1 else {"path": str(p), "registered": len(made),
+                                           "sources": made}
 
 
 def sources() -> list[dict]:
@@ -231,11 +274,24 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
     cols = _columns(src["path"])
     kind = src["kind"]
     con = duckdb.connect()
+    try:    # bounded memory (ops 2026-07-06): a 67M-row day OOM'd next to training — spill instead.
+        # 1GB/1 thread: this box also runs the always-on server; preserve_insertion_order=false
+        # lets the GROUP BY stream without buffering the scan order.
+        tmp = BOT_ROOT / "data" / "ml" / "duck_tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        con.execute(f"SET memory_limit='1GB'; SET threads=1; SET preserve_insertion_order=false; "
+                    f"SET temp_directory='{tmp.as_posix()}'")
+    except Exception:
+        pass
     ts = _ts_expr(cols, con, path)      # type-probed (TIMESTAMPTZ vs int epoch vs ISO string)
     if ts is None:
         con.close()
         return {"error": f"no timestamp column found in {cols[:10]}"}
     try:
+        # INSTRUMENT FILTER (2026-07-06 misconfig sweep): full-venue files carry many tickers —
+        # aggregate ONLY the registered symbol's rows (an unfiltered venue file made "QQQ"
+        # features out of the whole tape). A mislabeled source now errors instead of mixing.
+        symf = f"symbol = '{str(src['symbol']).upper()}'" if "symbol" in cols else None
         if kind == "mbp":
             lvl10 = "bid_sz_09" in cols and "ask_sz_09" in cols
             deep_b = " + ".join(f"bid_sz_0{i}" for i in range(10)) if lvl10 else "bid_sz_00"
@@ -246,11 +302,13 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
                    avg((bid_sz_00 - ask_sz_00) / nullif(bid_sz_00 + ask_sz_00, 0))          AS l2_depth_imb,
                    log10(count(*) + 1)                                                       AS l2_quote_rate,
                    avg(({deep_b}) - ({deep_a})) / nullif(avg(({deep_b}) + ({deep_a})), 0)    AS l2_book_pressure
-            FROM '{path}' WHERE bid_px_00 > 0 AND ask_px_00 > 0
+            FROM '{path}' WHERE bid_px_00 > 0 AND ask_px_00 > 0{' AND ' + symf if symf else ''}
             GROUP BY 1 ORDER BY 1"""
         elif kind in ("mbo", "trades"):
             side_col = "side" if "side" in cols else None
-            trade_filter = "WHERE action = 'T'" if (kind == "mbo" and "action" in cols) else ""
+            conds = [c for c in (("action = 'T'" if (kind == "mbo" and "action" in cols) else None),
+                                 symf) if c]
+            trade_filter = ("WHERE " + " AND ".join(conds)) if conds else ""
             signed = (f"sum(CASE WHEN {side_col} IN ('B','b') THEN size ELSE -size END)"
                       if side_col else "0")
             q = f"""
@@ -292,6 +350,13 @@ def synthesize_frame(df: pd.DataFrame, symbol: str, save: bool = True) -> dict:
     per-minute frame (chunked zip synthesis re-aggregates and saves once)."""
     cols = [c.lower() for c in df.columns]
     df.columns = cols
+    # INSTRUMENT FILTER (2026-07-06 misconfig sweep): full-venue files carry many tickers — keep
+    # only the registered symbol's rows. Zero rows after the filter SURFACES a mislabeled source
+    # (e.g. QQQ ITCH data registered as NQ) instead of silently attaching wrong-instrument flow.
+    if "symbol" in cols:
+        df = df[df["symbol"].astype(str).str.upper() == symbol.upper()]
+        if not len(df):
+            return {"error": f"no rows for symbol {symbol.upper()} — source mislabeled?"}
     tcol = next((c for c in ("ts_event", "ts_recv", "ts", "timestamp", "time") if c in cols), None)
     if tcol is None:
         return {"error": f"no timestamp column in {cols[:10]}"}

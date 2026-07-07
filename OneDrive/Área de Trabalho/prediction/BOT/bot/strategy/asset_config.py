@@ -34,8 +34,10 @@ class Asset:
     chase_atr: float = 1.0      # no-chase guard: fire within N*ATR of the level, else wait for the
                                 # retest. F75 BLOCKER-EDGE (2026-07-06): the chased entries ARE the
                                 # winners on QQQ/SPY (+0.59/+0.70R cohorts) and ES loses 62% of its
-                                # expectancy to the cap -> QQQ/SPY/ES = 0 (off). NQ/MNQ KEEP 1.0 as
-                                # the DD-halver (avg -14% for maxDD -39%): a risk knob, not edge.
+                                # expectancy to the cap -> QQQ/SPY/ES = 0 (off). NQ/MNQ keep the cap
+                                # as the DD-holder but WIDENED to 1.5 by F78 (pullback deep-research
+                                # 2026-07-06): 1.0 -> 1.5 gains +20.7R with the same maxDD; the
+                                # extra latitude admits winners (+0.445R x42) and drops losers.
     block_range: bool = True    # RANGE-regime (chop) hard block. F76 (2026-07-06): the blocked
                                 # cohort is POSITIVE on futures (NQ +0.194x309 ES +0.178x326,
                                 # OOS up on both) -> futures trade the chop; equities KEEP the
@@ -55,6 +57,12 @@ class Asset:
     cooldown_bars: int | None = None   # per-asset Layer-3 overrides (None = ENTRY_STANDARD default).
     stale_bars: int | None = None      # SPY: sweep candidate cd0/stale12/retest0.25 PASSED the full
     retest_atr: float | None = None    # 7-check gauntlet 2026-07-05 (OOS +0.753 vs +0.572, PF 2.4) -> adopted.
+    retest_mode: str | None = None     # PULLBACK retest target (None = ENTRY_STANDARD "edge").
+                                       # F78 (2026-07-06 purple round): NQ/MNQ "impulse_mid" — the
+                                       # 50%-of-impulse retest releases earlier than a full edge
+                                       # revisit: +13.5R, better DD, gained cohort +0.405R x29 and
+                                       # the trades it drops were losers. Combined with chase 1.5
+                                       # verified: NQ total 257.6 -> 283.8R, PF 1.36, same DD.
     instant_fill: bool = True          # fill the aligned breakout candle immediately (07.2). ES
                                        # keeps the F59c wait: instant flipped it +0.090 -> +0.057
                                        # avg R (rebuild A/B 2026-07-05) — the fragile-execution
@@ -88,6 +96,21 @@ def resolve_ctx_mode(a: "Asset") -> str:
     return "struct_vwap" if a.ctx_gate else "none"
 
 
+def layer3_kwargs(a: "Asset") -> dict:
+    """The per-asset Layer-3 knob set with ENTRY_STANDARD fallbacks — ONE resolver shared by the
+    canonical backtest (orb_candidates.run_backtest), the live scan (families.py) and the
+    rejected-setup label builder (ml/dataset.build_rejects), so the surfaces cannot drift. This
+    drift class already shipped a bug once ("abc" missing from the or_mid_bias exclusion, F75)."""
+    from bot.strategy.orb_state import ENTRY_STANDARD as ES   # lazy: avoid import cycles
+    return {"watch_live": ES.watch_gate,
+            "cooldown_bars": a.cooldown_bars if a.cooldown_bars is not None else ES.cooldown_bars,
+            "stale_bars": a.stale_bars if a.stale_bars is not None else ES.stale_bars,
+            "retest_atr": a.retest_atr if a.retest_atr is not None else ES.retest_atr,
+            "retest_mode": a.retest_mode if a.retest_mode is not None else ES.retest_mode,
+            "min_pullback_atr": ES.min_pullback_atr, "pullback_timeout": ES.pullback_timeout,
+            "vol_confirm_x": ES.vol_confirm_x}
+
+
 _FUT3 = (ASIA_FUT, LON_FUT, RTH_FUT)     # futures trade all 3 sessions
 
 # entry_delay = 0 (arm at OR close, delay-0) + chase_atr guard so an early break doesn't chase — it waits
@@ -99,9 +122,9 @@ ASSETS = {
     # NQ gauntlet 7/7 (07.2, 2026-07-05): cd0/stale12/retest0.25 — OOS +0.117 vs +0.109, PF 1.20,
     # maxDD -9.8 vs -11.1R (fewer trades: 174 vs 226 OOS — per-trade quality over volume). MNQ mirrors.
     "NQ":  Asset("NQ",  True,  20.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, clean_air=True, ctx_gate=True, ctx_mode="abc", block_range=False,
-                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25, chase_atr=1.5, retest_mode="impulse_mid"),
     "MNQ": Asset("MNQ", True,   2.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="abc", block_range=False,
-                 cooldown_bars=0, stale_bars=0, retest_atr=0.25),
+                 cooldown_bars=0, stale_bars=0, retest_atr=0.25, chase_atr=1.5, retest_mode="impulse_mid"),
     "ES":  Asset("ES",  True,  50.0, 0.50, 0, sessions=_FUT3, options_root=None, status="validated", max_entries=3, ctx_gate=True, ctx_mode="abc", instant_fill=False, chase_atr=0.0, block_range=False),
     # QQQ gauntlet 7/7 (07.2, 2026-07-05): cd5/stale12/retest0.25 — OOS +0.419 vs +0.374, PF 1.66,
     # maxDD -6.2 vs -9.1R (fewer trades: 61 vs 82 OOS — per-trade quality over volume).

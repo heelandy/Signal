@@ -40,7 +40,7 @@
   th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
   td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   tr:hover td{background:rgba(79,142,247,.05)}
-  .scroll{overflow-x:auto}
+  .scroll{overflow:auto;max-height:300px}   /* bounded scroll box — every panel grows into a scroll, page stays short */
   button{background:#182338;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 13px;
          cursor:pointer;font-weight:600;font-size:12px}
   button:hover{border-color:var(--s1);background:#1e2c48}
@@ -151,10 +151,21 @@
       </div>
       <div class="note" id="contstat">off</div>
       <div class="log" id="conthist" style="max-height:130px">—</div>
-      <div class="note">cycles dataset → ML → NN per symbol (QQQ, SPY, NQ, ES, ALL) with
-        <b>--no-promote</b>: gate-passing challengers land below as PENDING for your approval.</div></div>
+      <div class="note">cycles dataset → ML → NN per lineage (QQQ, SPY, NQ, ES, <b>QQQ@15m, SPY@15m</b>, ALL)
+        with <b>--no-promote</b>: gate-passing challengers land below as PENDING for your approval.
+        Fed by the live journal — learning runs <b>without paper approval</b>.</div></div>
+    <div class="card col4"><h2>Journal → Training Lab <span class="r mut" id="jfnote">the journal IS the dataset</span></h2>
+      <div id="journalfeed" class="scroll" style="max-height:210px;overflow:auto">—</div>
+      <div class="note">Every taken+resolved live signal (with its PIT snapshot) becomes a training row,
+        tf-matched (5m→5m · 15m→15m). Grows with live QQQ/SPY data; <b>only the journal is saved</b>
+        (bars are transient). No paper approval needed — this feeds continuous learning directly.</div></div>
+    <div class="card col4"><h2>Evolution — emergent drafts <span class="r mut">mined nightly, never auto-adopted</span></h2>
+      <div class="runrow" style="margin-bottom:6px"><button onclick="loadEvolve(true)">Mine now</button></div>
+      <div id="evolve" class="scroll" style="max-height:210px;overflow:auto">—</div>
+      <div class="note">Journal / exit-TP / reject mining drafts <code>emergent-*</code> candidates that
+        enter the normal gauntlet → ladder path. The engine proposes; the gauntlet judges.</div></div>
     <div class="card col4"><h2>Strategy approval ladder <span class="r" id="apprver"></span></h2>
-      <div id="approvals">loading…</div>
+      <div id="approvals" class="scroll">loading…</div>
       <div class="runrow" style="margin-top:10px">
         <button id="bigapprove" style="background:#123a2a;border-color:var(--good);font-weight:700"
                 onclick="approveAndPaper()">✓ APPROVE + paper + continuous learning</button>
@@ -164,7 +175,7 @@
         continuous training armed + the lineage joins the STRATEGY DUEL below; live stays
         hard-locked in config regardless.</div>
       <h2 style="margin-top:12px">Strategy duel <span class="r mut">approved lineages, head-to-head</span></h2>
-      <div id="duel">—</div></div>
+      <div id="duel" class="scroll">—</div></div>
     <div class="card col4"><h2>Pending models (gate-passed, awaiting approval)</h2>
       <div class="scroll" id="pending">—</div></div>
     <div class="card col12"><h2>Historical data QA <span class="r">run 0 · Data QA to refresh</span></h2>
@@ -206,7 +217,7 @@
       <div class="chartbox"><canvas id="aucChart"></canvas></div></div>
     <div class="card col6"><h2>Model zoo — OOS Brier <span class="r">must beat the base-rate line</span></h2>
       <div class="chartbox"><canvas id="brierChart"></canvas></div></div>
-    <div class="card col4"><h2>Promotion gates</h2><div id="gates">—</div></div>
+    <div class="card col4"><h2>Promotion gates</h2><div id="gates" class="scroll">—</div></div>
     <div class="card col4"><h2>Expected R by confidence bucket (OOS)</h2><div class="scroll" id="buckets">—</div></div>
     <div class="card col4"><h2>Calibration (predicted vs observed)</h2><div class="scroll" id="calib">—</div></div>
   </div>
@@ -352,7 +363,29 @@ async function loadApprovals(){
         ${ab.cost_stress_warning && ab.cost_stress_warning.length ? ` | <span class="no">⚠ negative at 2x slip: ${ab.cost_stress_warning.join(', ')}</span>` : ''}
         ${gRuns ? ` | gauntlet: ${gRuns}` : ''}</div>
     </details>
-    <table><tr><th>stage</th><th>status</th><th></th></tr>${rows}</table><div class="note">${evline}</div>`;
+    <table><tr><th>stage</th><th>status</th><th></th></tr>${rows}</table><div class="note">${evline}</div>
+    <div class="note" id="ph78">phase 7–8: loading…</div>`;
+  loadPhase78();
+}
+// AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06): the paper study evaluates itself hourly on the
+// server; this row just SHOWS the readiness — when everything is green the 'live' stage advances
+// automatically (audit-logged) and only the LIVE_APPROVED.lock stays in your hands.
+async function loadPhase78(){
+  try{
+    const p = await j('/api/phase78?advance=false');
+    const c = (p.paper_study||{}).criteria || {};
+    const p7ok = Object.values(p.phase7||{}).every(x=>x.ok===true);
+    const bits = [
+      `paper ${c.n_closed||0}/${c.n_needed} trades`,
+      `${c.window_days||0}/${c.days_needed}d`,
+      `scorecard ${c.scorecard_consistent===true?'✓':c.scorecard_consistent===false?'✗':'…'}`,
+      `hardening ${p7ok?'✓':'…'}`,
+      `exec-quality ${ (p.execution_quality||{}).ok===true?'✓':(p.execution_quality||{}).ok===false?'✗':'…' }`];
+    document.getElementById('ph78').innerHTML =
+      `<b>PHASE 7–8 auto-advance</b> ${p.phase8_ready?'<span class="badge b-pass">READY — live stage auto-advances</span>':'<span class="mut">watching (auto)</span>'} — ${bits.join(' · ')}`
+      + (p.auto_advanced?` <span class="ok">advanced ${fmtET(p.auto_advanced.at,true)}</span>`:'')
+      + ` <span class="mut">· ES excluded (cost-stress) · lock file stays manual</span>`;
+  }catch(e){ document.getElementById('ph78').textContent = 'phase 7–8: ' + e; }
 }
 async function appr(action, stage){
   let url = `/api/approval/${action}?stage=${stage}&version=${encodeURIComponent(_apprVer)}`;
@@ -784,9 +817,58 @@ async function loadAudit(){
   }catch(e){}
 }
 
+/* ---- Journal → Training Lab feed (the journal IS the dataset) ---- */
+async function loadJournalFeed(){
+  try{
+    const d = await j('/api/training/journal_feed');
+    const bytf = d.by_symbol_tf || {}, bystrat = d.by_strategy || {}, recent = d.recent || [];
+    const tfk = Object.keys(bytf).sort(), sk = Object.keys(bystrat).sort();
+    let html = '';
+    if(!tfk.length){ html = '<div class="mut">no live journal rows yet — they accrue as the scan runs (approval-free)</div>'; }
+    else{
+      html += '<div class="mut" style="font-size:10px;margin:2px 0">by lineage (tf)</div>'+
+        '<table><tr><th>lineage</th><th class="num">rows</th><th class="num">train</th><th class="num">taken</th><th class="num">WR%</th></tr>'+
+        tfk.map(k=>{const v=bytf[k];return `<tr><td>${k}</td><td class="num">${v.rows}</td><td class="num">${v.trainable_with_features}</td>`+
+          `<td class="num">${v.taken}</td><td class="num">${v.win_rate!=null?(v.win_rate*100).toFixed(0):'—'}</td></tr>`;}).join('')+'</table>';
+      html += '<div class="mut" style="font-size:10px;margin:6px 0 2px">by STRATEGY</div>'+
+        '<table><tr><th>strategy</th><th class="num">rows</th><th class="num">taken</th><th class="num">WR%</th><th class="num">avgR</th></tr>'+
+        sk.map(s=>{const v=bystrat[s];return `<tr><td>${s}</td><td class="num">${v.rows}</td><td class="num">${v.taken}</td>`+
+          `<td class="num">${v.win_rate!=null?(v.win_rate*100).toFixed(0):'—'}</td><td class="num">${v.avg_r!=null?v.avg_r:'—'}</td></tr>`;}).join('')+'</table>';
+      html += '<div class="mut" style="font-size:10px;margin:6px 0 2px">recent trades — which strategy</div>'+
+        '<table><tr><th>when</th><th>strategy</th><th>sym</th><th>tf</th><th>side</th><th>out</th><th class="num">R</th></tr>'+
+        recent.map(t=>`<tr><td class="mut" style="font-size:9px">${t.ts}</td><td>${t.strategy}</td><td>${t.symbol}</td>`+
+          `<td class="mut">${t.tf}</td><td class="${t.side==='long'?'ok':'no'}">${t.side}</td><td class="mut">${t.outcome||'—'}</td>`+
+          `<td class="num ${t.net_r>0?'ok':t.net_r<0?'no':'mut'}">${t.net_r!=null?t.net_r:'—'}</td></tr>`).join('')+'</table>';
+    }
+    const it = d.integrity;
+    if(it) html = (it.ok
+      ? '<div class="ok" style="font-size:10px">✓ integrity: no dupes · no bad levels · every row has its bar</div>'
+      : `<div class="no" style="font-size:10px">⚠ INTEGRITY: ${it.dupes} dupes · ${it.bad_levels} bad levels · ${it.missing_bar_identity} without bar identity — see /api/journal/integrity</div>`) + html;
+    document.getElementById('journalfeed').innerHTML = html;
+    document.getElementById('jfnote').textContent =
+      `${d.total_rows} rows · learning ${d.approval_required?'':'needs NO'} approval`;
+  }catch(e){ document.getElementById('journalfeed').innerHTML = '<span class="dn">'+e+'</span>'; }
+}
+/* ---- Evolution engine — emergent drafts ---- */
+async function loadEvolve(mine){
+  try{
+    if(mine) document.getElementById('evolve').innerHTML='<span class="mut">mining…</span>';
+    const d = await j('/api/evolve'+(mine?'?deep=1':''));
+    const drafts = d.drafts || [];
+    const notes = [].concat(d.slices||[], d.rejects||[]).filter(x=>x&&x.note).map(x=>x.note);
+    let html = drafts.length ? drafts.map(x=>
+      `<div style="margin-bottom:6px"><b>${x.id}</b> <span class="mut">${x.kind}</span>`+
+      `<div class="mut" style="font-size:10px">${(x.spec||'').slice(0,140)}</div></div>`).join('') : '';
+    if(!drafts.length) html = `<div class="mut">${notes[0]||'no drafts yet'} · total drafts ${d.drafts_total||0}</div>`;
+    if(d.mining) html = '<div class="mut">⛏ deep mining running in a subprocess — refresh in a minute…</div>'+html;
+    document.getElementById('evolve').innerHTML = html;
+  }catch(e){ document.getElementById('evolve').innerHTML = '<span class="dn">'+e+'</span>'; }
+}
+window.loadEvolve = loadEvolve;
 async function loadAll(){ loadDataset(); loadLatest(); loadAB(); loadRegistry();
                           loadApprovals(); loadPending(); loadDataQA(); loadSweep(); loadPaperStat();
-                          loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); loadDuel(); }
+                          loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); loadDuel();
+                          loadJournalFeed(); loadEvolve(false); }
 document.getElementById('sym').addEventListener('change', loadDataset);
 loadAll(); poll();
 </script>

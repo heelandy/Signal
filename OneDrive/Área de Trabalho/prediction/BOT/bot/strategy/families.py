@@ -164,7 +164,7 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
     stays on the 5m swings. Without it, behavior is unchanged (chart-TF structure)."""
     import hs_backtest as B
     from bot.contracts import TradeCandidate
-    from bot.strategy.asset_config import asset_config
+    from bot.strategy.asset_config import asset_config, layer3_kwargs
     from bot.strategy.orb_state import ENTRY_STANDARD as ES, slope_engine, slope_grade
     a = asset_config(symbol)                       # per-asset: entry_delay, OR window, status
     d = prepare(bars, symbol)                       # futures lb=3 / equity lb=5 structure speed
@@ -236,6 +236,11 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
             # ENTRY STANDARD Layer 3 (canonical docs 2026-07-04) on the close-confirm families:
             # live WATCH at the OR mid + cooldown after a watch cancel + stale/RANGE rule + the
             # PULLBACK retest (don't chase an extended break). Mirrors the Pine + orb_state FSM.
+            # Knobs come from asset_config.layer3_kwargs — the ONE resolver shared with the
+            # canonical backtest + label builder (anti-drift, F75 lesson); watch_live applies
+            # only to close-confirm families (stop/retest execms have no watch machine).
+            _l3 = layer3_kwargs(a)
+            _l3["watch_live"] = cl and _l3["watch_live"]
             lsig, ssig, or_lo, or_hi, *_ = B._orb_signals(d, or_s, or_e, 0.0, cut, fam.execm, tradeday, reentry,
                                             ob_l=obl, ob_s=obs, entry_delay=a.entry_delay, chase_atr=a.chase_atr,
                                             strong_body=(SB if cl else 0.0), ft_confirm=(cl and a.ft_confirm), dir_seq=cl,
@@ -251,14 +256,7 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
                                                          mode not in ("mid", "mid_vwap", "mid_only", "abc")),
                                             min_or_width=vx,
                                             instant_aligned=(fam.key == "breakout" and a.instant_fill),
-                                            watch_live=(cl and ES.watch_gate),
-                                            cooldown_bars=a.cooldown_bars if a.cooldown_bars is not None else ES.cooldown_bars,
-                                            stale_bars=a.stale_bars if a.stale_bars is not None else ES.stale_bars,
-                                            retest_atr=a.retest_atr if a.retest_atr is not None else ES.retest_atr,
-                                            retest_mode=ES.retest_mode,
-                                            min_pullback_atr=ES.min_pullback_atr,
-                                            pullback_timeout=ES.pullback_timeout,
-                                            vol_confirm_x=ES.vol_confirm_x)
+                                            **_l3)
             # F76 MACRO/REGIME GATES ON LIVE SIGNALS (2026-07-06): the canonical backtest ANDs
             # _orb_signals with macro_allow & macro_long/short_ok & the per-asset chop block —
             # the live scan never did (7th live≠backtest divergence: the SPY stand-down existed

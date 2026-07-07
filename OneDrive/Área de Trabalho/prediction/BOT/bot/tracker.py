@@ -47,13 +47,58 @@ def _con():
     return c
 
 
+def _levels_ok(sig: dict) -> str | None:
+    """JOURNAL INTEGRITY GUARD (user 2026-07-07: 'make sure data are not corrupt with same-bar
+    entry/tp/stop — we've dealt with that since the start'). A row whose geometry is impossible
+    never enters the journal: entry/stop must differ and sit on the correct sides; TPs must be
+    beyond the entry in the trade direction. Returns the reason when bad, None when clean."""
+    try:
+        e, s = float(sig["entry"]), float(sig["stop"])
+        sgn = 1 if str(sig.get("side")) == "long" else -1
+        if not (e > 0 and s > 0) or e == s:
+            return "entry/stop equal or non-positive"
+        if sgn * (e - s) <= 0:
+            return "stop on the wrong side of entry"
+        for k in ("tp1", "tp2"):
+            v = sig.get(k)
+            if v is not None and sgn * (float(v) - e) <= 0:
+                return f"{k} on the wrong side of entry"
+    except Exception:
+        return "levels missing/non-numeric"
+    return None
+
+
 def record_decision(sig: dict, taken: bool, auto: bool = False) -> dict:
     """Persist a take/skip. auto=True = SHADOW auto-track of an acceptable signal: dedup by candidate_id
     (so the 60s scan records each signal ONCE) and never clobber a manual decision on the same candidate."""
+    bad = _levels_ok(sig)
+    if bad:                                        # corrupt geometry never enters the journal
+        try:
+            from bot.audit import log as _audit
+            _audit("journal_reject", reason=bad, symbol=sig.get("symbol"),
+                   family=sig.get("family"), auto=auto)
+        except Exception:
+            pass
+        return {"error": f"journal integrity: {bad}", "symbol": sig.get("symbol")}
+    if auto and not (sig.get("generated_at") or sig.get("signal_at")):
+        # BAR IDENTITY IS MANDATORY for auto rows — the degenerate-key/never-resolving bug class
+        # (2026-07-07) can never regress: no bar time, no journal row.
+        return {"error": "journal integrity: auto row without bar identity (generated_at)",
+                "symbol": sig.get("symbol")}
     cid = sig.get("candidate_id") or sig.get("id")
     con = _con()
-    if auto and cid and con.execute("SELECT 1 FROM decisions WHERE candidate_id=? LIMIT 1", (cid,)).fetchone():
-        con.close(); return {"dup": True, "symbol": sig.get("symbol")}
+    if cid:
+        row = con.execute("SELECT id FROM decisions WHERE candidate_id=? LIMIT 1", (cid,)).fetchone()
+        if row:
+            if auto:                                   # auto never clobbers — one row per candidate
+                con.close(); return {"dup": True, "symbol": sig.get("symbol")}
+            # MANUAL on an existing candidate = ONE-TIME TRIGGER (user 2026-07-07: a second Take/
+            # Skip click must not duplicate the trade in the journal) — UPDATE the same row (the
+            # latest click wins take-vs-skip); outcome/results stay, they belong to the candidate.
+            con.execute("UPDATE decisions SET taken=?, decided_at=?, json=? WHERE id=?",
+                        [1 if taken else 0, utcnow_iso(), json.dumps(sig), row[0]])
+            con.commit(); con.close()
+            return {"id": row[0], "taken": taken, "symbol": sig.get("symbol"), "updated": True}
     rid = str(uuid.uuid4())
     con.execute(
         "INSERT OR REPLACE INTO decisions(id,candidate_id,symbol,side,family,session,entry,stop,tp1,tp2,"
@@ -137,14 +182,24 @@ def track_outcomes(provider=None) -> list[dict]:
 def list_decisions(limit: int = 100) -> list[dict]:
     con = _con()
     cols = ["id", "symbol", "side", "family", "session", "entry", "stop", "tp1", "tp2", "taken",
-            "decided_at", "outcome", "result_r"]
+            "decided_at", "outcome", "result_r", "signal_at", "json"]
     rows = con.execute(f"SELECT {','.join(cols)} FROM decisions ORDER BY decided_at DESC LIMIT ?", (limit,)).fetchall()
     con.close()
-    return [dict(zip(cols, r)) | {"taken": bool(r[cols.index("taken")])} for r in rows]
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        d["taken"] = bool(d["taken"])
+        try:                                       # capture timeframe rides in the signal json
+            d["tf"] = (json.loads(d.pop("json") or "{}") or {}).get("tf") or "5m"
+        except Exception:
+            d.pop("json", None); d["tf"] = "5m"
+        out.append(d)
+    return out
 
 
 def summary() -> dict:
-    d = [x for x in list_decisions(1000) if x["taken"] and x["result_r"] is not None and x["outcome"] != "open"]
+    d = [x for x in list_decisions(1000) if x["taken"] and x["result_r"] is not None
+         and x["outcome"] != "open" and is_core_family(x.get("family"))]
     if not d:
         return {"taken_closed": 0}
     rs = [x["result_r"] for x in d]
@@ -169,6 +224,48 @@ def perf_summary() -> dict:
             "max_dd_pct": round(dd, 1)}
 
 
+def integrity() -> dict:
+    """JOURNAL INTEGRITY AUDIT (continuous — hourly tick + /api/journal/integrity + the training
+    lab's journal panel). Hunts the corruption classes we've fought since the start:
+      dupes         — >1 row for the same (family, symbol, side, tf, signal bar) — the same-bar
+                      double-entry class. Cross-LINEAGE same-bar rows (breakout@5m vs @15m vs
+                      worker-*) are BY DESIGN and reported separately as info, not corruption.
+      bad_levels    — rows whose entry/stop/TP geometry is impossible (also blocked at write).
+      no_bar_id     — rows without signal_at (can never resolve; the starvation class).
+    """
+    con = _con()
+    rows = con.execute("SELECT id, symbol, side, family, signal_at, entry, stop, tp1, tp2, json "
+                       "FROM decisions").fetchall()
+    con.close()
+    seen: dict = {}
+    dupes, bad, no_id, cross = [], [], [], {}
+    for rid, sym, side, fam, sig_at, e, s, t1, t2, raw in rows:
+        try:
+            tf = (json.loads(raw or "{}") or {}).get("tf") or "5m"
+        except Exception:
+            tf = "5m"
+        if not sig_at:
+            no_id.append(rid[:6])
+        r = _levels_ok({"symbol": sym, "side": side, "entry": e, "stop": s, "tp1": t1, "tp2": t2})
+        if r:
+            bad.append({"id": rid[:6], "symbol": sym, "family": fam, "reason": r})
+        key = (fam, sym, side, tf, sig_at or "")
+        if key in seen:
+            dupes.append({"id": rid[:6], "dup_of": seen[key][:6], "symbol": sym,
+                          "family": fam, "tf": tf, "signal_at": sig_at})
+        else:
+            seen[key] = rid
+        if sig_at:                                 # same bar across lineages = intentional, info only
+            cross.setdefault((sym, side, sig_at), set()).add(f"{fam}@{tf}")
+    multi = {f"{k[0]} {k[1]} {k[2][:16]}": sorted(v) for k, v in cross.items() if len(v) > 1}
+    ok = not dupes and not bad and not no_id
+    return {"ok": ok, "rows": len(rows), "dupes": dupes, "bad_levels": bad,
+            "missing_bar_identity": no_id,
+            "same_bar_lineages_info": multi,
+            "note": "same-bar rows across DIFFERENT lineages (5m/15m/worker) are separate "
+                    "studies by design — only same-lineage duplicates are corruption"}
+
+
 def study() -> dict:
     """FIRST-TOUCH STUDY — what hit first (stop vs TP) + how far price ran (MFE/MAE), the signal for tuning
     stops & targets to make the system more accurate. Aggregates closed tracked signals."""
@@ -176,7 +273,11 @@ def study() -> dict:
     from collections import Counter
     con = _con()
     rows = con.execute("SELECT outcome, result_r, mfe_r, mae_r FROM decisions "
-                       "WHERE taken=1 AND outcome NOT IN ('open') AND result_r IS NOT NULL").fetchall()
+                       "WHERE taken=1 AND outcome NOT IN ('open') AND result_r IS NOT NULL "
+                       # CORE ONLY (user catch 2026-07-07: study said 14 closed vs scorecard 10):
+                       # worker rows carry 0.3-0.4R targets — mixing them corrupts a study that
+                       # tunes the CORE 4R geometry. Same population as the scorecard now.
+                       f"AND {CORE_ONLY_SQL}").fetchall()
     con.close()
     if not rows:
         return {"n": 0, "hints": []}
@@ -212,6 +313,17 @@ def study() -> dict:
 BACKTEST_REF = {"exp_R": 0.24, "win_pct": 42.0,
                 "note": "F64 full position -> 4R cap, no scale / no BE (QQQ +0.26R, NQ/SPY similar)"}
 MIN_SAMPLE = 12
+# CORE-ONLY filter (user 2026-07-07: worker entries live in the journal lab but must NOT corrupt
+# the paper-trade analytics): worker/emergent shadow lineages trade a DIFFERENT geometry, so the
+# live-vs-backtest scorecard, summary and phase-7/8 paper study judge CORE families only. Workers
+# are judged by the Boss on their own family-filtered windows.
+CORE_ONLY_SQL = ("(family IS NULL OR (family NOT LIKE 'worker-%' "
+                 "AND family NOT LIKE 'emergent-%'))")
+
+
+def is_core_family(fam) -> bool:
+    f = str(fam or "")
+    return not (f.startswith("worker-") or f.startswith("emergent-"))
 
 
 def _stats(rs: list[float]) -> dict:
@@ -231,7 +343,8 @@ def scorecard() -> dict:
     Grade comes from the persisted signal JSON (grade A = production-faithful, what should match)."""
     con = _con()
     rows = con.execute("SELECT result_r, outcome, json FROM decisions "
-                       "WHERE taken=1 AND outcome NOT IN ('open') AND result_r IS NOT NULL").fetchall()
+                       "WHERE taken=1 AND outcome NOT IN ('open') AND result_r IS NOT NULL "
+                       f"AND {CORE_ONLY_SQL}").fetchall()
     con.close()
     closed = []
     for r, _o, j in rows:

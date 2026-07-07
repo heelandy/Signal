@@ -41,6 +41,7 @@ def build_live_labels(save: bool = True) -> pd.DataFrame:
         r = float(result_r) if result_r is not None else np.nan
         rec = {"ts": sig_at or dec_at, "symbol": sym, "side": side, "family": fam,
                "session": sess, "taken": int(taken or 0), "outcome": outcome,
+               "tf": sig.get("tf") or sig.get("timeframe") or "5m",   # capture timeframe (journal->training-lab tf match)
                **{k: pit.get(k, np.nan) for k in FEATURE_COLUMNS},
                "net_r": r, "mfe_r": mfe_r, "mae_r": mae_r,
                "y_win": int(r > 0) if r == r else None,

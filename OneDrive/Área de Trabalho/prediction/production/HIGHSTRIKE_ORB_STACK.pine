@@ -47,7 +47,7 @@ int max_entries = auto_maxe ? (syminfo.type == "futures" ? 3 : 1) : (max_entries
 entry_delay  = input.int(0, "Arm delay: skip entries N min after OR close", group="ORB", minval=0,
             tooltip="ADOPTED 0 (2026-07, per user + arm-timing test): ARM at the OR CLOSE (delay 0) so you catch the move near the level instead of waiting an hour — paired with the chase-cap below (enter within 1 ATR of the level, else wait for the RETEST). Arm-timing: delay-0 ≈ delay-60 per-trade on NQ (+0.170 vs +0.173), slightly under 60 on QQQ/SPY, but gives EARLIER entries + more trades (the F38/F39 skip-first-hour trades a small per-trade edge for the wait). Set 60 to restore F38/F39 (no entries until ~11:00 RTH / ~21:00 Asia / ~04:30 London ET). F76 re-confirm (2026-07-06): the first-hour cohort is POSITIVE on every symbol (QQQ +0.35, SPY +0.30, NQ +0.20, ES +0.05) — delay-0 stands.")
 chase_max_in = input.float(0.0, "Max chase past level (xATR, 0=off)", group="ORB", step=0.25, minval=0.0,
-            tooltip="DEFAULT 0 = OFF (F75 blocker-edge, 2026-07-06): the 'chased' late confirmed entries ARE the winners — the cap was blocking +0.59R/trade on QQQ (n127 cohort), +0.70R on SPY (n132) and cost ES 62% of its expectancy; rule orb-standard-2026.07.5 trades them. NQ/MNQ EXCEPTION: set 1.0 on those charts — there the cap is a RISK knob, not an edge knob (avg −14% for maxDD −39%, −42.6R→−25.8R). Any value >0 re-enables the old no-chase/PULLBACK-retest behavior.")
+            tooltip="DEFAULT 0 = OFF (F75 blocker-edge, 2026-07-06): the 'chased' late confirmed entries ARE the winners — the cap was blocking +0.59R/trade on QQQ (n127 cohort), +0.70R on SPY (n132) and cost ES 62% of its expectancy; rule orb-standard-2026.07.5 trades them. NQ/MNQ EXCEPTION: 1.5 on those charts (AUTO sets it) — there the cap is a RISK knob, not an edge knob, and F78 (2026-07-06) widened it 1.0->1.5: +20.7R at the SAME maxDD (the extra latitude admits +0.445R x42 winners and drops losers). Any value >0 enables the no-chase/PULLBACK-retest behavior.")
 brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
             options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
             tooltip="What counts as a FILL. 'Candle close beyond level' (DEFAULT, per user) = the bar must CLOSE above the OR high (long) / below the OR low (short) — a full-body break, no wick-only fills; the fill is booked at that CLOSE (honest, never better than the close). 'Wick / touch' = a resting stop fills intrabar the instant price tags OR high+buffer (the F58-validated stop entry — earlier, but a wick that closes back inside still counts). The close-confirm entry is being honest-tested separately (F59).")
@@ -70,13 +70,13 @@ watch_gate   = input.bool(true, "Layer 3: close beyond OR mid activates WATCH", 
 cooldown_n_in = input.int(3, "Cooldown bars after a watch cancel", group="Entry standard", minval=0,
             tooltip="COOLDOWN RULE: after a watch is cancelled at the OR mid, no immediate re-watch/re-entry for this many confirmed bars — kills the chop-around-the-mid churn. A NEW clean close beyond the mid is then required.")
 stale_n_in   = input.int(0, "Stale: max bars in WATCH without a fill (0 = off)", group="Entry standard", minval=0,
-            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: set 24 on ES charts (its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
+            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: 24 on ES (the AUTO per-asset toggle sets it — its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
 retest_atr_in = input.float(0.5, "Pullback: retest within xATR of the target", group="Entry standard", step=0.25, minval=0.0,
-            tooltip="PULLBACK MODE: once price runs more than the chase cap (Max-chase above) past the OR level WITHOUT a clean fill, do NOT chase — the side shows PULLBACK and fills stay blocked until price returns within this many ATR of the retest target. Then the normal fill rules re-check. 0 = plain no-chase guard only. GAUNTLET-ADOPTED per asset (2026-07-05): SPY uses 0.25 + cooldown 0 + stale 12 (7/7 checks, OOS +0.75 vs +0.57 avg R) — set those manually on a SPY chart.")
+            tooltip="PULLBACK MODE: once price runs more than the chase cap (Max-chase above) past the OR level WITHOUT a clean fill, do NOT chase — the side shows PULLBACK and fills stay blocked until price returns within this many ATR of the retest target. Then the normal fill rules re-check. 0 = plain no-chase guard only. GAUNTLET-ADOPTED per asset: ES 0.5 / others 0.25 (the AUTO per-asset toggle sets these — no manual per-chart setting needed).")
 // ── PULLBACK REFINEMENTS (deep-research doc, adopted 2026-07-05 — rule version orb-standard-2026.07.1) ──
-retest_target = input.string("OR edge", "Pullback: retest target", group="Entry standard",
+retest_target_in = input.string("OR edge", "Pullback: retest target", group="Entry standard",
             options=["OR edge", "Impulse midpoint", "VWAP"],
-            tooltip="WHERE the pullback must return to before fills unblock. 'OR edge' = the broken OR high/low (default, role-reversal retest). 'Impulse midpoint' = 50% of the extension impulse (edge -> extension extreme) — catches profit-taking without a full boundary revisit. 'VWAP' = the session-VWAP retest (institutional fair-price defense).")
+            tooltip="WHERE the pullback must return to before fills unblock. 'OR edge' = the broken OR high/low (default, role-reversal retest). 'Impulse midpoint' = 50% of the extension impulse (edge -> extension extreme) — catches profit-taking without a full boundary revisit; F78 (pullback deep-research 2026-07-06): ADOPTED on NQ/MNQ — releases earlier than a full edge revisit, +13.5R with better DD and the trades it drops were losers (AUTO sets it there). 'VWAP' = the session-VWAP retest — tested F78: LOSES on NQ (blocked cohort +0.305R x26), stays unadopted.")
 min_pb_atr   = input.float(0.05, "Pullback: min retrace from extension (xATR, 0=off)", group="Entry standard", step=0.05, minval=0.0,
             tooltip="ANTI-SPIKE (deep-research): the retrace from the extension extreme must be AT LEAST this deep before a retest counts — never buy/sell an unrelieved vertical. Doc default 0.05-0.10 ATR.")
 pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=forever)", group="Entry standard", minval=0,
@@ -84,7 +84,7 @@ pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=foreve
 vol_confirm  = input.float(0.0, "Fill: min volume x 20-bar avg (0=off)", group="Entry standard", step=0.1, minval=0.0,
             tooltip="RELATIVE-VOLUME CONFIRMATION (deep-research): the fill trigger bar must print at least this multiple of 20-bar average volume (doc: 1.2-2.0x). DEFAULT OFF until gauntleted.")
 instant_fill_in = input.bool(true, "Fill instantly when the arm gate is aligned (no next-candle wait)", group="Entry standard",
-            tooltip="USER RULE (2026-07-05, 07.3): when the side is ARMED — futures/crypto: price beyond the OBLIGATORY OR-mid (VWAP no longer delays anything, it only grades); equities: the Struct+VWAP arm — the strong full-body breakout candle FILLS IMMEDIATELY; the F59c next-candle continuation wait applies only to UNALIGNED setups. PER-ASSET A/B: ON lifts NQ (+0.163->+0.189 avg R) and is ~neutral QQQ/SPY, but HURTS ES (+0.090->+0.057) and — under the 07.5 live-identical base (F77) — SPY: ALWAYS-WAIT lifts SPY OOS 0.386->0.620. Turn this OFF on ES AND SPY charts.")
+            tooltip="USER RULE (2026-07-05, 07.3): when the side is ARMED — futures/crypto: price beyond the OBLIGATORY OR-mid (VWAP no longer delays anything, it only grades); equities: the Struct+VWAP arm — the strong full-body breakout candle FILLS IMMEDIATELY; the F59c next-candle continuation wait applies only to UNALIGNED setups. PER-ASSET A/B: ON lifts NQ (+0.163->+0.189 avg R) and is ~neutral QQQ/SPY, but HURTS ES (+0.090->+0.057) and — under the 07.5 live-identical base (F77) — SPY: ALWAYS-WAIT lifts SPY OOS 0.386->0.620. OFF on ES and SPY (the AUTO per-asset toggle sets it).")
 // ───────────────────────── STRUCTURE GATE ─────────────────────────
 trend_mode = input.string("Off — plain ORB (F58 default)", "Trend gate", group="Structure gate",
              options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
@@ -170,30 +170,32 @@ eval_cap   = input.int(5, "EVAL: max signals / day (0 = off)", group="Prop Eval"
 eval_lock  = input.int(2, "EVAL: lock day after N losing signals (0 = off)", group="Prop Eval", minval=0,
              tooltip="F31e day throttle: stop signalling for the rest of the trade-day after N signal-sim losers (and/or the signal cap). Historically FREE (identical pass/blow-up rates) — discipline insurance, active only with EVAL on.")
 
-// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F77, 2026-07-06) ─────────────────────────
+// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F78, 2026-07-06) ─────────────────────────
 // ONE toggle applies every cohort-adopted per-asset setting by instrument — no manual per-chart
 // setup (user 2026-07-06: "make them automatic on the script"). OFF = the manual inputs above.
-//   chase-cap : NQ/MNQ 1.0 (DD-halver) · everything else 0 (the chased entries are the winners)
+//   chase-cap : NQ/MNQ 1.5 (F78: 1.0->1.5 gains +20.7R, same maxDD) · everything else 0 (the chased entries are the winners)
 //   stale     : ES 24 (its blocked cohort is negative; DD -47->-71 without) · others 0
 //   cooldown  : ES 3 · others 0
 //   next-bar wait (wait_ft): OFF on QQQ (wait-created trades lose -0.54R) · ON elsewhere
 //   instant fill: OFF on ES + SPY (SPY always-wait OOS 0.386->0.620) · ON on NQ/MNQ/QQQ
 //   RANGE-regime block: equities ON · futures OFF (chop cohort positive: NQ +0.19 ES +0.18)
 //   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
-auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F77 — chase/stale/cooldown/fill-timing/range-block)", group="Entry standard",
-            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.0, others 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.6). OFF = use the manual inputs.")
+//   retest target: NQ/MNQ Impulse midpoint (F78: +13.5R, better DD) · others OR edge
+auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
 string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
 bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
 bool _aES  = _aroot == "ES" or _aroot == "MES"
 bool _aQQQ = _aroot == "QQQ"
 bool _aSPY = _aroot == "SPY"
-float chase_max   = auto_asset ? (_aNQ ? 1.0 : 0.0) : chase_max_in
+float chase_max   = auto_asset ? (_aNQ ? 1.5 : 0.0) : chase_max_in
 int   stale_n     = auto_asset ? (_aES ? 24 : 0) : stale_n_in
 int   cooldown_n  = auto_asset ? (_aES ? 3 : 0) : cooldown_n_in
 bool  wait_ft     = auto_asset ? not _aQQQ : wait_ft_in
 bool  instant_fill = auto_asset ? not (_aES or _aSPY) : instant_fill_in
 bool  block_range = auto_asset ? syminfo.type != "futures" : block_range_in
 float retest_atr  = auto_asset ? (_aES ? 0.5 : 0.25) : retest_atr_in
+string retest_target = auto_asset ? (_aNQ ? "Impulse midpoint" : "OR edge") : retest_target_in
 
 // ───────────────────────── CORE ─────────────────────────
 atr14 = ta.atr(14)
@@ -1048,3 +1050,69 @@ if barstate.islast and show_dash
     table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,13, "A: " + dirAtxt + " MID" + f_ar(dir_mid) + (use_dirB ? "" : use_abc ? " ∨B∨C ← ARMS (any engine)" : " ← ARMS (obligatory)") + " · VWAP" + f_ar(dir_vw) + (dir_vw != 0 and dir_vw == dir_mid ? " grade B+" : " grade C"), text_color=dirA >= 1 ? color.lime : dirA <= -1 ? color.red : color.gray, text_size=size.tiny)
     table.cell(dash,2,13, "B: " + dirV + " (" + str.tostring(dir_fast) + ") · OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " S=" + str.tostring(slope_dir, "#.##") + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m)" : "") + (use_dirB ? " ← ARMS" : use_abc ? " (B/C arm too)" : " (grade)") + " · C" + (dirC_up ? "▲" : dirC_dn ? "▼" : "—") + (dirC_up or dirC_dn ? " STRONG" : "") + (dir_or != 0 and dir_or == dir_slp and dir_or == dir_st ? " ALIGNED" : ""), text_color=(dir_or != 0 and dir_or == dir_slp and dir_or == dir_st) ? color.lime : color.aqua, text_size=size.tiny)
+
+// ───────────────────────── OPTIONS — SELECTED CONTRACT (BS estimate, the /api/contract twin) ─────────────────────────
+// The dashboard's Selected-Contract panel ON CHART (user 2026-07-07: "implement it on the stack").
+// Same machinery as the BOT endpoint: ATM strike, Black-Scholes premium at an ESTIMATED IV
+// (realized vol of chart-TF log returns annualized, clamped 0.10-0.80 — live.py's iv_est twin),
+// repriced at TP1/TP2/stop for the value-if-hit rows, ~4% synthetic spread, delta/theta-day,
+// implied move = IV*sqrt(T). 0DTE T = LIVE minutes to the 16:00 ET close (the BOT panel uses a
+// fixed half-session, so intraday numbers differ slightly). ESTIMATE ONLY — no live chain.
+show_opts = input.bool(true, "OPTIONS panel — Selected Contract (BS estimate)", group="Options",
+     tooltip="Equities only. Prices the ACTIVE side's 0DTE ATM contract: est. premium (bid/mid/ask), value if the underlying hits TP1/TP2/stop, delta + theta/day, IV estimate + implied move. Black-Scholes estimate with NO live chain — paper fills must verify pricing before sizing (same caveat as the BOT's Selected Contract panel).")
+
+f_cnd(float x) =>
+    k = 1.0 / (1.0 + 0.2316419 * math.abs(x))
+    p = k * (0.319381530 + k * (-0.356563782 + k * (1.781477937 + k * (-1.821255978 + k * 1.330274429))))
+    w = 1.0 - math.exp(-x * x / 2.0) / math.sqrt(2.0 * math.pi) * p
+    x < 0 ? 1.0 - w : w
+
+f_bs(float S, float K, float T, float r, float v, bool isCall) =>
+    d1 = (math.log(S / K) + (r + v * v / 2.0) * T) / (v * math.sqrt(T))
+    d2 = d1 - v * math.sqrt(T)
+    isCall ? S * f_cnd(d1) - K * math.exp(-r * T) * f_cnd(d2) : K * math.exp(-r * T) * f_cnd(-d2) - S * f_cnd(-d1)
+
+// IV estimate — computed every bar at global scope (Pine consistency); live.py iv_est twin
+float opt_lr  = math.log(close / nz(close[1], close))
+float opt_ivr = ta.stdev(opt_lr, 78) * math.sqrt(252.0 * 390.0 / math.max(timeframe.in_seconds() / 60.0, 1.0))
+float opt_iv  = math.min(0.80, math.max(0.10, nz(opt_ivr, 0.20)))
+
+f_ov(float v, float m) =>          // value-if-hit cell: "$3.67 (+119%)" — global scope (Pine rule)
+    na(v) or m <= 0 ? "—" : "$" + str.tostring(v, "#.##") + " (" + (v >= m ? "+" : "") + str.tostring(100.0 * (v - m) / m, "#") + "%)"
+
+var table optT = table.new(position.bottom_right, 2, 8, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_opts and syminfo.type != "futures"
+    // ACTIVE side: an open position wins; else the pending side whose entry level is nearer
+    bool  useL = in_long or (not in_short and (na(Se) or (not na(Le) and math.abs(close - Le) <= math.abs(close - Se))))
+    float oT1  = useL ? Lt1 : St1
+    float oT2  = useL ? Lt2 : St2
+    float oStp = useL ? (in_long ? lstop : Ls) : (in_short ? sstop : Ss)
+    bool  isC  = useL
+    float oS   = close
+    float K    = math.round(oS)
+    float mins = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+    float T    = math.max(30.0, math.min(390.0, 960.0 - mins)) / 390.0 / 252.0
+    float mid  = f_bs(oS, K, T, 0.045, opt_iv, isC)
+    float spr  = math.max(0.02, mid * 0.04)
+    float d1o  = (math.log(oS / K) + (0.045 + opt_iv * opt_iv / 2.0) * T) / (opt_iv * math.sqrt(T))
+    float dlt  = isC ? f_cnd(d1o) : f_cnd(d1o) - 1.0
+    float thd  = -(oS * math.exp(-d1o * d1o / 2.0) / math.sqrt(2.0 * math.pi) * opt_iv) / (2.0 * math.sqrt(T)) / 365.0
+    float vT1  = na(oT1) or mid <= 0 ? na : f_bs(oT1, K, T, 0.045, opt_iv, isC)
+    float vT2  = na(oT2) or mid <= 0 ? na : f_bs(oT2, K, T, 0.045, opt_iv, isC)
+    float vStp = na(oStp) or mid <= 0 ? na : f_bs(oStp, K, T, 0.045, opt_iv, isC)
+    table.cell(optT, 0, 0, "OPTIONS 0DTE (BS est.)", text_color=color.yellow, text_size=size.tiny)
+    table.cell(optT, 1, 0, str.tostring(K, "#") + (isC ? "C" : "P") + (in_long or in_short ? " · IN TRADE" : " · " + (isC ? "long" : "short") + " side"), text_color=isC ? color.lime : color.red, text_size=size.tiny)
+    table.cell(optT, 0, 1, "mid (bid/ask)", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 1, "$" + str.tostring(mid, "#.##") + " (" + str.tostring(mid - spr / 2, "#.##") + "/" + str.tostring(mid + spr / 2, "#.##") + ")", text_color=color.white, text_size=size.tiny)
+    table.cell(optT, 0, 2, "at TP1", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 2, f_ov(vT1, mid), text_color=color.green, text_size=size.tiny)
+    table.cell(optT, 0, 3, "at TP2", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 3, f_ov(vT2, mid), text_color=color.lime, text_size=size.tiny)
+    table.cell(optT, 0, 4, "at stop", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 4, f_ov(vStp, mid), text_color=color.red, text_size=size.tiny)
+    table.cell(optT, 0, 5, "Δ / θ day", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 5, str.tostring(dlt, "#.###") + " / " + str.tostring(thd, "#.###"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(optT, 0, 6, "IV / implied move", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 6, str.tostring(opt_iv * 100, "#") + "% / ±" + str.tostring(opt_iv * math.sqrt(T) * 100, "#.##") + "%", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 0, 7, "no live chain — estimate", text_color=color.gray, text_size=size.tiny)
+    table.cell(optT, 1, 7, "gate: NAKED only (payoff replay)", text_color=color.gray, text_size=size.tiny)

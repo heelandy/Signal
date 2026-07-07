@@ -42,6 +42,29 @@ def _get(key: str, default: str | None = None) -> str | None:
     return os.environ.get(key, _ENV.get(key, default))
 
 
+def read_json(path, default=None):
+    """Shared JSON-state reader (review 2026-07-07: six hand-rolled copies across approval/boss/
+    evolve/phase78/duel/l2 — one hardened pair now). Missing/corrupt file -> `default` ({})."""
+    import json
+    from pathlib import Path as _P
+    try:
+        return json.loads(_P(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {} if default is None else default
+
+
+def write_json(path, obj) -> None:
+    """ATOMIC JSON-state writer: temp file + replace, so a crash mid-write can never leave a
+    half-written state file (boss.json / approvals.json / drafts survive power loss)."""
+    import json
+    from pathlib import Path as _P
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
 _ENV = _load_env_file(ENV_FILE)
 
 
@@ -60,6 +83,11 @@ class Settings:
     webull_app_secret: str | None
     webull_region: str               # "us" | "hk" | "jp"
     webull_endpoint: str             # api.webull.com (prod) / us-openapi-alb.uat.webullbroker.com (test)
+    webull_futures: bool             # US-FUTURES data entitlement (2026-07-07: not yet on this
+                                     # account). Flip WEBULL_FUTURES=true in .env the day the
+                                     # entitlement lands — providers re-include Webull for
+                                     # NQ/ES/GC with ZERO code changes (user: "they just need
+                                     # to be ready when I add the API key").
     tradestation_api_key: str | None        # OAuth2 client id (TradeStation developer app)
     tradestation_api_secret: str | None      # OAuth2 client secret
     tradestation_refresh_token: str | None   # long-lived refresh token from the one-time auth-code flow
@@ -131,6 +159,7 @@ settings = Settings(
     webull_app_secret=_get("WEBULL_APP_SECRET") or None,
     webull_region=(_get("WEBULL_REGION", "us") or "us").lower(),
     webull_endpoint=_get("WEBULL_ENDPOINT", "api.webull.com") or "api.webull.com",
+    webull_futures=_bool(_get("WEBULL_FUTURES"), False),
     tradestation_api_key=_get("TRADESTATION_API_KEY") or None,
     tradestation_api_secret=_get("TRADESTATION_API_SECRET") or None,
     tradestation_refresh_token=_get("TRADESTATION_REFRESH_TOKEN") or None,

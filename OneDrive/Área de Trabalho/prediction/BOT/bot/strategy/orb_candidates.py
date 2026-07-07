@@ -51,7 +51,12 @@ _SESS = {"rth": Session.RTH, "asia": Session.ASIA, "london": Session.LONDON}
 #     kept on ES where it earns) · QQQ cooldown 5->0 + fills the breakout candle itself
 #     (ft_confirm off; the wait-created trades lose -0.54R) · SPY INSTANT FILL OFF —
 #     always waits for continuation (avg 0.444 flat but OOS 0.386->0.620, n +79%).
-STRATEGY_VERSION = "orb-standard-2026.07.6"
+# .7 (2026-07-06): F78 PULLBACK deep-research (the deferred 'purple' block) — NQ/MNQ chase
+#     1.0->1.5 + impulse-midpoint retest (combined: NQ 257.6->283.8R, PF 1.36, same DD).
+#     Everything else CONFIRMED at 07.6 values: vol-confirm/gap-skip/side-budget/%OR-depth/
+#     reclaim/VWAP-retest all cost edge on every symbol; timeout 8 is the local optimum;
+#     min-depth is a no-op at 15m (retests always retrace >0.5 ATR). QQQ/SPY/ES unchanged.
+STRATEGY_VERSION = "orb-standard-2026.07.7"
 
 
 @contextlib.contextmanager
@@ -160,8 +165,7 @@ def run_backtest(d):
     blocker-edge audit found six silent divergences (chase, min-OR-width, entry delay, re-entry,
     OR-mid bias, TP1) that made every prior number describe a system live never traded."""
     import hs_backtest as B
-    from bot.strategy.orb_state import ENTRY_STANDARD as ES
-    from bot.strategy.asset_config import asset_config, resolve_ctx_mode
+    from bot.strategy.asset_config import asset_config, resolve_ctx_mode, layer3_kwargs
     a = asset_config(str(d.attrs.get("sym", "")))
     mode = resolve_ctx_mode(a)
     return B.backtest(d, "tp2_full", "both", False, "orb", 0, T1, T2, ORS, ORE, 0.0, CUT, "close",
@@ -169,17 +173,14 @@ def run_backtest(d):
                       entry_delay=a.entry_delay,                     # user-adopted delay-0 (was 60)
                       strong_body=STRONG, ft_confirm=a.ft_confirm, dir_seq=True,   # F77: QQQ fills same-candle
                       reentry=True, max_entries=a.max_entries,       # live re-arm (was single-entry)
-                      chase_atr=a.chase_atr,                         # F75: QQQ/SPY/ES 0 · NQ/MNQ 1.0
+                      chase_atr=a.chase_atr,                         # F75/F78: QQQ/SPY/ES 0 · NQ/MNQ 1.5
                       # frozen OR-mid day bias: equities only (mid-armed modes use the LIVE mid)
                       or_mid_bias=(mode not in ("mid", "mid_vwap", "mid_only", "abc")),
-                      watch_live=ES.watch_gate,
-                      cooldown_bars=a.cooldown_bars if a.cooldown_bars is not None else ES.cooldown_bars,
-                      stale_bars=a.stale_bars if a.stale_bars is not None else ES.stale_bars,
-                      retest_atr=a.retest_atr if a.retest_atr is not None else ES.retest_atr,
-                      retest_mode=ES.retest_mode, min_pullback_atr=ES.min_pullback_atr,
-                      pullback_timeout=ES.pullback_timeout, vol_confirm_x=ES.vol_confirm_x,
                       instant_aligned=a.instant_fill,
-                      block_range=a.block_range)                   # F76: futures trade the chop
+                      block_range=a.block_range,                   # F76: futures trade the chop
+                      # Layer-3 knobs (watch/cooldown/stale/retest incl. F78 retest_mode) come from
+                      # the ONE per-asset resolver shared with the live scan + label builder.
+                      **layer3_kwargs(a))
 
 
 def emit_from_state(d, sym: str = "QQQ", tf: str = "5m", sess: str = "rth",

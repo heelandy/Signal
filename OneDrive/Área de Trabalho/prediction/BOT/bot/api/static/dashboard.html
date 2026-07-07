@@ -53,7 +53,9 @@
   .stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(74px,1fr))}
   .pipe{overflow-x:auto} .stage{min-width:98px}
   .card>div,.card details{max-width:100%}
-  #signals,#decisions,#cands,#trades,#positions,#optpos,#attrib,#scorecard,#datasrc,#underlying,#o_opts{overflow-x:auto}
+  /* bounded scroll boxes — every growing panel scrolls internally so the page stays short */
+  #signals,#decisions,#cands,#trades,#positions,#optpos,#attrib,#scorecard,#datasrc,#underlying,#o_opts,
+  #strategies,#alerts,#orbmgr,#perf,#study,#optperf,#riskbrk{overflow:auto;max-height:340px}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
   tr:hover td{background:rgba(79,142,247,.05)} th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
@@ -479,6 +481,28 @@ async function loadStrategies(){
         `<div class="mut" style="font-size:10px">${joined?'IN THE DUEL':'awaiting approval'}${opt?` · ⚡ ${opt}`:''}</div></div>${stat}</div>`;
     }).join('');
   }
+  // THE BOSS + WORKERS (BOSS_WORKERS_PLAN §4): armed/disarmed/OBSOLETE per worker; the
+  // graveyard stays VISIBLE (collapsed) — nothing is silently deleted.
+  try{
+    const bo=await J('/api/boss'); const W=bo.workers||{};
+    const live=Object.entries(W).filter(([,w])=>!w.obsolete), dead=Object.entries(W).filter(([,w])=>w.obsolete);
+    html+=`<div class="mut" style="margin:8px 0 4px;font-size:10px;letter-spacing:.6px"><b>MAIN BOSS</b> — workers (band WR 75-85 · PF≥1.7 · DD≤10R)</div>`;
+    html+=live.map(([id,w])=>{const conf=w.conformance||{}; const roll=conf.rolling||{};
+      const armed=(w.state||{}).armed, pass=conf.band_pass, papered=w.paper_approved;
+      // BAND-PASS NOTIFICATION + one-click paper approval NEXT TO IT (user 2026-07-07)
+      if(pass && !window['_bp_'+id]){window['_bp_'+id]=1; pushAlert(`🏆 ${id} PASSES ITS BAND (${roll.wr}% · PF ${roll.pf} · n${roll.n}) — approve for paper?`,'up');}
+      const passBadge = pass ? `<span class="badge b-aplus" title="rolling window meets the FULL band (WR ${roll.wr}% · PF ${roll.pf} · DD ${roll.dd_r}R · n${roll.n})">PASSES BAND</span> `+
+        (papered ? '<span class="mut" style="font-size:9px">paper ✓</span>'
+                 : `<button style="border-color:var(--grn);padding:2px 6px;font-size:10px" onclick="approveWorker('${w.lineage}','${id}')">Approve paper</button>`) : '';
+      return `<div class="stg"><span class="dot ${armed?'on':'warn'}"></span><div><div class="nm">${id} <span class="mut">${w.symbol}</span> ${passBadge}</div>`+
+        `<div class="mut" style="font-size:10px" title="${((w.state||{}).note||'').replace(/"/g,'&quot;')}">${w.spec||''}</div></div>`+
+        `<span class="pl ${pass?'up':'mut'}">${roll.n?`${roll.wr}% ·${roll.n}`:'no window'}</span></div>`;}).join('');
+    if(dead.length){
+      html+=`<details style="margin-top:4px"><summary class="mut" style="cursor:pointer;font-size:10px">OBSOLETE (${dead.length}) — auditable graveyard, revival = fresh gauntlet on new data</summary>`+
+        dead.map(([id,w])=>`<div class="stg"><span class="dot" style="background:#555"></span><div><div class="nm">${id} <span class="mut">${w.symbol}</span></div>`+
+          `<div class="mut" style="font-size:10px">${w.spec||''}</div></div><span class="pl mut">signals only</span></div>`).join('')+`</details>`;
+    }
+  }catch(e){}
   setHTML('strategies', html);
 }
 
@@ -539,14 +563,15 @@ async function scanSignals(force){
       `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th title="ensemble verdict: rules emitted it, risk decided, AI grades confidence (ML P(win) + heads + similarity + grade). Hover a badge for the reasons.">AI</th><th class="num" title="grade-weighted units: base 0.25%-risk × A+1.5/A1.0/B0.4, skip B on ES/SPY & C">size</th><th class="num" title="quarter-Kelly multiple of the risk budget (P(win) + realized payoff)">¼K</th><th>option</th><th>action</th></tr>`+
       sigs.map((s,i)=>{
         const opt=s.options?(()=>{const r=s.options.recommended;const st=s.options.structures[r];return `<b>${r.toUpperCase()}</b> ${st.legs.join('/')} $${st.cost_or_credit_usd}`;})():'<span class="mut">futures</span>';
-        const flags=[s.tradeable?'':'INFO',s.asset_status==='unverified'?'UNVERIFIED':'',s.bar_age_min>30?'STALE':''].filter(Boolean).join(' ');
+        const flags=[s.priority?'★PRIORITY':'',s.tradeable?'':'INFO',s.asset_status==='unverified'?'UNVERIFIED':'',s.bar_age_min>30?'STALE':''].filter(Boolean).join(' ');
         const fl=s.orderflow&&s.orderflow.feed?(s.orderflow.confirms?' ✓':s.orderflow.diverges?' ✗':''):'';
         const drift=Math.abs((s.last_price-s.entry));const nowc=drift>(Math.abs(s.entry-s.stop))?'dn':'mut';
         return `<tr onclick="selCtr('${s.symbol}',${s.last_price||s.entry},'${s.side}',${s.iv_est||0.2},${s.tp1||0},${s.tp2||0},${s.stop||0})" style="cursor:pointer">`+
           `<td><b>${s.symbol}</b></td><td class="mut">${s.session||'rth'}</td><td>${s.family}${flags?' <span class="dn" style="font-size:9px">'+flags+'</span>':''}</td>`+
           `<td>${gbadge(s.grade)}</td><td class="${s.side==='long'?'up':'dn'}">${s.side.toUpperCase()}</td>`+
           `<td class="num">${s.entry}</td><td class="num ${nowc}">${s.last_price}</td><td class="num">${s.stop}</td><td class="num">${s.tp1}</td><td class="num">${s.tp2}</td>`+
-          `<td class="num">${s.rr}${s.heads&&s.heads.expected_r!==undefined?' <span class="mut" title="expected R (model)">eR'+s.heads.expected_r+'</span>':''}</td><td class="num">${s.confidence}${fl}</td>`+
+          `<td class="num">${s.rr}${s.heads&&s.heads.expected_r!==undefined?' <span class="mut" style="cursor:help" title="'+headsT(s.heads)+'">eR'+s.heads.expected_r+'</span>':''}</td>`+
+          `<td class="num"${s.ml_explain?' title="'+mlxT(s.ml_explain)+'"':''}>${s.confidence}${fl}${s.ml_explain?' <span class="mut" style="cursor:help;font-size:9px">why</span>':''}</td>`+
           `<td>${s.ai_decision?`<span class="badge ${s.ai_decision.verdict==='approved_high_ai_confidence'?'b-aplus':s.ai_decision.verdict==='risk_blocked'?'b-c':'b-b'}" title="${(s.ai_decision.reasons||[]).join(' · ').replace(/"/g,'&quot;')}">${s.ai_decision.verdict==='approved_high_ai_confidence'?'HIGH':s.ai_decision.verdict==='risk_blocked'?'RISK✗':'low'}</span>`:'<span class="mut">—</span>'}</td>`+
           `<td class="num ${s.skip_reco?'dn':(s.grade==='A+'?'up':'mut')}">${s.skip_reco?'<b>SKIP</b>':('<b>'+s.sized_qty+'</b>')}</td>`+
           `<td class="num mut">${s.kelly&&s.kelly.quarter_kelly!==null&&s.kelly&&s.kelly.quarter_kelly!==undefined?s.kelly.quarter_kelly+'x':'—'}</td>`+
@@ -557,9 +582,27 @@ async function scanSignals(force){
   }catch(e){$('#scanmsg').textContent='scan error: '+e}
   btn.disabled=false;
 }
+// ML EXPLANATION tooltips (MLP-001: "explanations on live signals" — hover the P(win)/eR cells).
+// ml_explain = champion feature contributions {top_positive/top_negative:[[feat,±v]…], method};
+// heads = the advisory multi-head reads (tp2/stop/expected-R/no-trade champions, absent = no vote).
+function mlxT(x){const f=a=>(a||[]).map(p=>p[0]+' '+(p[1]>0?'+':'')+p[1]).join(' · ')||'—';
+  return ('why this P(win) ('+x.method+') — FOR: '+f(x.top_positive)+'  |  AGAINST: '+f(x.top_negative)).replace(/"/g,'&quot;');}
+function headsT(h){const L={tp2_prob:'P(TP2)',stop_prob:'P(stop)',expected_r:'expected R',no_trade:'P(no-trade better)'};
+  return Object.keys(L).filter(k=>h[k]!==undefined).map(k=>L[k]+' '+h[k]).join(' · ').replace(/"/g,'&quot;')||'expected R (model)';}
+async function approveWorker(lineage,id){   // band-passed worker -> one-click paper approval
+  if(!confirm(`Approve ${id} (${lineage}) for PAPER trading? Its rolling window passed the band.`))return;
+  for(const st of ['research','replay','paper'])
+    await fetch(`/api/approval/approve?stage=${st}&version=${encodeURIComponent(lineage)}&notes=${encodeURIComponent('band-pass approval from dashboard')}`,{method:'POST'}).catch(()=>{});
+  pushAlert(`${id} approved for paper — shadow study continues under its own lineage`,'up'); loadStrategies();
+}
+window.approveWorker=approveWorker;
+const DECIDED=new Set();   // ONE-TIME TRIGGER (user 2026-07-07): Take/Skip fires once per signal
 async function decide(i,taken){
   const s=SIGS[i]; const c=s.candidate||{};
-  const sig={candidate_id:c.candidate_id||(s.symbol+s.family+s.entry),symbol:s.symbol,side:s.side,family:s.family,session:s.session,entry:s.entry,stop:s.stop,tp1:s.tp1,tp2:s.tp2,grade:s.grade,generated_at:c.generated_at};
+  const cid=c.candidate_id||(s.symbol+s.family+s.entry);
+  if(DECIDED.has(cid)){pushAlert(`already decided ${s.symbol} — one row per signal in the journal`,'mut');return}
+  DECIDED.add(cid);
+  const sig={candidate_id:cid,symbol:s.symbol,side:s.side,family:s.family,session:s.session,entry:s.entry,stop:s.stop,tp1:s.tp1,tp2:s.tp2,grade:s.grade,generated_at:c.generated_at,tf:s.timeframe||'5m'};
   await fetch('/api/signal/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal:sig,taken})});
   pushAlert(`${taken?'TAKEN':'skipped'} ${s.symbol} ${s.side} @ ${s.entry}`, taken?'up':'mut'); loadDecisions();
 }
@@ -610,9 +653,12 @@ async function loadDecisions(){
   const d=await J('/api/decisions'); DECS=d.decisions||[]; const su=d.summary||{};
   const su_txt=su.taken_closed?`taken closed ${su.taken_closed} · ${su.total_R>=0?'+':''}${su.total_R}R · win ${su.win_pct}%`:'';
   if($('#trsum').textContent!==su_txt)$('#trsum').textContent=su_txt;
-  setHTML('decisions', DECS.length?`<table><tr><th>when</th><th>sym</th><th>family</th><th>side</th><th>take?</th><th class="num">entry</th><th class="num">stop</th><th class="num">TP1</th><th class="num">TP2</th><th>outcome</th><th class="num">R</th></tr>`+
+  // WHEN = the SIGNAL BAR's time in ET (falls back to decided_at) — the raw UTC slice was the
+  // "time is not correct" bug (user 2026-07-07); tf column separates the 5m and 15m lineages.
+  const etT=iso=>{try{return new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).replace(',','')}catch(e){return (iso||'').slice(5,16)}};
+  setHTML('decisions', DECS.length?`<table><tr><th>when (ET)</th><th>sym</th><th>strategy</th><th>tf</th><th>side</th><th>take?</th><th class="num">entry</th><th class="num">stop</th><th class="num">TP1</th><th class="num">TP2</th><th>outcome</th><th class="num">R</th></tr>`+
     DECS.map(x=>{const oc=x.outcome,c=oc==='tp2'||oc==='tp1_open'||oc==='tp1'?'up':oc==='stop'||oc==='tp1_then_stop'?'dn':'mut';
-      return `<tr><td class="mut">${(x.decided_at||'').slice(5,16).replace('T',' ')}</td><td><b>${x.symbol}</b></td><td>${x.family||''}</td><td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.taken?'TAKEN':'skip'}</td><td class="num">${x.entry}</td><td class="num">${x.stop}</td><td class="num">${x.tp1??''}</td><td class="num">${x.tp2??''}</td><td class="${c}">${oc}</td><td class="num ${c}">${x.result_r??''}</td></tr>`;}).join('')+`</table>`:'<div class="mut">No decisions yet.</div>');
+      return `<tr><td class="mut">${etT(x.signal_at||x.decided_at)}</td><td><b>${x.symbol}</b></td><td>${x.family||''}</td><td class="mut">${x.tf||'5m'}</td><td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.taken?'TAKEN':'skip'}</td><td class="num">${x.entry}</td><td class="num">${x.stop}</td><td class="num">${x.tp1??''}</td><td class="num">${x.tp2??''}</td><td class="${c}">${oc}</td><td class="num ${c}">${x.result_r??''}</td></tr>`;}).join('')+`</table>`:'<div class="mut">No decisions yet.</div>');
   loadStrategies();
 }
 let WATCHLIST=['SPY','QQQ','NQ','GC'];

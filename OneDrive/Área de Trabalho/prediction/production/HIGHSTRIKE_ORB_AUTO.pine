@@ -126,13 +126,13 @@ watch_gate   = input.bool(true, "Layer 3: close beyond OR mid activates WATCH", 
 cooldown_n_in = input.int(3, "Cooldown bars after a watch cancel", group="Entry standard", minval=0,
             tooltip="COOLDOWN RULE: after a watch cancel at the OR mid, no re-watch/re-entry for this many confirmed bars — kills the chop-around-the-mid churn.")
 stale_n_in   = input.int(0, "Stale: max bars in WATCH without a fill (0 = off)", group="Entry standard", minval=0,
-            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: set 24 on ES charts (its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
+            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: 24 on ES (the AUTO per-asset toggle sets it — its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
 retest_atr_in = input.float(0.5, "Pullback: retest within xATR of the target", group="Entry standard", step=0.25, minval=0.0,
-            tooltip="PULLBACK MODE: once price runs more than the chase cap past the OR level without a clean fill, do NOT chase — entries stay blocked until price returns within this many ATR of the retest target. 0 = off. GAUNTLET-ADOPTED per asset (2026-07-05): SPY uses 0.25 + cooldown 0 + stale 12 — set manually on a SPY chart.")
+            tooltip="PULLBACK MODE: once price runs more than the chase cap past the OR level without a clean fill, do NOT chase — entries stay blocked until price returns within this many ATR of the retest target. 0 = off. GAUNTLET-ADOPTED per asset: ES 0.5 / others 0.25 (the AUTO per-asset toggle sets these — no manual per-chart setting needed).")
 // ── PULLBACK REFINEMENTS (deep-research doc, adopted 2026-07-05 — rule orb-standard-2026.07.1; matches STACK) ──
-retest_target = input.string("OR edge", "Pullback: retest target", group="Entry standard",
+retest_target_in = input.string("OR edge", "Pullback: retest target", group="Entry standard",
             options=["OR edge", "Impulse midpoint", "VWAP"],
-            tooltip="WHERE the pullback must return to before the entry order re-arms: broken OR edge (default) / 50% of the extension impulse / session VWAP.")
+            tooltip="WHERE the pullback must return to before the entry order re-arms: broken OR edge (default) / 50% of the extension impulse / session VWAP. F78 (2026-07-06): Impulse midpoint ADOPTED on NQ/MNQ (+13.5R, better DD — AUTO sets it there); VWAP tested and REJECTED (blocked cohort +0.305R x26 on NQ).")
 min_pb_atr   = input.float(0.05, "Pullback: min retrace from extension (xATR, 0=off)", group="Entry standard", step=0.05, minval=0.0,
             tooltip="ANTI-SPIKE: the retrace from the extension extreme must be at least this deep before a retest counts (doc 0.05-0.10 ATR).")
 pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=forever)", group="Entry standard", minval=0,
@@ -140,7 +140,7 @@ pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=foreve
 vol_confirm  = input.float(0.0, "Fill: min volume x 20-bar avg (0=off)", group="Entry standard", step=0.1, minval=0.0,
             tooltip="RELATIVE-VOLUME CONFIRMATION on the entry bar (doc 1.2-2.0x). DEFAULT OFF until gauntleted.")
 chase_max_in = input.float(0.0, "Max chase past level (xATR, 0=off)", group="Entry standard", step=0.25, minval=0.0,
-            tooltip="DEFAULT 0 = OFF (F75, 2026-07-06, matches STACK): the chased late entries ARE the winners (QQQ +0.59R / SPY +0.70R blocked cohorts; ES lost 62% of expectancy). NQ/MNQ EXCEPTION: set 1.0 — there the cap is a DD-halver (avg −14% for maxDD −39%). >0 re-enables no-chase/pullback-retest.")
+            tooltip="DEFAULT 0 = OFF (F75, 2026-07-06, matches STACK): the chased late entries ARE the winners (QQQ +0.59R / SPY +0.70R blocked cohorts; ES lost 62% of expectancy). NQ/MNQ EXCEPTION: 1.5 (AUTO sets it) — there the cap is a DD-holder, widened 1.0->1.5 by F78 (+20.7R, same maxDD). >0 enables no-chase/pullback-retest.")
 exit_mode = input.string("Fixed TP bracket (broker-held)", "Exit", group="Risk plan",
             options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)", "Scale 50% @ TP1 → BE → TP2"],
             tooltip="DEFAULT = 'Fixed TP bracket' (F34b graduate): full position to a fixed-R cap on the structure stop (set Take-profit R = 4 below) = ~2× the trail's MEDIAN $/trade, honest PF, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip, best for steady eval accumulation; also survives a dead webhook pipe (broker holds SL+TP). 'Scale' (added 2026-07-05 for STACK parity — TP1 was missing from AUTO): bank 50% at TP1 (R below), move the runner's stop to BREAK-EVEN, target TP2. F50/F51: the trail's headline R/PF is TAIL-INFLATED — kept as a toggle. Matches HIGHSTRIKE_ORB_STACK.")
@@ -192,30 +192,32 @@ show_gated       = input.bool(true, "Show entry levels while the gate is BLOCKED
 show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
 show_dash        = input.bool(true, "Show dashboard", group="Display")
 
-// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F77, 2026-07-06) ─────────────────────────
+// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F78, 2026-07-06) ─────────────────────────
 // ONE toggle applies every cohort-adopted per-asset setting by instrument — no manual per-chart
 // setup (user 2026-07-06: "make them automatic on the script"). OFF = the manual inputs above.
-//   chase-cap : NQ/MNQ 1.0 (DD-halver) · everything else 0 (the chased entries are the winners)
+//   chase-cap : NQ/MNQ 1.5 (F78: 1.0->1.5 gains +20.7R, same maxDD) · everything else 0 (the chased entries are the winners)
+//   retest target: NQ/MNQ Impulse midpoint (F78: +13.5R, better DD) · others OR edge
 //   stale     : ES 24 (its blocked cohort is negative; DD -47->-71 without) · others 0
 //   cooldown  : ES 3 · others 0
 //   next-bar wait (wait_ft): OFF on QQQ (wait-created trades lose -0.54R) · ON elsewhere
 //   instant fill: OFF on ES + SPY (SPY always-wait OOS 0.386->0.620) · ON on NQ/MNQ/QQQ
 //   RANGE-regime block: equities ON · futures OFF (chop cohort positive: NQ +0.19 ES +0.18)
 //   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
-auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F77 — chase/stale/cooldown/fill-timing/range-block)", group="Entry standard",
-            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.0, others 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.6). OFF = use the manual inputs.")
+auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
 string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
 bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
 bool _aES  = _aroot == "ES" or _aroot == "MES"
 bool _aQQQ = _aroot == "QQQ"
 bool _aSPY = _aroot == "SPY"
-float chase_max   = auto_asset ? (_aNQ ? 1.0 : 0.0) : chase_max_in
+float chase_max   = auto_asset ? (_aNQ ? 1.5 : 0.0) : chase_max_in
 int   stale_n     = auto_asset ? (_aES ? 24 : 0) : stale_n_in
 int   cooldown_n  = auto_asset ? (_aES ? 3 : 0) : cooldown_n_in
 bool  wait_ft     = auto_asset ? not _aQQQ : wait_ft_in
 bool  instant_fill = auto_asset ? not (_aES or _aSPY) : instant_fill_in
 bool  block_range = auto_asset ? syminfo.type != "futures" : block_range_in
 float retest_atr  = auto_asset ? (_aES ? 0.5 : 0.25) : retest_atr_in
+string retest_target = auto_asset ? (_aNQ ? "Impulse midpoint" : "OR edge") : retest_target_in
 
 // ───────────────────────── CORE ─────────────────────────
 atr14 = ta.atr(14)

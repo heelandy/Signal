@@ -84,7 +84,8 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
                  chase_atr=0.0, strong_body=0.0, ft_confirm=False, dir_seq=False, min_or_width=0.0, max_entries=99,
                  or_mid_bias=False, watch_live=False, cooldown_bars=0, stale_bars=0, retest_atr=0.0,
                  collect_rejects=None, retest_mode="edge", min_pullback_atr=0.0,
-                 pullback_timeout=0, vol_confirm_x=0.0, instant_aligned=False):
+                 pullback_timeout=0, vol_confirm_x=0.0, instant_aligned=False,
+                 min_pullback_or=0.0, retest_reclaim=False, gap_max_atr=0.0):
     """Opening-Range Breakout: break of the [or_s,or_e) range after it closes, once/day, before
     tod_end. brk_buf_atr = clear OR by this x ATR. execm 'close'|'stop'.
     tradeday=False: minutes-from-midnight ET + calendar-date (US RTH session).
@@ -99,7 +100,11 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
                         mid is lost and a fresh watch cycle starts). 0 = off.
       retest_atr      : PULLBACK rule — once price extends > chase_atr*ATR past the level pre-fill,
                         fires are blocked until price retests within retest_atr*ATR of the level.
-                        Active only with chase_atr > 0; 0 keeps the plain no-chase guard only."""
+                        Active only with chase_atr > 0; 0 keeps the plain no-chase guard only.
+      PULLBACK deep-research knobs (2026-07-06): min_pullback_or = retrace depth in OR-WIDTH units
+      (alternative ruler to min_pullback_atr); retest_reclaim = the retest bar must CLOSE back
+      beyond the target with the right colour (microstructure rejection, not a mere touch);
+      gap_max_atr = skip the whole day when |session open gap| > this x ATR at the first bar."""
     et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")
     if tradeday:
         sd = et + pd.Timedelta(hours=6)                       # 18:00 ET -> 00:00 of the trade-day
@@ -142,6 +147,16 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         ocm = pd.Series(date).map(oc_close).to_numpy()
         with np.errstate(invalid="ignore"):
             or_bull = ocm > ((orh + orl) / 2.0)          # per-bar (day-broadcast); False where OR undefined
+    # gap rule (PULLBACK deep-research 2026-07-06): block the WHOLE day when the open gap
+    # (first bar's open vs the prior day's last close) exceeds gap_max_atr x ATR at that first bar.
+    gap_day_ok = np.ones(n, bool)
+    if gap_max_atr > 0:
+        gdf = pd.DataFrame({"date": date, "o": op, "c": c, "atr": atr})
+        gfirst = gdf.groupby("date", sort=False).first()
+        gprevc = gdf.groupby("date", sort=False)["c"].last().shift(1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            gratio = (gfirst["o"] - gprevc).abs() / gfirst["atr"]
+        gap_day_ok = (~pd.Series(date).map(gratio > gap_max_atr).fillna(False)).to_numpy()
     cur = None; done_l = done_s = broke_l = broke_s = False; armed_l = armed_s = True; reclaimed_l = reclaimed_s = False
     n_l = n_s = 0                                       # re-entry counters per date (cap at max_entries)
     # canonical WATCH state per side (entry standard 2026-07-04): watch flag, watch age (stale/range),
@@ -218,7 +233,11 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
                     tgt = vsess[i]
                 deep = min_pullback_atr <= 0 or (ext_hi_l == ext_hi_l and
                                                  (ext_hi_l - lp[i]) >= min_pullback_atr * atr[i])
-                if deep and lp[i] <= tgt + atr[i] * retest_atr:
+                deep = deep and (min_pullback_or <= 0 or
+                                 (ext_hi_l == ext_hi_l and (orh[i] - orl[i]) > 0 and
+                                  (ext_hi_l - lp[i]) >= min_pullback_or * (orh[i] - orl[i])))
+                reclm = (not retest_reclaim) or (c[i] > tgt and c[i] > op[i])
+                if deep and reclm and lp[i] <= tgt + atr[i] * retest_atr:
                     ext_l = False; ext_hi_l = np.nan; pb_age_l = 0
             if ext_s:
                 tgt = ll
@@ -228,7 +247,11 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
                     tgt = vsess[i]
                 deep = min_pullback_atr <= 0 or (ext_lo_s == ext_lo_s and
                                                  (hp[i] - ext_lo_s) >= min_pullback_atr * atr[i])
-                if deep and hp[i] >= tgt - atr[i] * retest_atr:
+                deep = deep and (min_pullback_or <= 0 or
+                                 (ext_lo_s == ext_lo_s and (orh[i] - orl[i]) > 0 and
+                                  (hp[i] - ext_lo_s) >= min_pullback_or * (orh[i] - orl[i])))
+                reclm = (not retest_reclaim) or (c[i] < tgt and c[i] < op[i])
+                if deep and reclm and hp[i] >= tgt - atr[i] * retest_atr:
                     ext_s = False; ext_lo_s = np.nan; pb_age_s = 0
         # relative-volume confirmation on the trigger bar (deep-research; default OFF)
         vcx_ok = vol_confirm_x <= 0 or (not np.isnan(vavg[i]) and vavg[i] > 0
@@ -253,35 +276,39 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
         # REJECTED-SETUP capture (MLP-001 §2): the trigger fired but a gate blocked — record the
         # FIRST failing gate so the ML layer can learn "why no trade" (+ wick-only level pokes).
         if collect_rejects is not None:
-            fire_l = ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and canon_l and tup[i] and (ob_l is None or ob_l[i]) and vok
-            fire_s = ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and canon_s and tdn[i] and (ob_s is None or ob_s[i]) and vok
+            fire_l = ok_l and l_cross and near_l and seq_l and wide_ok and gap_day_ok[i] and bias_l and canon_l and vcx_ok and tup[i] and (ob_l is None or ob_l[i]) and vok
+            fire_s = ok_s and s_cross and near_s and seq_s and wide_ok and gap_day_ok[i] and bias_s and canon_s and vcx_ok and tdn[i] and (ob_s is None or ob_s[i]) and vok
             if l_cross and not fire_l:
                 r = ("entries_done" if not ok_l else "context_gate" if not tup[i] else
-                     "narrow_or" if not wide_ok else "or_mid_bias" if not bias_l else
+                     "narrow_or" if not wide_ok else "gap_day" if not gap_day_ok[i] else
+                     "or_mid_bias" if not bias_l else
                      "no_watch" if (watch_live and not watch_l) else
                      "cooldown" if (watch_live and cd_l > 0) else
                      "range_stale" if (watch_live and range_l) else
                      "pullback_wait" if (watch_live and ext_l) else
                      "chase_guard" if not near_l else "dir_seq" if not seq_l else
+                     "volume_confirm" if not vcx_ok else
                      "no_ob" if (ob_l is not None and not ob_l[i]) else "volume")
                 collect_rejects.append((i, "long", r))
             elif not l_cross and ok_l and hp[i] >= lh and lp[i] < lh:
                 collect_rejects.append((i, "long", "wick_or_weak_body"))
             if s_cross and not fire_s:
                 r = ("entries_done" if not ok_s else "context_gate" if not tdn[i] else
-                     "narrow_or" if not wide_ok else "or_mid_bias" if not bias_s else
+                     "narrow_or" if not wide_ok else "gap_day" if not gap_day_ok[i] else
+                     "or_mid_bias" if not bias_s else
                      "no_watch" if (watch_live and not watch_s) else
                      "cooldown" if (watch_live and cd_s > 0) else
                      "range_stale" if (watch_live and range_s) else
                      "pullback_wait" if (watch_live and ext_s) else
                      "chase_guard" if not near_s else "dir_seq" if not seq_s else
+                     "volume_confirm" if not vcx_ok else
                      "no_ob" if (ob_s is not None and not ob_s[i]) else "volume")
                 collect_rejects.append((i, "short", r))
             elif not s_cross and ok_s and lp[i] <= ll and hp[i] > ll:
                 collect_rejects.append((i, "short", "wick_or_weak_body"))
-        if ok_l and l_cross and near_l and seq_l and wide_ok and bias_l and canon_l and vcx_ok and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
+        if ok_l and l_cross and near_l and seq_l and wide_ok and gap_day_ok[i] and bias_l and canon_l and vcx_ok and tup[i] and (ob_l is None or ob_l[i]) and vok:   # ob_l = F41 OB confluence (gated WITH the latch)
             lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False; n_l += 1
-        if ok_s and s_cross and near_s and seq_s and wide_ok and bias_s and canon_s and vcx_ok and tdn[i] and (ob_s is None or ob_s[i]) and vok:
+        if ok_s and s_cross and near_s and seq_s and wide_ok and gap_day_ok[i] and bias_s and canon_s and vcx_ok and tdn[i] and (ob_s is None or ob_s[i]) and vok:
             ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False; n_s += 1
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
@@ -350,7 +377,8 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              min_or_width=0.0, ext_long=None, ext_short=None, or_mid_bias=False,
              watch_live=False, cooldown_bars=0, stale_bars=0, retest_atr=0.0,
              retest_mode="edge", min_pullback_atr=0.0, pullback_timeout=0, vol_confirm_x=0.0,
-             instant_aligned=False, block_range=True):
+             instant_aligned=False, block_range=True,
+             min_pullback_or=0.0, retest_reclaim=False, gap_max_atr=0.0, side_budget_r=0.0):
     """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
@@ -393,7 +421,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     if entry_type == "orb":                       # Opening-Range Breakout entry
         _obl = d["in_bull_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bull_ob" in d) else None
         _obs = d["in_bear_ob"].shift(1).fillna(False).to_numpy().astype(bool) if (ob_confluence and "in_bear_ob" in d) else None
-        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq, min_or_width=min_or_width, or_mid_bias=or_mid_bias, watch_live=watch_live, cooldown_bars=cooldown_bars, stale_bars=stale_bars, retest_atr=retest_atr, retest_mode=retest_mode, min_pullback_atr=min_pullback_atr, pullback_timeout=pullback_timeout, vol_confirm_x=vol_confirm_x, instant_aligned=instant_aligned)
+        lo, so, or_low, or_high, lvl_l, lvl_s = _orb_signals(d, or_s, or_e, brk_buf_atr, tod_end, execm, tradeday, reentry, vol_conf, vol_mult, entry_delay=entry_delay, ob_l=_obl, ob_s=_obs, chase_atr=chase_atr, strong_body=strong_body, ft_confirm=ft_confirm, dir_seq=dir_seq, min_or_width=min_or_width, or_mid_bias=or_mid_bias, watch_live=watch_live, cooldown_bars=cooldown_bars, stale_bars=stale_bars, retest_atr=retest_atr, retest_mode=retest_mode, min_pullback_atr=min_pullback_atr, pullback_timeout=pullback_timeout, vol_confirm_x=vol_confirm_x, instant_aligned=instant_aligned, min_pullback_or=min_pullback_or, retest_reclaim=retest_reclaim, gap_max_atr=gap_max_atr)
         long_ok = lo & gate_l; short_ok = so & gate_s
         if mtf_min > 0 and "mtf_up" in d:         # higher-TF trend confirmation
             long_ok = long_ok & (d["mtf_up"].to_numpy() >= mtf_min)
@@ -418,6 +446,7 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     trades = []; n = len(d); i = 0
     pos = 0  # 0 flat, +1 long, -1 short
     last_day = -1; day_n = 0   # per-day taken-entry count (re-entry cap)
+    day_rl = day_rs = 0.0      # per-day realized R per SIDE (side risk budget — PULLBACK deep-research)
     while i < n:
         if pos == 0:
             sig = 1 if long_ok[i] else (-1 if short_ok[i] else 0)
@@ -426,9 +455,11 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
             if skip_mask is not None and skip_mask[i]:    # signal-level skip (e.g. clean-day filter) -> stay flat
                 i += 1; continue
             if daykey[i] != last_day:
-                last_day = daykey[i]; day_n = 0
+                last_day = daykey[i]; day_n = 0; day_rl = day_rs = 0.0
             if reentry and day_n >= max_entries:
                 i += 1; continue
+            if side_budget_r > 0 and (day_rl if sig == 1 else day_rs) <= -side_budget_r:
+                i += 1; continue               # side's daily loss budget spent — stand down that side
             if entry_type == "orb" and execm in ("stop", "retest", "sweepgo", "rebreak"):
                 _lvl = lvl_l[i] if sig == 1 else lvl_s[i]
                 entry = max(_lvl, o[i]) if sig == 1 else min(_lvl, o[i])   # F-fix: gap-aware — a stop fills no better than the bar's open
@@ -513,6 +544,10 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
                 "gross_R": round(gross_R, 4), "net_R": round(gross_R - cost_R, 4),
                 "mfe_R": round(mfe, 3), "mae_R": round(mae, 3),
                 "risk_pts": round(risk, 2), "regime": entry_reg, "hold_bars": i - entry_i})
+            if sig == 1:
+                day_rl += trades[-1]["net_R"]
+            else:
+                day_rs += trades[-1]["net_R"]
             pos = 0; i += 1
         else:
             i += 1

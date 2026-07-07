@@ -50,9 +50,12 @@ watches, the edge fills** — ARMED comes *before* WATCH everywhere now.
 - **Watch invalidation + Cooldown** — a confirmed close back across the mid cancels the watch,
   pulls any resting order, and blocks re-watch for `cooldown_bars` (default **3**). A **new**
   clean close beyond the mid is then required (no instant re-watch — kills mid-chop churn).
-- **Pullback rule (new)** — if price runs more than `chase_atr` (default **1.0**) ATR past the OR
-  level without a valid fill, the side enters **PULLBACK**: do not chase. Fills unblock when price
-  retests within `retest_atr` (default **0.5**) ATR of the level; normal fill rules then re-check.
+- **Pullback rule** — if price runs more than `chase_atr` ATR past the OR level without a valid
+  fill, the side enters **PULLBACK**: do not chase. Fills unblock when price retests within
+  `retest_atr` ATR of the retest target; normal fill rules then re-check. **Per-asset since
+  F75/F78 (2026-07-06):** NQ/MNQ chase **1.5** with the **impulse-midpoint** retest target
+  (50% of the extension impulse — releases earlier than a full edge revisit, +13.5R);
+  QQQ/SPY/ES chase **0** = pullback mode off (the chased entries ARE the winners there).
 - **Range / stale rule (new)** — a watch that produces no valid fill within `stale_bars`
   (default **24** = 2 h on 5m; 0 = off) is a RANGE: the side stands down until the mid is lost
   and a fresh cycle begins.
@@ -76,9 +79,10 @@ and mirrored as the "Entry standard" input group in all three Pine scripts:
 | `watch_gate` | on | Layer 3: confirmed close beyond OR mid required (WATCH) |
 | `cooldown_bars` | 3 | bars blocked after a watch cancel |
 | `stale_bars` | 24 | max bars in WATCH without a fill → RANGE (0 = off) |
-| `chase_atr` | 1.0 | extension past the level that flips WATCH → PULLBACK |
-| `retest_atr` | 0.5 | retest distance that restores WATCH |
-| `max_entries` | 2 (eq) / 3 (fut) | two-entry limit per side per session |
+| `chase_atr` | NQ/MNQ 1.5 · others 0 | extension past the level that flips WATCH → PULLBACK (F75/F78 per-asset; 0 = off) |
+| `retest_atr` | 0.25 (ES 0.5) | retest distance that restores WATCH (gauntlet-adopted per asset) |
+| `retest_mode` | NQ/MNQ impulse_mid · others edge | retest target (F78: impulse midpoint adopted on NQ/MNQ) |
+| `max_entries` | 1 (eq) / 3 (fut) | entry limit per side per session (F76: equity re-entries lose) |
 | `strong_body` | 0.25 | fill: min body/range (no wick-only) |
 | `ft_confirm` | on | fill: next-candle continuation (F59c) |
 | `dir_seq` | on | fill: direction sequence (F61) |

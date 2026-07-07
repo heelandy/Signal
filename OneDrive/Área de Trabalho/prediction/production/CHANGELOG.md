@@ -5,6 +5,200 @@ for the F-number research behind each item.
 
 ---
 
+## 2026-07-07 (v17) — THE JOURNAL IS THE TRAINING LAB: live QQQ/SPY feed (5m + 15m), continuous learning without paper approval, only the journal persisted
+
+No Pine changes (BOT + platform only — scope rule).
+
+* **User plan**: "pursue the 15m lineage; feed live data (the two symbols) into the training lab,
+  dynamic so it grows over time; continuous learning WITHOUT needing paper approval; live data if
+  possible; the only thing we save is the journaling of the trades" — "this journal will be the
+  training lab" — "5 min as well".
+* **The trade journal is now the training-lab corpus** (`dataset.attach_live_journal`,
+  `build(..., include_live=True)` default): every taken+resolved live decision that rode with a
+  PIT feature snapshot is unioned into the dataset, **tf-matched** (a 15m journal row feeds only
+  the 15m lineage; 5m feeds 5m), deduped by (ts,symbol,side) with live winning on overlap. The
+  corpus GROWS as live trades resolve — the continuous loop's existing change-signature (dataset
+  row count + span) picks the growth up automatically and retrains.
+* **15m + 5m live capture**: `scan_watchlist(tf=…)` is now timeframe-aware; the scan loop adds a
+  **15m pass for QQQ/SPY** (every ~3 min) journaled tagged tf=15m, alongside the standard 5m
+  journal. Continuous syms now include **QQQ@15m / SPY@15m** (the AUC-gate-passing lineage) plus
+  the 5m lineages — all trained `--no-promote`.
+* **No paper approval needed for learning**: journaling (shadow-track + 15m pass) and continuous
+  training both run independent of the approval ladder — decoupled by design. Paper approval
+  still gates real/shadow *trading*; it never gates *learning*.
+* **Only the journal is persisted**: the live scan is `persist=False` (no bar hoarding); the
+  durable substrate is the tracker journal + `live_outcomes` feature store. New endpoint
+  `/api/training/journal_feed` shows the corpus growing per symbol×tf (rows, trainable-with-
+  features, win-rate) and confirms `approval_required=false`.
+* 130 tests green.
+
+## 2026-07-07 (v17b) — journal root-cause fixes · review items ALL closed · band-pass notify+approve · env-ready providers · docs/PROJECT.md
+
+No Pine changes.
+
+* **Journal root causes (from the user's screenshots)**: proposals now carry the candidate's BAR
+  IDENTITY — before this the autotrack dedup key was degenerate (one row per sym/family/session/
+  side/tf EVER: the corpus could never grow) and signal_at was NULL (outcomes stuck 'open'
+  forever). Manual Take/Skip is a ONE-TIME trigger (second click updates, never duplicates) ·
+  journal WHEN renders the signal bar's time in ET + a tf column · 2 synthetic test rows + 1
+  duplicate deleted, 14 rows backfilled — 12 outcomes resolved immediately. Day one of the
+  shadow study: ALL THREE workers hit their tight targets (+0.40/+0.33/+0.30R) on bars where the
+  core 4R entries stopped at −1R.
+* **Separation**: worker/emergent rows sealed out of the core dataset AND the paper analytics
+  (tracker CORE_ONLY in scorecard/summary/phase78) — they live in the journal lab, judged only
+  by the Boss on family-filtered windows.
+* **All 6 review items closed**: Boss one-macro-bet rule now ENFORCED in paper autotrade (bucket
+  stand_down skips the order) · disarmed workers keep learning but rows carry disarmed=true ·
+  evolve deep-miner runs as a SUBPROCESS (never chdir/backtest inside the live server; /api/evolve
+  serves the saved report) · hs_mbo_bars uses the battle-tested _ts_expr · shared atomic
+  read_json/write_json in bot.config (six copies retired) · journal_feed 30s cache.
+* **Band-pass notify + approve (user ask)**: a worker whose rolling window reaches the FULL band
+  is audit-logged once, badged "PASSES BAND" on the dashboard with a one-click "Approve paper"
+  button next to it (hidden once approved).
+* **Providers env-ready**: key in .env = active. Key-ready providers AUTO-JOIN the chain
+  (databento/tradestation append after your explicit PROVIDER_ORDER); WEBULL_FUTURES=true flips
+  futures back on at entitlement. Databento verified: lib installed, feed module ready, only the
+  key missing.
+* **docs/PROJECT.md** — the full root-up documentation of the whole project (four planes, the
+  law, every subsystem, ops hazards, file map). 130 tests green.
+
+## 2026-07-07 (v16) — workers approvable + per-worker PAPER SHADOW STUDY · L2 scaffolding removable · 15m lineage passes AUC gate
+
+No Pine changes (BOT + platform only — scope rule).
+
+* **Workers now in the approval dropdown (user: "not in the list so I can approve them")** —
+  `_approval_versions()` was filtering to `gauntlet_pass` only, hiding the worker lineages
+  (research_candidate / obsolete). All five now appear with their existing research→replay→paper
+  approvals, tagged by status.
+* **Worker approval now DOES something — the per-worker PAPER SHADOW STUDY** (`bot/boss.py`
+  `shadow_decisions` + server `_worker_shadow_study` in the scan loop): each paper-approved
+  worker records its OWN tight-target what-if trades (canonical entry/stop, TP = b×risk, its F80
+  tier applied — QQQ slope-STRONG, NQ early-only), tagged `family=worker-*`, resolved by
+  track_outcomes and scored per worker. **Why shadow, not real brackets**: one Alpaca paper
+  account nets a single position per symbol, so five workers on QQQ/SPY/NQ can only run as
+  parallel studies — which is exactly the mechanism that judges them for the band. Boss
+  conformance (`_rolling`) now filters by worker family, so each worker is judged on its own
+  stream; obsolete E/G are shadowed as signals-only when approved.
+* **Champion unlock attempts (all three levers, disk data only)**: bar store extended to Jun 25
+  from the MBO trade prints (`pipeline/hs_mbo_bars.py`, +11,340 QQQ 1m bars). Result — L2 join
+  still only 1 QQQ candidate (ORB signals are ~1/10 days, so 13 new days add ~1 signal): historic
+  depth is structurally too thin to move a champion; forward live capture is the real unlock.
+  **BUT the 15m lineage PASSED the AUC gate for the first time** (QQQ 15m OOS AUC 0.556 > 0.52),
+  failing only Brier by a hair (0.2483 vs base 0.2448) — the closest a champion has come.
+* **L2/L3 scaffolding is REMOVABLE (user: "after, we can remove that and wait for real data")** —
+  every MBO-derived bar append is recorded in `data/mbo_bars_manifest.json` with the exact
+  official cutoff; `python pipeline/hs_mbo_bars.py QQQ --remove` truncates back to it and
+  `hs_resample.py QQQ` rebuilds clean (official bars always win on overlap). Nothing temporary
+  can silently become permanent.
+* **Scalping round 1 (unblocked by the archive)**: 1m micro-ORB + L2 flow filter — feasibility
+  read on ~22 days is NEGATIVE (base −0.17R/trade; flow filter made it worse). Not pursued;
+  honest dead end recorded.
+* 130 tests green.
+
+## 2026-07-07 (v15) — BOSS/WORKERS assembly live (F80/F81) · evolution engine · L2 archive fully synthesized · auto-label registration
+
+No Pine changes (BOT + platform only — scope rule).
+
+* **BOSS/WORKERS (docs/BOSS_WORKERS_PLAN.md, user goal WR 75-85 · PF ≥ 1.7 · DD ≤ 10%)**:
+  discovery rounds F80/F81 ran geometry grids ×5, selectivity tiers, and a pooled loser-veto.
+  HONEST verdicts — **no worker reaches the full band yet**: Q (QQQ, slope-STRONG, 0.40×) is
+  closest — OOS IN BAND 82.6/1.79/−3.0 and holds 2× costs at PF 1.69, blocked only by the IS
+  era + small OOS n; S (SPY + veto) 84.5/1.62 — 0.08 short; N (NQ early-only) 1.34; **E and G
+  OBSOLETE** (ES: PF<1 everywhere + slip fragility; GC: F30 edge dead, IS PF 0.07-0.25).
+* **THE MAIN BOSS (`bot/boss.py` + `/api/boss` + hourly tick)**: worker contracts + rolling
+  conformance AUTO-DISARM + correlation-bucket "one macro bet" allocation annotating every scan
+  cycle + obsolete arm-lock. Dashboard shows the workers and the collapsed OBSOLETE graveyard.
+* **EVOLUTION ENGINE (`bot/evolve.py` + `/api/evolve` + nightly tick)** — always-learning:
+  slices/rejects/exit-TP miners over trades, journals and studies; honest-split patterns become
+  DRAFTS (`emergent-*-0.1`) that enter the normal gauntlet→ladder path. **First draft on the
+  maiden run**: QQQ `dir_seq` gate blocks 847 setups earning +0.27R OOS — review queued.
+* **Ladders**: all five worker lineages approved research→replay→paper (E/G signals-only).
+* **L2/L3**: full Databento archive synthesized (24/24 days, May 26–Jun 25); per-file-process
+  sync pattern + duckdb 1GB/1-thread spill cap; registration now AUTO-LABELS from the file's
+  own symbol column (mislabels impossible; multi-symbol files split per symbol).
+* **OPS root-cause of the OOM plague**: five stacked uvicorn supervisors + OneDrive holding a
+  12.9GB commit balloon — cleaned; commit 28.3→15.4GB. Reminder: the OneDrive repo move
+  (user's hands) remains the durable fix.
+* 130 tests green (incl. the new Pine↔config sync suite).
+
+---
+
+## 2026-07-06 (v14) — RULE orb-standard-2026.07.7: PULLBACK deep-research closed (F78 — the deferred "purple" block)
+
+⚠️ STACK + AUTO changed (auto-asset block + retest-target auto + tooltips) — **TradingView compile needed.**
+
+* **User ask: "finish the purple task"** — the PULLBACK (purple state) deep-research block,
+  deferred since 2026-07-05 ("do the pullback last"), is now fully tested: all TEN items
+  cohort-run against the 07.6 live-identical baseline (`research/pullback_deep.py`, report
+  `pullback_deep.json`). Four needed new engine knobs (%OR-width depth · reclaim retest ·
+  gap-day rule · per-side daily R-budget) — built into `hs_backtest.py` for the test.
+* **ADOPTED (NQ/MNQ only, combined config verified):** chase-cap **1.0→1.5** (+20.7R, same
+  maxDD — the extra latitude admits +0.445R×42 winners and drops losers) + retest target
+  **Impulse midpoint** (+13.5R, better DD; the trades it drops were losers). Combined:
+  **NQ total 257.6→283.8R · PF 1.34→1.36 · DD unchanged · OOS +0.271**.
+* **REJECTED everywhere (blocked cohorts positive = the gate costs money):** relative-volume
+  confirm 1.0/1.2× · gap-day skip 2/4×ATR · side R-budget 1/2R · %OR-width depth · reclaim
+  (close-back-through) retest · VWAP retest · tighter chase 0.5/0.75. **CONFIRMED at current
+  values:** pullback timeout 8 is the local optimum (4 and 16 both lose); min-depth is a no-op
+  at 15m (every releasing retest already retraced >0.5 ATR); QQQ/SPY/ES keep chase 0 — even a
+  REFINED pullback forfeits more than it saves there (pb_on cohorts −57R/−32R/−36R vs base).
+* **QQQ/SPY/ES canonical numbers byte-identical to 07.6** (nothing changed for them):
+  QQQ +158.4R OOS 0.718 · SPY +118.9R OOS 0.620 · ES +107.5R. 123 tests green.
+* **Pines**: `auto_asset` now also sets the retest target (NQ/MNQ "Impulse midpoint", others
+  "OR edge") and chase 1.5 on NQ/MNQ; `retest_target` input renamed `retest_target_in`
+  (wiring machine-verified in both files); chase/retest/auto tooltips carry the F78 evidence.
+* **BOT**: `asset_config` gains per-asset `retest_mode` (NQ/MNQ "impulse_mid") + chase 1.5;
+  canonical `run_backtest` and the live scan (`families.py`) both consume it — live == backtest
+  preserved. STRATEGY_VERSION bumped → datasets/models/approvals re-key to 07.7 by design.
+* **CODE-REVIEW FIXES + ANTI-DRIFT RESOLVER (same day)**: the reject-label mirror in the engine
+  now includes the volume-confirm gate (rejects were silently unlabeled when vol_confirm_x>0) ·
+  `build_rejects` now produces "why no trade" labels under the SAME per-asset canonical gates the
+  system trades (old hardcoded chase 1.0/cd 3/stale 24/single-entry described a rule no surface
+  trades) · NEW `asset_config.layer3_kwargs()` — ONE resolver for the Layer-3 knobs shared by the
+  canonical backtest, the live scan and the label builder, so the three surfaces cannot drift
+  (the F75 "abc" omission was exactly this class). Canonical totals verified BYTE-IDENTICAL after
+  the refactor (QQQ 158.4 / SPY 118.9 / NQ 283.8 / ES 107.5) · stale Pine tooltips that still
+  said "set manually on X chart" now point at the AUTO toggle.
+* **AITP PHASE 7-8 AUTO-ADVANCE (user: "whenever the paper study is done it will be implemented
+  automatically into these phases")** — new `bot/phase78.py` + `/api/phase78` + hourly tick in
+  the scan loop: the paper study evaluates ITSELF (≥60 closed paper trades AND ≥8 weeks AND
+  scorecard consistent AND no grade inversion) alongside automated phase-7 hardening checks
+  (restart recovery, tracker WAL, kill switch, scan heartbeat via runtime_state last_scan_at,
+  broker/reconcile availability) and a measured execution-quality gate (paper fills vs the 2×
+  cost-stress case). When ALL green, the 'live' approval stage advances AUTOMATICALLY
+  (audit-logged as auto-phase8). **The LIVE_APPROVED.lock file stays manual — the double gate is
+  preserved; ES is excluded by the cost-stress rule.** Training Lab shows the live readiness row
+  under the approval ladder.
+* **L2/L3 MISCONFIG SWEEP (user: "use the l2/l3 data we have — disk data is available")** — three
+  real defects found and fixed on the Databento XNAS-ITCH archive (D:, 24 daily MBO files
+  May 26–Jun 25): (1) FOUR files were registered under **NQ** but verified to contain ONLY
+  symbol=QQQ rows (XNAS ITCH = Nasdaq equities book; NQ futures trade on GLBX) → relabeled, the
+  contaminated `l2feat_NQ` store deleted; (2) only 12 of 24 files were registered — the missing
+  ten cover **May 26–Jun 8, which OVERLAPS the bar store**, so the L2↔candidate join no longer
+  waits on a bar refresh; (3) the synthesis had NO instrument filter (a full-venue file would
+  aggregate the entire tape as one symbol's features) → `WHERE symbol=…` now applied in both the
+  duckdb and pandas paths, and a mislabeled source ERRORS instead of mixing. Plus ops hardening:
+  duckdb synthesis now runs under a 2GB memory cap with disk spill (a 67M-row day OOM'd next to
+  training). Store rebuilt clean from all 24 files; QQQ dataset re-joined and retrained.
+* **PINE↔CONFIG SYNC TEST (`BOT/tests/test_pine_config_sync.py`, 7 tests)** — parses the
+  `auto_asset` blocks out of STACK+AUTO and asserts them equal to `asset_config`/`layer3_kwargs`
+  per symbol, that both Pines carry IDENTICAL blocks, and that the auto tooltip cites the CURRENT
+  STRATEGY_VERSION. The three hand-synced tables can no longer drift silently (F75 class closed).
+* **CHECKLIST SWEEP (same day — user: "finish the underlying partial/incomplete tasks")**:
+  ML explanations now RENDERED on the main dashboard (hover P(win) → "why" top for/against
+  feature drivers from the champion; hover eR → all four head reads: P(TP2)/P(stop)/expected-R/
+  P(no-trade-better)) · zone engine PROMOTED `research/orb_liquidity_zones.py` →
+  `bot.strategy.liquidity_zones` (production F67 clean-air no longer imports from research/;
+  shim keeps the research drivers + old CLI working) · stale rows corrected: reversal-veto
+  gauntlet was already RUN (v6 — no detector qualifies as a hard veto, they stay features),
+  per-slice gates already ENFORCED in promotion, swing modules DONE (both lineages 7/7) ·
+  research/→tools wholesale split closed WON'T-DO (133 studies cross-referenced by F-numbers +
+  run kinds). Remaining opens are all external: champion needs NEW data (L2/bar-store overlap),
+  scalp blocked on same, OneDrive move + TV compiles in the user's hands, AITP 7–8 gated on
+  paper results by design. 123 tests green.
+
+---
+
 ## 2026-07-06 (v13) — RULE orb-standard-2026.07.6: cooldown/stale/next-candle verdicts (F77)
 
 ⚠️ STACK + AUTO changed (stale default + tooltips) — **TradingView compile needed.**

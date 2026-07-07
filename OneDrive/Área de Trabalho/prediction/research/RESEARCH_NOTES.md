@@ -4,6 +4,104 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
+## F82 — GEOMETRY TUNE 2: the first-touch hints gridded on full history (2026-07-07)
+`geometry_tune2.py` — the LIVE first-touch study (14 trades: median MFE 0.4R, 71% stop-first)
+suggested nearer targets / bank-near+trail. Gridded honestly (14 exit cells × QQQ/SPY/NQ, full
+07.7 stack, IS nominates / OOS judges) vs the goal band:
+- **No cell reaches WR 75-85 + PF ≥ 1.7 on both halves** (the IS era gap persists — same F80).
+- **BEST band-compatible cell**: QQQ scale_be tp1=0.45 sf=0.5 tp2=2.0 — IS PF 1.28 / OOS 1.59,
+  WR ~74 — beats pure tight-target (b=0.45: 1.10/1.25); the bank-half-near + BE-runner shape is
+  directionally right, still 0.11 short of the PF gate. Candidate for worker-q-0.2 as the
+  journal grows.
+- **NEW standout profile — the CHANDELIER TRAIL**: QQQ OOS **PF 2.30** (dd −7.9), SPY OOS
+  **PF 2.04** (dd −4.7), positive BOTH halves (IS 1.45/1.32) — the best PF of anything tested,
+  but at ~50% WR: it exceeds the goal's PROFITABILITY leg while failing the WR leg. If the goal
+  is read as expectancy-first, the trail is the strongest exit yet found on equities; recorded
+  as a research candidate (trail-eq-0.1?), NOT adopted (violates the WR band as specified).
+- NQ: nothing in band (IS PF ≤ 0.94 everywhere); trail OOS 1.31.
+Verdict: geometry alone still can't buy the full band on history — the paper journal + veto/
+selectivity remain the path; the trail profile is the new thread worth a gauntlet if the user
+widens the goal to expectancy.
+
+## F81 — LOSER-VETO round + worker verdicts → Boss/Workers assembly shipped (2026-07-06/07)
+`worker_veto.py`: ONE pooled LGBM (QQQ+SPY+NQ, 1606 IS trades, loser rate 24.5% at tight
+targets), P(loser) from the 59-feature PIT snapshots; τ per worker fit on IS (cost ≤ 25%),
+OOS judges, 2×-ALL-frictions stress (net2 = 2·net − gross) on every verdict:
+- **QQQ**: veto HURTS (OOS PF 1.79 → 1.42 — it cuts winners). Worker Q's config = slope-STRONG
+  tier alone: **OOS IN BAND 82.6/1.79/−3.0 AND 2×-stress PF 1.69** — blockers: IS era PF 1.21,
+  OOS n 23. NOT frozen; paper accrues the judge data.
+- **SPY**: veto HELPS (OOS 82.7/1.43 → **84.5/1.62**, stress 1.46, cost 23%) — 0.08 short of
+  the PF band. NOT frozen.
+- **NQ**: veto hurts (1.34 → 1.20). Worker N = early-only tier alone (OOS 1.34, DD −7.5).
+**Assembly shipped anyway (infrastructure ≠ adoption)**: Boss orchestrator (`bot/boss.py` —
+contracts, rolling conformance auto-disarm, correlation buckets ONE-macro-bet rule, obsolete
+lock) · workers in modules.py (Q/S/N research_candidate · **E/G OBSOLETE** with evidence) ·
+dashboard Boss panel + collapsed graveyard · evolution engine (`bot/evolve.py`, nightly +
+`/api/evolve`) whose FIRST run drafted `emergent-qqq-dir_seq-0.1` (the dir-seq gate blocks 847
+QQQ setups earning +0.27R OOS hypothetically — gauntlet review queued, never auto-adopted) ·
+all five lineages laddered to paper (E/G signals-only per user rule). Ops: the OOM plague was
+FIVE stacked uvicorn supervisors + OneDrive's 12.9GB commit balloon — killed/restarted; commit
+28.3 → 15.4GB.
+
+## F80 — WORKER-SPEC DISCOVERY round 1: geometry grids + selectivity tiers (2026-07-06)
+BOSS_WORKERS_PLAN steps 2-3 (`worker_specs.py`, `worker_cohorts.py`) vs the band WR 75-85 ·
+PF ≥ 1.7 · DD ≤ 10R, IS nominates / OOS judges, under the full 07.7 stack, geometry-only swap.
+- **WR half of the band: CONQUERED** at tight targets everywhere but GC (OOS: QQQ 78-82, SPY
+  76-83, NQ 75-81, ES 75-80). **PF is the gap** on every symbol.
+- **Tiers that honestly improve BOTH halves**: QQQ slope-STRONG (OOS b=.40: WR 82.6 **PF 1.79
+  DD −3.0 — OOS IN BAND**, but IS PF 1.21 and n small 23 OOS) · NQ early-only (<12:00 ET; OOS
+  PF 1.16→1.34, DD −13.8→−7.5, n 343 — big and real, IS still 0.82) · ES late-only (marginal,
+  PF stays <1) · GC slope+early combo (0.21/0.46 — hopeless).
+- **Tiers REJECTED as era artifacts** (great OOS, worse IS): QQQ/SPY late-only (OOS PF 2.4-2.7!
+  but IS degrades — not credible), SPY slope-STRONG (OOS collapses 0.64), SPY wide-OR.
+- **STRUCTURAL FINDING**: recent ~1.5y (OOS) massively outperforms the older era at tight
+  targets on every symbol (NQ IS PF 0.69 vs OOS 1.16). The high-WR game may be regime-dependent;
+  the veto model + live paper data must resolve whether the recent regime is the tradable one.
+- **Verdicts so far**: no worker freezable yet · QQQ closest (slope-STRONG tier, needs IS/n) ·
+  NQ has a real tier (early-only) · SPY needs the veto · **ES + GC on the OBSOLETE track** for
+  the high-WR worker (GC ladders to paper signals-only per user rule). Next lever: loser-veto
+  (step 4), then contracts freeze only for what passes.
+
+## F79 — FRESH ENTRY FROM FIRST PRINCIPLES (a-priori spec, zero repo inputs) (2026-07-06)
+User: "create an entry from scratch based on your knowledge but nothing from what we share here."
+`fresh_entry.py` — spec frozen BEFORE data (Street Smarts HOLY GRAIL, intraday adaptation):
+ADX(14)≥30 Wilder + EMA20 rising/falling → pullback tags EMA20 → first bar taking out the
+pullback bar's extreme fires; 10-bar pending timeout, RTH only, house exit/costs as harness,
+literature defaults, SINGLE-SHOT (no tuning pass, mirror-symmetric).
+- **QQQ n251 +0.145R PF 1.21 dd −29.9 OOS +0.211 · SPY n249 +0.135R PF 1.19 dd −22.1 OOS
+  +0.409** — an independent entry alive after costs on both equities, first try.
+- **NQ n413 +0.114R PF 1.17 dd −38.7 OOS +0.064** — marginal (IS-driven; OOS ~flat).
+- **ES n416 −0.112R PF 0.86 dd −77.9** — DEAD (consistent with ES's cost fragility).
+Verdict: equities-only research candidate — NOT adopted; next step if pursued: 7/7 gauntlet on
+QQQ/SPY, then a `modules.py` lineage (candidate Worker under the BOSS_WORKERS_PLAN). Value
+beyond the numbers: an entry family fully independent of the ORB stack = diversification raw
+material for the Boss/Workers assembly.
+
+## F78 — PULLBACK deep-research (the deferred "purple" block) → rule 07.7 (2026-07-06)
+`pullback_deep.py` — all TEN deferred refinements cohort-tested against the live-identical 07.6
+base. Four needed NEW engine knobs (built for the test): `min_pullback_or` (%OR-width depth),
+`retest_reclaim` (retest bar must CLOSE back through the target), `gap_max_atr` (skip big-gap
+days), `side_budget_r` (per-side daily loss stop, enforced in the trade loop).
+- **ADOPTED — NQ/MNQ only, combined verify:** chase-cap **1.0→1.5** (+20.7R at the SAME maxDD;
+  gained +0.445×42, dropped trades were losers) + **impulse-midpoint retest** (+13.5R, DD
+  −42→−41; gained +0.405×29, lost cohort −0.278 avg = junk). Combined: **NQ 257.6→283.8R,
+  PF 1.36, DD −42.4, OOS +0.271**. Per-asset `retest_mode` added to asset_config; canonical +
+  live scan + both Pines (auto_asset sets "Impulse midpoint" on NQ/MNQ) carry it.
+- **REJECTED everywhere** (blocked cohorts positive — the gates cost money): vol-confirm 1.0/1.2×
+  (QQQ total 158→125/115, SPY collapses, NQ 258→121/58) · gap-skip 2/4×ATR (every blocked-day
+  cohort positive, e.g. NQ 2× forfeits +159R) · side budget 1/2R (NQ's third entry after two
+  losses WINS +0.191×141) · %OR-depth 0.25/0.5 (drops winners, admits losers) · reclaim retest
+  (lost +0.559×12) · VWAP retest (lost +0.305×26) · tighter chase 0.5/0.75 (lost +0.447×79 /
+  +0.479×40).
+- **CONFIRMED at current values:** timeout 8 = local optimum (pbt_4 loses winners, pbt_16 admits
+  losers, pbt_0 waits into junk) · min_pullback_atr is a NO-OP at 15m (zero trade diff at 0.25
+  AND 0.50 — releasing retests always retrace deeper) · QQQ/SPY/ES keep chase 0: even refined
+  pullback modes forfeit more than they save (pb_on lost cohorts +0.58×115 QQQ / +0.42×142 SPY /
+  +0.15×223 ES; every pb_on total below base).
+**07.7 canonical (= live, 123 tests):** QQQ/SPY/ES byte-identical to 07.6 · NQ n1370 +0.207R
+PF 1.36 **total +283.8R** OOS +0.271. The purple block is CLOSED — ten items, two adoptions,
+eight honest kills.
+
 ## F77 — cooldown / stale / next-candle cohorts → rule 07.6 (2026-07-06)
 `blocker_edge3.py` (user: "test against cooldown, stale, next-candle") under the live-identical
 07.5 base — the prior cd/stale gauntlet adoptions were made under the DIVERGENT old config.

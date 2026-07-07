@@ -48,6 +48,7 @@ def _persist_runtime():
             {"kill_switch": _state.get("kill_switch", False),
              "paper_autotrade": _state.get("paper_autotrade", False),
              "paper_placed": sorted(_paper["placed"])[-500:],
+             "last_scan_at": _latest.get("ts"),   # phase-7 health-heartbeat check reads this
              "saved_at": _now()}), encoding="utf-8")
     except Exception:
         pass
@@ -163,6 +164,9 @@ def _paper_autotrade():
         grade = s.get("grade")
         if not s.get("tradeable") or grade not in ("A+", "A", "B"):   # B → A+ (skip C = info-only/unverified)
             continue
+        if str(s.get("boss", "")).startswith("stand_down"):       # BOSS one-macro-bet rule (review fix
+            continue                                              # 2026-07-07): correlated same-direction
+                                                                  # fires — only the bucket LEAD places
         if s.get("source_healthy") is False:      # STALE-DATA GATE: never place an order off a stale/dirty feed
             continue
         if s.get("signal_state") == "invalid":    # ZONE GATE: structure already broke against the signal
@@ -188,13 +192,47 @@ def _paper_autotrade():
             _paper["log"].append({"ts": _now(), "symbol": s.get("symbol"), "error": str(e)[:120]})
 
 
-def _autotrack_acceptable():
+def _worker_shadow_study():
+    """BOSS WORKERS paper study (user 2026-07-07: approve workers -> they paper trade). Each
+    PAPER-APPROVED worker records its OWN tight-target what-if trades (tagged family=worker id),
+    resolved by track_outcomes and scored per worker (Boss conformance / phase78). Real Alpaca
+    brackets stay on the core system — one paper account nets a single position per symbol, so
+    five workers on two symbols can only run as parallel shadow studies, which is exactly what
+    judges them for promotion. No broker call here; nothing is placed."""
+    try:
+        from bot.boss import shadow_decisions
+        from bot.tracker import record_decision
+        for dec in shadow_decisions(_latest.get("signals") or []):
+            try:
+                record_decision(dec, taken=True, auto=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _capture_15m_journal():
+    """15m LIVE PASS (user 2026-07-07: pursue the 15m lineage + 5m, feed live data into the
+    training lab). A second scan at 15m for the two live-entitled equities; its acceptable signals
+    are journaled tagged tf=15m so build_live_labels/attach_live_journal grow the 15m lineage's
+    training corpus. No orders — journal only. Approval-independent (learning, not trading)."""
+    try:
+        from bot.live import scan_watchlist
+        sigs = scan_watchlist(["QQQ", "SPY"], bars_back=12, persist=False,
+                              with_options=False, tf="15m")
+        _autotrack_acceptable(sigs)
+    except Exception as e:
+        _latest["journal15m_err"] = str(e)[:120]
+
+
+def _autotrack_acceptable(signals=None):
     """Shadow-track every ACCEPTABLE live signal (tradeable + grade A+/A/B) as a what-if decision, so the
     Recent-Candidates / Performance / Live-vs-Backtest panels update from the engine's own signal flow —
     no manual Take needed and no order placed. Dedup'd by a stable per-bar key; never clobbers a manual
-    decision. track_outcomes() then walks bars to resolve stop/TP1/TP2 first-touch."""
+    decision. track_outcomes() then walks bars to resolve stop/TP1/TP2 first-touch. `signals` defaults
+    to the latest 5m scan; the 15m pass passes its own list (tf tag differentiates the journal rows)."""
     from bot.tracker import record_decision
-    for s in (_latest.get("signals") or []):
+    for s in (signals if signals is not None else (_latest.get("signals") or [])):
         if not s.get("tradeable") or s.get("grade") not in ("A+", "A", "B"):
             continue
         if s.get("signal_state") == "invalid":      # ZONE GATE: don't shadow-track a structurally dead signal
@@ -202,14 +240,15 @@ def _autotrack_acceptable():
         if (s.get("bars_ago") or 0) < 1:            # BUGFIX: only CONFIRMED bars — never the forming bar whose
             continue                                # close (=entry) drifts each scan and repaints the signal
         c = s.get("candidate") or {}
-        # dedup by BAR (generated_at), NOT the entry price — one tracked signal per bar/side/session, not one
-        # per price tick. (The old key put s['entry'] in it, so a drifting live close made 6 rows for 1 breakout.)
-        key = f"{s['symbol']}:{s.get('family')}:{s.get('session')}:{s['side']}:{c.get('generated_at') or ''}"
+        _tf = s.get("timeframe") or "5m"
+        # dedup by BAR (generated_at) + TF, NOT the entry price — one tracked signal per bar/side/session/tf
+        key = f"{s['symbol']}:{s.get('family')}:{s.get('session')}:{s['side']}:{_tf}:{c.get('generated_at') or ''}"
         try:
             record_decision({"candidate_id": key, "symbol": s["symbol"], "side": s["side"],
                              "family": s.get("family"), "session": s.get("session"), "entry": s["entry"],
                              "stop": s["stop"], "tp1": s.get("tp1"), "tp2": s.get("tp2"),
                              "grade": s.get("grade"), "generated_at": c.get("generated_at"),
+                             "tf": s.get("timeframe") or "5m",   # journal->training-lab tf tag (5m default; 15m pass tags 15m)
                              # POST-TRADE LEARNING QUEUE (AITP §18): the PIT snapshot rides with the
                              # decision so resolved outcomes become training rows (bot.ml.live_labels)
                              "pit_features": s.get("pit_features"),
@@ -237,10 +276,19 @@ def _scan_loop():
                 # nothing but makes signal capture survive server restarts — with 4 (20 min) the
                 # NQ B-long on 2026-07-06 fired during a reload storm and was never recorded
                 _latest["signals"] = scan_watchlist(_WATCH, bars_back=12, persist=False)
+                try:                             # BOSS correlation buckets (BOSS_WORKERS_PLAN §4):
+                    from bot.boss import allocate  # same-direction fires on correlated symbols
+                    allocate(_latest["signals"])   # are ONE macro bet — annotates lead/stand_down
+                except Exception:
+                    pass
                 _latest["ts"] = _now(); _latest["error"] = None
-                _autotrack_acceptable()          # shadow-track ACCEPTABLE signals -> Candidates/Performance/scorecard update
+                _autotrack_acceptable()          # shadow-track ACCEPTABLE 5m signals -> journal (training-lab feed)
+                if _mkt_tick["n"] % 3 == 0:       # 15m LINEAGE live journal (every ~3 min — 15m bars are slower)
+                    _capture_15m_journal()
+                _worker_shadow_study()           # BOSS WORKERS: per-worker tight-target what-if study (approved workers)
                 _paper_autotrade()               # STUDY: place paper orders when the toggle is on
                 track_outcomes()                 # resolve first-touch outcomes of tracked signals each cycle
+                _persist_runtime()               # heartbeat (last_scan_at) for the phase-7 health check
                 try:                             # persist flow scores each cycle (data-first — future feature backfill)
                     from bot.orderflow.persist import snapshot as _of_snap
                     _of_snap(list(dict.fromkeys(s.get("symbol") for s in (_latest.get("signals") or [])
@@ -264,6 +312,33 @@ def _scan_loop():
                         _latest["duel_tick"] = run_duel_once()
                     except Exception as e:
                         _latest["duel_tick"] = {"error": str(e)[:120]}
+                if _mkt_tick["n"] % 60 == 0:      # AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06):
+                    try:                          # the paper study evaluates itself hourly; when
+                        from bot.phase78 import evaluate as _p78   # done, the 'live' stage
+                        _latest["phase78"] = _p78()                # advances — lock stays manual
+                    except Exception as e:
+                        _latest["phase78"] = {"error": str(e)[:120]}
+                    try:                          # BOSS conformance watch (hourly, same cadence)
+                        from bot.boss import evaluate as _boss
+                        _latest["boss"] = _boss()
+                    except Exception as e:
+                        _latest["boss"] = {"error": str(e)[:120]}
+                    try:                          # JOURNAL INTEGRITY watch (hourly): corruption
+                        from bot.tracker import integrity as _integ   # never sits unnoticed
+                        _latest["journal_integrity"] = _integ()
+                        if not _latest["journal_integrity"]["ok"]:
+                            from bot.audit import log as _audit
+                            _audit("journal_integrity_alert",
+                                   dupes=len(_latest["journal_integrity"]["dupes"]),
+                                   bad=len(_latest["journal_integrity"]["bad_levels"]),
+                                   no_id=len(_latest["journal_integrity"]["missing_bar_identity"]))
+                    except Exception as e:
+                        _latest["journal_integrity"] = {"error": str(e)[:120]}
+                if _mkt_tick["n"] % 1440 == 0 and _mkt_tick["n"] > 0:   # EVOLUTION nightly
+                    try:                          # SUBPROCESS (review fix 2026-07-07): the deep
+                        _spawn_evolve_deep()      # miner imports research modules that chdir and
+                    except Exception as e:        # runs backtests — never inside the live server
+                        _latest["evolve"] = {"error": str(e)[:120]}
                 _mkt_tick["n"] += 1
             except Exception as e:
                 _latest["error"] = str(e)
@@ -514,6 +589,15 @@ def performance():
     return p if p.get("trades") else perf.summary(_journal)
 
 
+@app.get("/api/journal/integrity")
+def journal_integrity():
+    """Journal integrity audit (user 2026-07-07: same-bar entry/TP/stop corruption watch):
+    same-lineage duplicates, impossible level geometry, rows without bar identity. Also runs
+    hourly in the scan loop and rides the journal_feed panel."""
+    from bot.tracker import integrity
+    return integrity()
+
+
 @app.get("/api/study")
 def study():
     """First-touch study: what hit first (stop vs TP) + MFE/MAE + tuning hints for stop/target accuracy."""
@@ -607,6 +691,133 @@ def scorecard():
     except Exception:
         pass
     return _sc()
+
+
+@app.get("/api/boss")
+def boss_status():
+    """THE MAIN BOSS (BOSS_WORKERS_PLAN §4): worker contracts + rolling conformance + armed
+    states. Gating scope is the WORKER lineages (worker-*): the classic orb-standard paper
+    study is outside Boss scope and keeps trading under its own approval."""
+    from bot.boss import evaluate
+    return evaluate()
+
+
+@app.post("/api/boss/arm")
+def boss_arm(worker: str, on: bool = True, _=Depends(auth)):
+    """Manually arm/disarm a worker. OBSOLETE workers refuse to arm (fresh gauntlet required)."""
+    from bot.boss import arm
+    return arm(worker, on)
+
+
+_jf_cache = {"t": 0.0, "data": None}
+
+
+@app.get("/api/training/journal_feed")
+def training_journal_feed():
+    """THE JOURNAL IS THE TRAINING LAB (user 2026-07-07). Shows the live trade journal that feeds
+    continuous learning — per symbol × timeframe: how many resolved rows carry PIT features (the
+    trainable ones) and how they fold into each lineage's dataset. This growth needs NO paper
+    approval: journaling (shadow-track) and continuous training both run independent of it; the
+    ONLY persisted substrate is the journal (live bars are transient — the scan is persist=False).
+    30s cache (review fix): the scan cycle is 60s, so per-poll table rebuilds bought nothing."""
+    if _jf_cache["data"] is not None and _time.time() - _jf_cache["t"] < 30:
+        return _jf_cache["data"]
+    from bot.ml.live_labels import build_live_labels
+    lj = build_live_labels(save=False)
+    from bot.ml.features_pit import FEATURE_COLUMNS
+    feat0 = FEATURE_COLUMNS[0]
+    out = {"total_rows": int(len(lj)), "by_symbol_tf": {},
+           "approval_required": False,
+           "note": "learning runs without paper approval; only the journal is saved"}
+    out["by_strategy"] = {}
+    out["recent"] = []
+    if len(lj):
+        lj = lj.copy()
+        lj["tf"] = lj.get("tf", "5m")
+        lj["family"] = lj.get("family", "?").fillna("?")
+        for (sym, tf), g in lj.groupby(["symbol", "tf"]):
+            taken = g[g["taken"] == 1]
+            trainable = taken[taken[feat0].notna()]
+            out["by_symbol_tf"][f"{sym}@{tf}"] = {
+                "rows": int(len(g)), "taken": int(len(taken)),
+                "trainable_with_features": int(len(trainable)),
+                "win_rate": round(float((trainable["net_r"] > 0).mean()), 3) if len(trainable) else None}
+        # WHICH STRATEGY made the trade (user 2026-07-07): break the journal down by family/lineage
+        for fam, g in lj.groupby("family"):
+            tk = g[g["taken"] == 1]
+            out["by_strategy"][str(fam)] = {
+                "rows": int(len(g)), "taken": int(len(tk)),
+                "win_rate": round(float((tk["net_r"] > 0).mean()), 3) if len(tk) else None,
+                "avg_r": round(float(tk["net_r"].mean()), 3) if len(tk) else None}
+        # recent journal rows WITH their strategy (newest first)
+        for _, r in lj.sort_values("ts").tail(40).iloc[::-1].iterrows():
+            nr = r.get("net_r")
+            out["recent"].append({
+                "ts": str(r["ts"])[:16], "strategy": str(r.get("family", "?")),
+                "symbol": r["symbol"], "tf": r["tf"], "side": r["side"],
+                "outcome": r.get("outcome"),
+                "net_r": (round(float(nr), 2) if nr == nr else None)})
+    out["continuous_syms"] = _cont["syms"]
+    out["continuous_on"] = _cont["on"]
+    try:                                           # integrity rides the panel (cached with it)
+        from bot.tracker import integrity
+        integ = integrity()
+        out["integrity"] = {"ok": integ["ok"], "dupes": len(integ["dupes"]),
+                            "bad_levels": len(integ["bad_levels"]),
+                            "missing_bar_identity": len(integ["missing_bar_identity"])}
+    except Exception:
+        pass
+    _jf_cache["t"], _jf_cache["data"] = _time.time(), out
+    return out
+
+
+_evolve_proc = {"p": None}
+
+
+def _spawn_evolve_deep():
+    """Run the deep evolution pass in its OWN process (review fix 2026-07-07: the exit/TP miner
+    imports research modules that os.chdir and run backtests — isolating protects the always-on
+    server's cwd and memory). Results land in the saved report the endpoint serves."""
+    if _evolve_proc["p"] is not None and _evolve_proc["p"].poll() is None:
+        return False                                # one at a time
+    from bot.config import BOT_ROOT
+    _evolve_proc["p"] = _subprocess.Popen([_sys.executable, "-m", "bot.evolve", "--deep"],
+                                          cwd=str(BOT_ROOT), stdout=_subprocess.DEVNULL,
+                                          stderr=_subprocess.DEVNULL)
+    return True
+
+
+@app.get("/api/evolve")
+def evolve_report(deep: bool = False):
+    """EVOLUTION ENGINE (BOSS_WORKERS_PLAN §4b): the SAVED mining report + emergent drafts —
+    serving the file keeps dashboard polls free (review fix: mining ran full table/parquet scans
+    per page refresh). deep=true spawns the full miner as a subprocess (also the nightly tick)."""
+    try:
+        from bot.config import read_json
+        from bot.evolve import _load_drafts, REPORT
+        rep = read_json(REPORT, default={"note": "no mining run saved yet — click Mine now or "
+                                                 "wait for the nightly tick"})
+        out = dict(rep)
+        if deep:
+            out["deep_started"] = _spawn_evolve_deep()
+        out["mining"] = (_evolve_proc["p"] is not None and _evolve_proc["p"].poll() is None)
+        out["drafts"] = _load_drafts()
+        return out
+    except Exception as e:                        # surface the cause instead of a bare 500
+        import traceback
+        return {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-400:]}
+
+
+@app.get("/api/phase78")
+def phase78(advance: bool = True):
+    """AITP phase 7-8 readiness + auto-advance (user 2026-07-06: "whenever the paper study is
+    done it will be implemented automatically into these phases"). Evaluates the paper-study exit
+    criteria, the phase-7 hardening checks and execution quality; when ALL are green the 'live'
+    approval stage auto-advances for the current rule version (audit-logged; the LIVE_APPROVED.lock
+    file stays manual — double gate preserved; ES excluded by the cost-stress rule).
+    ?advance=false = dry evaluation only."""
+    from bot.phase78 import evaluate
+    return evaluate(auto_advance=bool(advance))
 
 
 @app.get("/api/candidates")
@@ -1080,12 +1291,16 @@ def training_run(kind: str = "ml", sym: str = "QQQ", args: str = "", _=Depends(a
 # A background worker cycles dataset -> ML -> NN per symbol (subprocesses, sequential) on an
 # interval. Runs train CHALLENGERS with --no-promote: a gate-passing model is registered as
 # PENDING and waits for the user's Approve click on the Training Lab. Web-controllable.
-_cont = {"on": False, "interval_min": 360, "syms": ["QQQ", "SPY", "NQ", "ES", "ALL"],
+# QQQ@15m / SPY@15m = the 15m LINEAGE (user 2026-07-07: pursue 15m + 5m, fed by the live journal).
+# The dataset build unions the growing live journal, so these retrain as live QQQ/SPY trades accrue.
+_cont = {"on": False, "interval_min": 360,
+         "syms": ["QQQ", "SPY", "NQ", "ES", "QQQ@15m", "SPY@15m", "ALL"],
          "cycle": 0, "last_start": None, "last_end": None, "current": None, "history": []}
 
 
 def _cont_run(kind: str, sym: str) -> int:
-    hit = _train_cmds(kind, sym, promote=False)
+    base, _, tf = sym.partition("@")            # "QQQ@15m" -> base QQQ + --tf=15m (5m default = no suffix)
+    hit = _train_cmds(kind, base, promote=False, extra=([f"--tf={tf}"] if tf else None))
     if hit is None:
         return -1
     cmd, cwd = hit
@@ -1197,9 +1412,24 @@ def _approval_versions() -> dict:
                               "evidence": "A/B + gauntlet + parity reports on this page"}}
     for m in STRATEGY_MODULES:
         v = m.get("strategy_version")
-        if v and v != STRATEGY_VERSION and m.get("status") == "gauntlet_pass":
-            out[v] = {"what_it_is": f"{m['id']} — {m.get('notes', '')[:220]}",
-                      "evidence": "swing_gauntlet.json / strat_daily run (research reports)"}
+        if not v or v == STRATEGY_VERSION:
+            continue
+        st = m.get("status")
+        # gauntlet-passed modules AND the BOSS WORKERS (research_candidate / obsolete signals-only)
+        # get their own ladder — a worker must be paper-approvable so its live study can begin,
+        # and obsolete workers still ladder to paper as SIGNALS-ONLY (user gold rule 2026-07-06)
+        is_worker = str(v).startswith("worker-")
+        if st == "gauntlet_pass" or is_worker:
+            tag = ("BOSS WORKER" if is_worker else "module")
+            if st == "obsolete":
+                tag = "BOSS WORKER — OBSOLETE (paper = signals-only; Boss won't arm)"
+            elif is_worker:
+                tag = "BOSS WORKER — research_candidate (paper study opens the band judgment)"
+            out[v] = {"what_it_is": f"[{tag}] {m['id']} — {m.get('notes', '')[:200]}",
+                      "evidence": ("worker_specs / worker_cohorts / worker_veto reports"
+                                   if is_worker else
+                                   "swing_gauntlet.json / strat_daily run (research reports)"),
+                      "status": st}
     return out
 
 
@@ -1406,9 +1636,11 @@ def data_sources():
 
 
 @app.post("/api/data/register")
-def data_register(path: str, symbol: str = "NQ", _=Depends(auth)):
-    """Register an on-disk L2/L3 file (external drive fine — nothing is copied). Then run
-    kind=l2sync with sym=<source id> to synthesize its features."""
+def data_register(path: str, symbol: str | None = None, _=Depends(auth)):
+    """Register an on-disk L2/L3 file (external drive fine — nothing is copied). AUTO-LABEL
+    (2026-07-06): the file's own `symbol` column decides the label (multi-symbol files split
+    into one source per symbol); pass `symbol` only as the fallback for files without one.
+    Then run kind=l2sync with sym=<source id> to synthesize its features."""
     from bot.ml.l2_features import register
     return register(path, symbol)
 

@@ -614,7 +614,8 @@ def signal_zone_state(side: str, price: float, or_high: float | None, or_low: fl
 
 
 if __name__ == "__main__":   # self-test: the canonical long-side flow + the short mirror + math
-    cfg = EntryStandard(cooldown_bars=2, stale_bars=6, chase_atr=1.0, retest_atr=0.5)
+    cfg = EntryStandard(cooldown_bars=2, stale_bars=6, chase_atr=1.0, retest_atr=0.5,
+                        max_entries=2)   # the flow below exercises a second entry (default is 1 since F76)
     sm = OrbSideState("long", or_high=730.0, or_low=723.9, cfg=cfg)
     sm.on_bar(high=726.0, low=724.0, close=725.5, struct_state=1, vwap=724.0)     # ctx ok, below mid
     assert sm.state is SideState.ARMED

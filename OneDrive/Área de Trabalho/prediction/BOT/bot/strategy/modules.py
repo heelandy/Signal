@@ -102,6 +102,42 @@ STRATEGY_MODULES = [
               "ret/premium PF 3.30 9/9 yrs OOS +1.11, SPY +0.63 PF 2.51 9/9 (debit/credit fail). "
               "Ladder lineage: volbreak-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
+    # ── BOSS WORKERS (docs/BOSS_WORKERS_PLAN.md, discovery rounds F80 2026-07-06) — the
+    # high-WR per-symbol specs (band: WR 75-85 · PF >= 1.7 · DD <= 10R OOS) under the Main Boss ──
+    {"id": "worker_q_qqq", "asset_class": "equities", "style": "day_trading",
+     "symbols": ["QQQ"], "status": "research_candidate", "strategy_version": "worker-q-0.1",
+     "notes": "HIGH-WR worker: 07.7 stack · target 0.40x stop · slope-STRONG tier. OOS IN BAND "
+              "(WR 82.6 PF 1.79 DD -3.0) but IS PF 1.21 and OOS n=23 — needs more data/holdout "
+              "before freeze; the pooled loser-veto HURT it (cut winners) and is NOT deployed. "
+              "Boss contract: bot/boss.py worker-q",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "worker_s_spy", "asset_class": "equities", "style": "day_trading",
+     "symbols": ["SPY"], "status": "research_candidate", "strategy_version": "worker-s-0.1",
+     "notes": "HIGH-WR worker: 07.7 stack · target 0.33x stop (no tier survived both halves — "
+              "slope/wide-OR were era artifacts). OOS WR 82.7 PF 1.43; needs the veto or more "
+              "data to close the PF gap. Boss contract: worker-s",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "worker_n_nq", "asset_class": "futures", "style": "day_trading",
+     "symbols": ["NQ", "MNQ"], "status": "research_candidate", "strategy_version": "worker-n-0.1",
+     "notes": "HIGH-WR worker: 07.7 stack · target 0.30x stop · EARLY-ONLY tier (<12:00 ET — "
+              "improves BOTH halves: OOS PF 1.16->1.34, DD -13.8->-7.5, n343). IS era still "
+              "PF 0.82 — regime question open. Boss contract: worker-n",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "worker_e_es", "asset_class": "futures", "style": "day_trading",
+     "symbols": ["ES", "MES"], "status": "obsolete", "strategy_version": "worker-e-0.1",
+     "notes": "OBSOLETE 2026-07-06 (worker_specs + worker_cohorts F80): PF < 1 at EVERY "
+              "tight-target cell and tier (best OOS 0.93 late-only), DD -23..-31R, on top of the "
+              "standing 2x-slip fragility. High-WR ES worker does not exist under current costs. "
+              "Revival requires a fresh full gauntlet on NEW data. ES stays a SIGNALS-ONLY "
+              "worker for the Boss's market read",
+     "approval_requirements": "fresh full gauntlet on new data, then the ladder from research"},
+    {"id": "worker_g_gc", "asset_class": "futures", "style": "day_trading",
+     "symbols": ["GC", "MGC"], "status": "obsolete", "strategy_version": "worker-g-0.1",
+     "notes": "OBSOLETE 2026-07-06 (F80): IS PF 0.07-0.25 at every cell; best combo "
+              "(slope+early) OOS PF 0.46 — the F30 edge stays non-reproducible. Per user rule G "
+              "still LADDERS TO PAPER as SIGNALS-ONLY (paper evidence may promote or bury it "
+              "for good). Boss refuses to arm it",
+     "approval_requirements": "paper signals-only; revival = fresh full gauntlet on new data"},
     {"id": "equities_connors_rsi2", "asset_class": "equities", "style": "swing_trading",
      "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "connors-1d-0.1",
      "notes": "F52 GRADUATE re-confirmed 2026-07-05: Connors RSI-2 (close>SMA200 & RSI2<10 long / "
