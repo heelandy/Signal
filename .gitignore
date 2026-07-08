@@ -1,0 +1,54 @@
+# HIGHSTRIKE — keep the repo light; raw data + derived stores are large and rebuildable
+# (see README "Deploy from scratch" to regenerate everything from the source 1m files).
+
+# derived data stores (parquet, duckdb, continuous-1m) — rebuild via the pipeline
+data/
+
+# raw market data (Databento 1m exports, VIX) — 100 MB+ each, re-download per README step 1
+*.csv
+*.zst
+2011-2018vix*
+
+# secrets — real keys live in .env (working copy, ignored); .env.example is the placeholder template
+.env
+**/.env
+.env.local
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# claude code tool config (not project code)
+.claude/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# runtime logs + PID files (bot review 2026-07: were committed by accident)
+*.log
+*.log.*
+webull_data_sdk.log*
+BOT/config/server.pid
+
+# broker/SDK token caches — NEVER commit (bot review 2026-07: BOT/conf/token.txt held a live
+# Webull access token; it was untracked and MUST be rotated in the Webull portal)
+BOT/conf/
+token.txt
+
+# --- local-repo setup (2026-07-08): large/derived/secret files not to commit ---
+.venv/
+*.parquet
+*.jsonl
+*.db
+*.db-wal
+*.db-shm
+conf/token.txt
+opra_shards/
+BOT/data/

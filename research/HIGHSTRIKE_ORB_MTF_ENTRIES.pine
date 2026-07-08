@@ -1,0 +1,463 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © heelandy
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE ORB — MTF ENTRIES  (RESEARCH indicator; NOT part of the frozen production set)
+// Built on the V1 indicator core (same OR, gates, regime, SL/TP plan) + a multi-timeframe ENTRY
+// dashboard that surfaces three entries the way the backtest research supports them:
+//   • 5m  STOP entry   — fill on the touch of the 5m breakout level   (Finding 8: stop wins on 5m)
+//   • 15m RETEST entry — break of the 15m OR, then enter on the pullback to the OR edge
+//                                                                      (Finding 8: retest wins on 15m)
+//   • 1m  SNIPER entry — the SAME 5m level, executed on 1m with a tight 1m-ATR stop => more R to the
+//                        same target (the "second/minute" speed edge)
+// Each entry is tagged NEAR / EXTENDED by its distance from session VWAP (Finding 16: breakouts that
+// fire already EXTENDED beyond VWAP underperform — the best fire NEAR VWAP). Indicator only, no orders.
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+indicator("HIGHSTRIKE ORB — MTF ENTRIES", overlay=true, max_labels_count=300, max_lines_count=300)
+
+// ───────────────────────── INPUTS (mirror V1) ─────────────────────────
+long_on  = input.bool(true, "LONG signals",  group="Direction", inline="d")
+short_on = input.bool(true, "SHORT signals", group="Direction", inline="d")
+or_start = input.session("0930-1000", "Opening Range window (ET)", group="ORB")
+sess_tz  = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="ORB")
+trade_end_hhmm = input.int(1500, "Stop new signals after HHMM (ET)", group="ORB", minval=0, maxval=2359)
+brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
+auto_tf  = input.bool(true, "Auto config per timeframe", group="ORB",
+            tooltip="Breakout buffer <=5m -> 0.0, else 0.25 ATR. Cutoff 15:00 (all day). OFF = manual.")
+trend_ema_f = input.int(21, "Trend EMA fast", group="Trend", minval=2)
+trend_ema_s = input.int(50, "Trend EMA slow", group="Trend", minval=5)
+local_adx_min = input.float(20.0, "Local ADX min (trend)", group="Local Regime", step=1)
+local_atr_hi  = input.float(2.5,  "Volatile ATR%",         group="Local Regime", step=0.25)
+block_range   = input.bool(true,  "Block signals in RANGE regime", group="Local Regime")
+macro_en       = input.bool(true,  "MACRO regime filter ON", group="Macro Regime")
+macro_standdown= input.bool(true,  "Macro stand-down vs SPY trend", group="Macro Regime")
+spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Macro Regime")
+vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Macro Regime")
+vix_calm = input.float(15.0, "VIX calm",     group="Macro Regime", step=1)
+vix_vol  = input.float(25.0, "VIX volatile", group="Macro Regime", step=1)
+vix_ext  = input.float(35.0, "VIX extreme",  group="Macro Regime", step=1)
+spy_adx_min = input.float(25.0, "Macro ADX min", group="Macro Regime", step=1)
+persist_n   = input.int(3, "Regime persistence bars", group="Macro Regime", minval=1)
+block_d     = input.bool(true, "Block in REGIME D", group="Macro Regime")
+block_b     = input.bool(true, "Block trend in REGIME B", group="Macro Regime")
+sl_buf_atr  = input.float(0.3, "Stop buffer beyond OR x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR", group="Risk plan", step=0.1)
+sl_max_atr  = input.float(2.5, "Max stop x ATR", group="Risk plan", step=0.25)
+tp1_rr      = input.float(1.0, "TP1 R", group="Risk plan", step=0.25)
+tp2_rr      = input.float(4.0, "TP2 R", group="Risk plan", step=0.25)
+show_plan   = input.bool(true, "Show SL / TP1 / TP2 lines", group="Risk plan")
+show_panel  = input.bool(true, "Show trade-ticket panel", group="Risk plan")
+show_line_labels = input.bool(true, "Write ENTRY / SL / TP1 / TP2 on the chart lines", group="Risk plan")
+point_value = input.float(20.0, "Point value ($ per 1.0 move / contract)", group="Sizing",
+              tooltip="NQ=20  MNQ=2  ES=50  MES=5  RTY=50  CL=1000  GC=100  equities/ETF=1")
+qty         = input.float(1.0, "Contracts / shares", group="Sizing", step=1, minval=0)
+exp_r       = input.float(0.30, "Expected R / trade (from backtest)", group="Sizing", step=0.05,
+              tooltip="Research expectancy: QQQ 15m ~+0.34R, SPY ~+0.30R, NQ ~+0.27R. EXPECTED PROFIT = this x risk$.")
+// MTF ENTRIES (new)
+show_entries = input.bool(true, "Show MTF entries (5m stop / 1m sniper / 15m retest)", group="MTF Entries")
+sniper_k     = input.float(0.5, "1m sniper stop x ATR(1m)", group="MTF Entries", step=0.1, minval=0.1,
+               tooltip="The 1m sniper enters at the 5m breakout level but stops out a tight sniper_k*ATR(1m) away — a tighter stop => more R to the same target. The speed/precision edge.")
+vwap_q       = input.float(2.0, "VWAP-extension NEAR/EXT threshold (xATR)", group="MTF Entries", step=0.25,
+               tooltip="Finding 16: breakouts firing > this many ATR beyond session VWAP underperform. <= threshold = NEAR (A+ quality); above = EXTENDED (lower quality). k=2.0 is the robust research value.")
+show_dash = input.bool(true, "Show dashboard", group="Display")
+
+// ───────────────────────── CORE (chart TF) ─────────────────────────
+atr14 = ta.atr(14)
+[dip, dim, adxV] = ta.dmi(14, 14)
+atr_pct = close > 0 ? atr14 / close * 100.0 : 0.0
+emaF = ta.ema(close, trend_ema_f)
+emaS = ta.ema(close, trend_ema_s)
+bool trend_up   = close > emaS and emaF > emaS
+bool trend_down = close < emaS and emaF < emaS
+float vwap_c = ta.vwap
+int o_now = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+bool new_day = ta.change(time("D")) != 0
+bool rth = (dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday)
+int tf_s = timeframe.in_seconds()
+float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
+int   eff_cut_hhmm = auto_tf ? 1500 : trade_end_hhmm
+int trade_end = (eff_cut_hhmm / 100) * 60 + (eff_cut_hhmm % 100)
+
+// ───────────────────────── MACRO REGIME ─────────────────────────
+spy_b() =>
+    [_a,_b,sadx] = ta.dmi(14,14)
+    [close, ta.ema(close,20), ta.ema(close,50), sadx]
+vix_b() => ta.sma(close,5)
+[spc, se20, se50, sadx] = request.security(spy_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+vix5 = request.security(vix_sym, "D", vix_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+bool spy_up = not na(spc) and spc > se20 and se20 > se50
+bool spy_dn = not na(spc) and spc < se20 and se20 < se50
+bool spy_trend = (spy_up or spy_dn) and not na(sadx) and sadx >= spy_adx_min
+string reg_raw = "-"
+if not na(vix5)
+    reg_raw := vix5 >= vix_ext ? "D" : vix5 >= vix_vol ? "C" : (vix5 < vix_calm and spy_trend) ? "A" : (vix5 < vix_vol and not spy_trend) ? "B" : spy_trend ? "A" : "B"
+var int reg_cnt = 0
+var string reg_pend = "-"
+var string reg_conf = "-"
+int need = reg_raw == "D" ? 0 : persist_n
+if reg_raw == "D"
+    reg_conf := "D"
+    reg_pend := "D"
+    reg_cnt := need
+else if reg_raw == reg_pend
+    reg_cnt += 1
+    if reg_cnt >= need
+        reg_conf := reg_raw
+else
+    reg_pend := reg_raw
+    reg_cnt := 1
+string regime = reg_conf != "-" ? reg_conf : reg_raw
+bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and block_b))
+bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
+bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
+
+// ───────────────────────── LOCAL REGIME ─────────────────────────
+int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
+bool local_ok = not block_range or local_regime != 2
+
+// ───────────────────────── OPENING RANGE + BREAKOUT (chart TF) ─────────────────────────
+bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+var float or_high = na
+var float or_low  = na
+var bool  or_set  = false
+if new_day
+    or_high := na
+    or_low  := na
+    or_set  := false
+if in_or
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+if not in_or and not na(or_high)
+    or_set := true
+float brk_buf = atr14 * eff_brk
+var float Le = na
+var float Ls = na
+var float Se = na
+var float Ss = na
+var bool  traded_l = false
+var bool  traded_s = false
+if new_day
+    Le := na
+    Ls := na
+    Se := na
+    Ss := na
+    traded_l := false
+    traded_s := false
+if or_set and na(Le) and not na(or_high) and not na(or_low)
+    Le := or_high + brk_buf
+    Ls := math.min(math.max(or_low  - atr14 * sl_buf_atr, Le - atr14 * sl_max_atr), Le - atr14 * min_stop_atr)
+    Se := or_low  - brk_buf
+    Ss := math.max(math.min(or_high + atr14 * sl_buf_atr, Se + atr14 * sl_max_atr), Se + atr14 * min_stop_atr)
+float Lt1 = Le + (Le - Ls) * tp1_rr
+float Lt2 = Le + (Le - Ls) * tp2_rr
+float St1 = Se - (Ss - Se) * tp1_rr
+float St2 = Se - (Ss - Se) * tp2_rr
+bool window = or_set and rth and o_now < trade_end and not na(Le)
+bool gate_long  = long_on  and trend_up   and macro_allow and macro_long_ok  and local_ok
+bool gate_short = short_on and trend_down  and macro_allow and macro_short_ok and local_ok
+bool long_fire  = window and not traded_l and gate_long  and high >= Le
+bool short_fire = window and not traded_s and gate_short and low  <= Se
+if long_fire
+    traded_l := true
+if short_fire
+    traded_s := true
+// keep the plan on screen AFTER the fill too (until SL / TP2 / session end) — for managing the live trade
+var bool in_long  = false
+var bool in_short = false
+if new_day
+    in_long  := false
+    in_short := false
+if long_fire
+    in_long  := true
+if short_fire
+    in_short := true
+if in_long and (low <= Ls or high >= Lt2)
+    in_long  := false
+if in_short and (high >= Ss or low <= St2)
+    in_short := false
+bool l_live = (window and not traded_l) or in_long
+bool s_live = (window and not traded_s) or in_short
+// chart-TF VWAP extension of the live entry level (Finding 16)
+float ext_cL = (window and not traded_l and not na(Le)) ? (Le - vwap_c) / atr14 : na
+float ext_cS = (window and not traded_s and not na(Se)) ? (vwap_c - Se) / atr14 : na
+
+// ───────────────────────── PLOTS + ALERTS (chart TF) ─────────────────────────
+plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
+plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+plot(l_live ? Le : na, "Long entry (buy-stop)",   color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(s_live ? Se : na, "Short entry (sell-stop)", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+bool lplan = show_plan and l_live
+bool splan = show_plan and s_live
+plot(lplan ? Ls  : na, "Long SL",   color=color.new(color.red,   25), style=plot.style_linebr)
+plot(lplan ? Lt1 : na, "Long TP1",  color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(lplan ? Lt2 : na, "Long TP2",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(splan ? Ss  : na, "Short SL",  color=color.new(color.red,   25), style=plot.style_linebr)
+plot(splan ? St1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(splan ? St2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+plot(emaS, "EMA slow", color=trend_up ? color.new(color.lime,50) : trend_down ? color.new(color.red,50) : color.new(color.gray,60))
+plotshape(long_fire,  "Long fill",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), text="FILL", textcolor=color.white, size=size.small)
+plotshape(short_fire, "Short fill", shape.triangledown, location.abovebar, color.new(color.red, 0),  text="FILL", textcolor=color.white, size=size.small)
+bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
+bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
+alertcondition(long_fire,  "ORB Long",  "HIGHSTRIKE ORB: LONG breakout confirmed")
+alertcondition(short_fire, "ORB Short", "HIGHSTRIKE ORB: SHORT breakout confirmed")
+bool arm_l = window and not traded_l and gate_long  and (Le - Ls > 0)
+bool arm_s = window and not traded_s and gate_short and (Ss - Se > 0)
+alertcondition(arm_l and not arm_l[1], "ORB ARMED Long",  "HIGHSTRIKE ORB: LONG setup ARMED — buy-stop level live, will fire on the touch")
+alertcondition(arm_s and not arm_s[1], "ORB ARMED Short", "HIGHSTRIKE ORB: SHORT setup ARMED — sell-stop level live, will fire on the touch")
+
+// ───────────────────────── WRITE ENTRY / SL / TP ON THE CHART LINES ─────────────────────────
+// Floating labels at the right edge so each plan line is self-describing (price + R multiple)
+// instead of a bare colored line. Mirrors the line visibility; one reused label per level.
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le  = na
+var label lbl_Ls  = na
+var label lbl_Lt1 = na
+var label lbl_Lt2 = na
+var label lbl_Se  = na
+var label lbl_Ss  = na
+var label lbl_St1 = na
+var label lbl_St2 = na
+if barstate.islast and show_line_labels
+    string r1 = str.tostring(tp1_rr, "#.#")
+    string r2 = str.tostring(tp2_rr, "#.#")
+    lbl_Le  := f_setlbl(lbl_Le,  l_live, Le,  "▲ ENTRY " + str.tostring(Le,  format.mintick),                  color.new(color.yellow, 0))
+    lbl_Ls  := f_setlbl(lbl_Ls,  lplan, Ls,  "SL "  + str.tostring(Ls,  format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_Lt1 := f_setlbl(lbl_Lt1, lplan, Lt1, "TP1 " + str.tostring(Lt1, format.mintick) + "  +" + r1 + "R",  color.new(color.teal, 0))
+    lbl_Lt2 := f_setlbl(lbl_Lt2, lplan, Lt2, "TP2 " + str.tostring(Lt2, format.mintick) + "  +" + r2 + "R",  color.new(color.green, 0))
+    lbl_Se  := f_setlbl(lbl_Se,  s_live, Se,  "▼ ENTRY " + str.tostring(Se,  format.mintick),                  color.new(color.yellow, 0))
+    lbl_Ss  := f_setlbl(lbl_Ss,  splan, Ss,  "SL "  + str.tostring(Ss,  format.mintick) + "  -1R",          color.new(color.red, 0))
+    lbl_St1 := f_setlbl(lbl_St1, splan, St1, "TP1 " + str.tostring(St1, format.mintick) + "  +" + r1 + "R",  color.new(color.teal, 0))
+    lbl_St2 := f_setlbl(lbl_St2, splan, St2, "TP2 " + str.tostring(St2, format.mintick) + "  +" + r2 + "R",  color.new(color.green, 0))
+
+// ───────────────────────── MTF ENTRY ENGINE (stop + retest + VWAP-extension, per TF) ─────────────────────────
+// Returns, for the security TF: [Lstop, Sstop, e_l, e_s, sl_l, sl_s, rt_l_sig, rt_s_sig, rlvl_l, rlvl_s, ext_l, ext_s]
+f_tf() =>
+    var float orh = na
+    var float orl = na
+    var bool  orset = false
+    var float ll = na
+    var float ls = na
+    var bool  ldone = false
+    var bool  sdone = false
+    var bool  bkl = false
+    var bool  bks = false
+    var bool  rtld = false
+    var bool  rtsd = false
+    nd = ta.change(time("D")) != 0
+    if nd
+        orh := na
+        orl := na
+        orset := false
+        ll := na
+        ls := na
+        ldone := false
+        sdone := false
+        bkl := false
+        bks := false
+        rtld := false
+        rtsd := false
+    inor = not na(time(timeframe.period, or_start, sess_tz))
+    if inor
+        orh := na(orh) ? high : math.max(orh, high)
+        orl := na(orl) ? low  : math.min(orl, low)
+    if not inor and not na(orh)
+        orset := true
+    a  = ta.atr(14)
+    ef = ta.ema(close, 21)
+    es = ta.ema(close, 50)
+    vw = ta.vwap
+    tup = close > es and ef > es
+    tdn = close < es and ef < es
+    onow2 = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+    tfs = timeframe.in_seconds()
+    buf = a * (tfs <= 300 ? 0.0 : 0.25)
+    if orset and na(ll) and not na(orh)
+        ll := orh + buf
+        ls := orl - buf
+    aft = orset and onow2 < 900 and not na(ll)
+    // OR-based stops (same formula as the chart core)
+    float sll = na(ll) ? na : math.min(math.max(orl - a * sl_buf_atr, ll - a * sl_max_atr), ll - a * min_stop_atr)
+    float sls = na(ls) ? na : math.max(math.min(orh + a * sl_buf_atr, ls + a * sl_max_atr), ls + a * min_stop_atr)
+    // STOP entry (fill on touch)
+    lsg = aft and not ldone and high >= ll and tup
+    ssg = aft and not sdone and low  <= ls and tdn
+    if lsg
+        ldone := true
+    if ssg
+        sdone := true
+    // break tracking for the RETEST
+    if aft and high >= ll
+        bkl := true
+    if aft and low <= ls
+        bks := true
+    // RETEST entry: after the break, enter on the pullback to the OR edge
+    rtl = aft and bkl and not rtld and low  <= orh and tup
+    rts = aft and bks and not rtsd and high >= orl and tdn
+    if rtl
+        rtld := true
+    if rts
+        rtsd := true
+    float e_l   = (aft and not ldone) ? ll  : na
+    float e_s   = (aft and not sdone) ? ls  : na
+    float rlvll = (aft and bkl and not rtld) ? orh : na
+    float rlvls = (aft and bks and not rtsd) ? orl : na
+    float extl  = na(ll) ? na : (ll - vw) / a
+    float exts  = na(ls) ? na : (vw - ls) / a
+    [lsg ? 1 : 0, ssg ? 1 : 0, e_l, e_s, sll, sls, rtl ? 1 : 0, rts ? 1 : 0, rlvll, rlvls, extl, exts]
+
+[a5l, a5s, e5l, e5s, sl5l, sl5s, r5l, r5s, rl5l, rl5s, x5l, x5s] = request.security(syminfo.tickerid, "5",  f_tf(), lookahead=barmerge.lookahead_off)
+[a15l, a15s, e15l, e15s, sl15l, sl15s, r15l, r15s, rl15l, rl15s, x15l, x15s] = request.security(syminfo.tickerid, "15", f_tf(), lookahead=barmerge.lookahead_off)
+float atr1 = request.security(syminfo.tickerid, "1", ta.atr(14), lookahead=barmerge.lookahead_off)
+
+// resolve a single side per TF for the dashboard (prefer the live one)
+int dir5  = not na(e5l) ? 1 : not na(e5s) ? -1 : 0
+int dir15 = not na(rl15l) ? 1 : not na(rl15s) ? -1 : (not na(e15l) ? 1 : not na(e15s) ? -1 : 0)
+float e5   = dir5 == 1 ? e5l : dir5 == -1 ? e5s : na
+float sl5  = dir5 == 1 ? sl5l : dir5 == -1 ? sl5s : na
+float x5   = dir5 == 1 ? x5l : dir5 == -1 ? x5s : na
+float tp2_5 = na(e5) or na(sl5) ? na : (dir5 == 1 ? e5 + (e5 - sl5) * tp2_rr : e5 - (sl5 - e5) * tp2_rr)
+// 1m sniper: same 5m level, tight 1m stop -> R:R to the same 5m TP2
+float snipSL = na(e5) or na(atr1) ? na : (dir5 == 1 ? e5 - sniper_k * atr1 : e5 + sniper_k * atr1)
+float snipRR = na(e5) or na(snipSL) or na(tp2_5) or math.abs(e5 - snipSL) == 0 ? na : math.abs(tp2_5 - e5) / math.abs(e5 - snipSL)
+float rl15 = dir15 == 1 ? rl15l : dir15 == -1 ? rl15s : na
+float x15  = dir15 == 1 ? x15l : dir15 == -1 ? x15s : na
+// latch the 15m retest fill for a persistent status line
+var bool r15_filled = false
+if ta.change(time("D")) != 0
+    r15_filled := false
+if r15l == 1 or r15s == 1
+    r15_filled := true
+
+// ───────────────────────── MTF ENTRY PLOTS ─────────────────────────
+plot(show_entries ? e5l : na, "5m stop long",  color=color.new(color.lime, 30), style=plot.style_linebr)
+plot(show_entries ? e5s : na, "5m stop short", color=color.new(color.red, 30),  style=plot.style_linebr)
+plot(show_entries ? rl15l : na, "15m retest long",  color=color.new(color.teal, 0),  style=plot.style_circles, linewidth=2)
+plot(show_entries ? rl15s : na, "15m retest short", color=color.new(color.maroon, 0), style=plot.style_circles, linewidth=2)
+plotshape(show_entries and a5l == 1, "5m stop L",  shape.triangleup,   location.belowbar, color.new(color.lime, 0),  text="5m",  textcolor=color.lime,  size=size.tiny)
+plotshape(show_entries and a5s == 1, "5m stop S",  shape.triangledown, location.abovebar, color.new(color.red, 0),   text="5m",  textcolor=color.red,   size=size.tiny)
+plotshape(show_entries and r15l == 1, "15m retest L", shape.diamond, location.belowbar, color.new(color.teal, 0),   text="RT15", textcolor=color.white, size=size.tiny)
+plotshape(show_entries and r15s == 1, "15m retest S", shape.diamond, location.abovebar, color.new(color.maroon, 0), text="RT15", textcolor=color.white, size=size.tiny)
+alertcondition(a5l == 1 or a5s == 1, "5m stop entry", "HIGHSTRIKE: 5m ORB stop entry")
+alertcondition(r15l == 1 or r15s == 1, "15m retest entry", "HIGHSTRIKE: 15m ORB retest entry")
+
+// ───────────────────────── DASHBOARD ─────────────────────────
+f_q(x) => na(x) ? "—" : x <= vwap_q ? "NEAR ✓" : "EXT ⚠"
+f_qc(x) => na(x) ? color.gray : x <= vwap_q ? color.lime : color.orange
+f_dir(d) => d == 1 ? "L ↑" : d == -1 ? "S ↓" : "—"
+f_dc(d) => d == 1 ? color.lime : d == -1 ? color.red : color.gray
+
+var table dash = table.new(position.top_right, 3, 9, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_dash
+    table.cell(dash,0,0,"HIGHSTRIKE MTF", text_color=color.yellow, text_size=size.small)
+    table.cell(dash,1,0, str.tostring(syminfo.ticker), text_color=color.silver, text_size=size.small)
+    table.cell(dash,2,0, timeframe.period, text_color=color.silver, text_size=size.small)
+    table.cell(dash,0,1,"Regime", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,1, regime+(spy_up?" SPY↑":spy_dn?" SPY↓":""), text_color=regime=="A"?color.lime:regime=="D"?color.red:color.aqua, text_size=size.tiny)
+    table.cell(dash,2,1, trend_up?"UP":trend_down?"DOWN":"flat", text_color=trend_up?color.lime:trend_down?color.red:color.gray, text_size=size.tiny)
+    // 5m STOP
+    table.cell(dash,0,2,"5m stop", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,2, f_dir(dir5)+(na(e5)?"":"  "+str.tostring(e5, format.mintick)), text_color=f_dc(dir5), text_size=size.tiny)
+    table.cell(dash,2,2, f_q(x5), text_color=f_qc(x5), text_size=size.tiny)
+    // 1m SNIPER (off the 5m level)
+    table.cell(dash,0,3,"1m sniper", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,3, na(e5)?"—":("@"+str.tostring(e5, format.mintick)+"  SL "+str.tostring(snipSL, format.mintick)), text_color=f_dc(dir5), text_size=size.tiny)
+    table.cell(dash,2,3, na(snipRR)?"—":("R:R "+str.tostring(snipRR,"#.#")), text_color=color.aqua, text_size=size.tiny)
+    // 15m RETEST
+    table.cell(dash,0,4,"15m retest", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,4, r15_filled?"FILLED ✓":(not na(rl15)?("wait "+str.tostring(rl15, format.mintick)):(dir15!=0?"armed":"—")), text_color=f_dc(dir15), text_size=size.tiny)
+    table.cell(dash,2,4, f_q(x15), text_color=f_qc(x15), text_size=size.tiny)
+    // chart-TF gated entry (the original signal)
+    int dchart = (window and not traded_l and gate_long) ? 1 : (window and not traded_s and gate_short) ? -1 : 0
+    float echart = dchart==1?Le:dchart==-1?Se:na
+    float xchart = dchart==1?ext_cL:dchart==-1?ext_cS:na
+    table.cell(dash,0,5,"Chart gated", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,5, f_dir(dchart)+(na(echart)?"":"  "+str.tostring(echart, format.mintick)), text_color=f_dc(dchart), text_size=size.tiny)
+    table.cell(dash,2,5, f_q(xchart), text_color=f_qc(xchart), text_size=size.tiny)
+    // OR
+    table.cell(dash,0,6,"OR", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,6, or_set?(str.tostring(or_low,"#.#")+" / "+str.tostring(or_high,"#.#")):"forming", text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,2,6, "VWAP "+str.tostring(vwap_c,"#.#"), text_color=color.aqua, text_size=size.tiny)
+    // legend
+    table.cell(dash,0,7,"map", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,1,7,"5m=stop · 15m=retest", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,2,7,"1m=sniper", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,0,8,"NEAR/EXT", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,1,8,"= dist from VWAP (xATR)", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,2,8,"≤"+str.tostring(vwap_q,"#.#")+"=A+", text_color=color.gray, text_size=size.tiny)
+
+// ═════════ TRADE-TICKET PANEL (one consolidated label + target/stop boxes — portable section) ═════════
+// Shows BUY/SELL SETUP · ENTRY · STOP · TP1 · TP2 · GRADE · CONFIDENCE · R:R · EXPECTED PROFIT.
+// GRADE/CONFIDENCE = composite of the validated quality signals (VWAP-extension F16 + regime + local
+// trend). EXPECTED PROFIT = exp_r (backtest expectancy) x risk$ (risk_pts x point_value x qty).
+bool panel_long  = show_panel and window and not traded_l and gate_long
+bool panel_short = show_panel and window and not traded_s and gate_short
+var box   pbx_g  = na
+var box   pbx_r  = na
+var label plb_tkt = na
+if barstate.islast
+    bool any = panel_long or panel_short
+    float pe   = panel_long ? Le  : panel_short ? Se  : na
+    float psl  = panel_long ? Ls  : panel_short ? Ss  : na
+    float pt1  = panel_long ? Lt1 : panel_short ? St1 : na
+    float pt2  = panel_long ? Lt2 : panel_short ? St2 : na
+    float pext = panel_long ? ext_cL : panel_short ? ext_cS : na
+    int x1 = bar_index - 3
+    int x2 = bar_index + 14
+    if any and not na(pe) and not na(psl) and not na(pt2)
+        float rr = math.abs(pe - psl) > 0 ? math.abs(pt2 - pe) / math.abs(pe - psl) : 0.0
+        // ── GRADE / CONFIDENCE (composite of validated signals) ──
+        int conf = 50
+        conf := conf + (na(pext) ? 0 : pext <= vwap_q ? 25 : -10)            // F16: near-VWAP = A+, extended = penalty
+        conf := conf + (regime == "A" ? 15 : regime == "C" ? 5 : regime == "D" ? -25 : 0)
+        conf := conf + (local_regime == 1 ? 10 : local_regime == 2 ? -10 : 0)
+        conf := math.max(1, math.min(99, conf))
+        string grade = conf >= 80 ? "A+" : conf >= 70 ? "A" : conf >= 55 ? "B" : "C"
+        string qtag  = na(pext) ? "" : (pext <= vwap_q ? " NEAR✓" : " EXT⚠")
+        // ── $ math ──
+        float risk_pts = math.abs(pe - psl)
+        float risk_d   = risk_pts * point_value * qty
+        float exp_d    = exp_r * risk_d
+        float tp2_d    = math.abs(pt2 - pe) * point_value * qty
+        string head = (panel_long ? "▲ BUY SETUP" : "▼ SELL SETUP") + "   GRADE " + grade + "   CONF " + str.tostring(conf) + "%" + qtag
+        string body = head +
+             "\nENTRY   " + str.tostring(pe,  format.mintick) +
+             "\nSTOP    " + str.tostring(psl, format.mintick) + "   −1R" +
+             "\nTP1     " + str.tostring(pt1, format.mintick) + "   +" + str.tostring(tp1_rr, "#.#") + "R" +
+             "\nTP2     " + str.tostring(pt2, format.mintick) + "   +" + str.tostring(tp2_rr, "#.#") + "R" +
+             "\nR:R     " + str.tostring(rr, "#.##") +
+             "\nE[P]    " + (exp_d >= 0 ? "+$" : "−$") + str.tostring(math.abs(exp_d), "#.##") + "   (@TP2 +$" + str.tostring(tp2_d, "#.#") + ")"
+        color tcol = panel_long ? color.new(color.teal, 15) : color.new(color.maroon, 15)
+        if na(pbx_g)
+            pbx_g   := box.new(x1, pe, x2, pe, border_color=color.new(color.teal, 40), bgcolor=color.new(color.teal, 90))
+            pbx_r   := box.new(x1, pe, x2, pe, border_color=color.new(color.red, 40),  bgcolor=color.new(color.red, 91))
+            plb_tkt := label.new(x2, pe, "", style=label.style_label_left, textcolor=color.white, size=size.normal)
+        box.set_top(pbx_g, math.max(pe, pt2))
+        box.set_bottom(pbx_g, math.min(pe, pt2))
+        box.set_left(pbx_g, x1)
+        box.set_right(pbx_g, x2)
+        box.set_top(pbx_r, math.max(pe, psl))
+        box.set_bottom(pbx_r, math.min(pe, psl))
+        box.set_left(pbx_r, x1)
+        box.set_right(pbx_r, x2)
+        label.set_xy(plb_tkt, x2, pe)
+        label.set_text(plb_tkt, body)
+        label.set_color(plb_tkt, tcol)
+    if not any and not na(pbx_g)
+        box.delete(pbx_g)
+        box.delete(pbx_r)
+        label.delete(plb_tkt)
+        pbx_g   := na
+        pbx_r   := na
+        plb_tkt := na

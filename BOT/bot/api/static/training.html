@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HIGHSTRIKE — Training Lab</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  /* house shell (matches dashboard.html) + validated chart palette on the card surface #0f1728:
+     series slots (fixed order, never cycled): 1 #4f8ef7 blue · 2 #199e70 green · 3 #c98500 amber ·
+     4 #8b7df7 violet · 5 #f0596a red  — validator: all pass (band/chroma/CVD 41.3/contrast) */
+  :root{--bg:#070b16;--card:#0f1728;--card2:#0c1322;--line:#1c2740;--txt:#d6e0f2;--mut:#6f80a4;
+        --s1:#4f8ef7;--s2:#199e70;--s3:#c98500;--s4:#8b7df7;--s5:#f0596a;
+        --good:#2dd4a7;--bad:#f0596a;--grid:#1a2438}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.45 system-ui,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:14px;padding:10px 18px;
+         border-bottom:1px solid var(--line);background:rgba(9,13,24,.94);backdrop-filter:blur(8px)}
+  header h1{font-size:15px;margin:0;font-weight:800;letter-spacing:.4px}
+  header a{color:var(--mut);text-decoration:none;font-size:12px} header a:hover{color:var(--txt)}
+  .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:999px;font-size:11.5px;
+        font-weight:600;border:1px solid var(--line);background:#0e1626}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .dot.on{background:var(--good);box-shadow:0 0 7px var(--good)} .dot.off{background:#455579}
+  .wrap{padding:14px 18px 30px;max-width:1500px;margin:0 auto}
+  .sec{font-size:10.5px;text-transform:uppercase;letter-spacing:1.6px;color:var(--mut);font-weight:700;
+       margin:18px 2px 10px;display:flex;align-items:center;gap:12px}
+  .sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+  .card h2{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin:0 0 10px;font-weight:700;display:flex;gap:8px}
+  .card h2 .r{margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;font-size:11px}
+  .col3{grid-column:span 3}.col4{grid-column:span 4}.col6{grid-column:span 6}.col8{grid-column:span 8}.col12{grid-column:span 12}
+  @media(max-width:1100px){.col3,.col4,.col6,.col8{grid-column:span 12}}
+  .tiles{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+  .tile .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+  .tile .l{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:var(--mut);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:hover td{background:rgba(79,142,247,.05)}
+  .scroll{overflow:auto;max-height:300px}   /* bounded scroll box — every panel grows into a scroll, page stays short */
+  button{background:#182338;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 13px;
+         cursor:pointer;font-weight:600;font-size:12px}
+  button:hover{border-color:var(--s1);background:#1e2c48}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  select{background:#0d1524;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12.5px}
+  .runrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .log{background:#0a101d;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:10px;
+       font:11px/1.5 ui-monospace,Consolas,monospace;color:var(--mut);max-height:170px;overflow-y:auto;white-space:pre-wrap}
+  .ok{color:var(--good)} .no{color:var(--bad)} .mut{color:var(--mut)}
+  .badge{display:inline-block;padding:1px 7px;border-radius:5px;font-size:9.5px;font-weight:700}
+  .b-pass{background:rgba(45,212,167,.15);color:var(--good)} .b-fail{background:rgba(240,89,106,.15);color:var(--bad)}
+  .chartbox{position:relative;height:230px}
+  .note{font-size:11px;color:var(--mut);margin-top:8px}
+  /* approval ladder must FIT its card (user screenshot 2026-07-05): wrap every cell, fixed
+     column widths, no horizontal spill */
+  #approvals table{table-layout:fixed;width:100%}
+  #approvals td, #approvals th{white-space:normal;word-break:break-word;vertical-align:top}
+  #approvals td:first-child{width:34%}
+  #approvals td:last-child{width:86px}
+  #approvals .badge{white-space:nowrap}
+  /* the version dropdown + the STRATEGY DUEL table must also FIT the card (user 2026-07-06):
+     fixed layout, wrapped cells, compact numerics — nothing spills out of the div */
+  #apprversel{max-width:100%;font-size:11px}
+  #duel table{table-layout:fixed;width:100%;font-size:10px}
+  #duel td, #duel th{white-space:normal;word-break:break-word;vertical-align:top;padding:3px 4px}
+  #duel td:first-child, #duel th:first-child{width:26%}
+  #duel .badge{white-space:normal;font-size:9px;padding:1px 4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>TRAINING LAB</h1>
+  <span class="mut" style="font-size:11px">offline research · ML / NN / A-B — nothing here trades</span>
+  <div class="spacer"></div>
+  <span class="pill" id="runpill"><span class="dot off" id="rundot"></span><span id="runtxt">idle</span></span>
+  <a href="/">← signal dashboard</a>
+</header>
+<div class="wrap">
+
+  <div class="card col12" style="grid-column:span 12;margin-top:10px">
+    <details><summary style="cursor:pointer;font-weight:700">📖 HOW EACH PANEL WORKS (click)</summary>
+      <div class="note" style="line-height:1.7">
+      <b>Run</b> — buttons launch one research job at a time as a subprocess. Symbol select + timeframe select apply to dataset/ML/NN/heads. The log streams below; the status pill (top-right) shows what is running, its ET start time and elapsed. Results land in their own panel when the job finishes.<br>
+      <b>0·Data QA</b> — validates the historical bar store (duplicates, bad candles, gaps, bars/day) for all symbols.<br>
+      <b>1·Rebuild dataset</b> — replays history through the CURRENT rule version and builds the labeled candidate table (features + outcomes). <b>1b·Rejects</b> — every blocked trigger with its reason + hypothetical outcome.<br>
+      <b>2·ML zoo / 3·NN zoo</b> — trains 6 tabular / 6 sequence models with purged walk-forward; hard gates decide if anything may even become a PENDING champion.<br>
+      <b>4·A/B</b> — old entry vs the standard, per symbol. <b>5·Sweep</b> — 54 knob combinations ranked in-sample, judged out-of-sample. <b>6·Heads</b> — tp2/stop/expected-R/no-trade models. <b>7·Similarity</b> — pattern clusters. <b>8·Report matrix</b> — slices + cost stress. <b>9·Parity</b> — contract candidates ≡ engine trades.<br>
+      <b>Continuous training</b> — background worker cycling dataset→ML→NN per symbol on your interval; ALWAYS --no-promote: gate-passers wait in "Pending models" for YOUR promote click. Shows current job + ET start time + per-job history.<br>
+      <b>Strategy approval ladder</b> — the governance gate. Expand "WHAT you are approving" to see the exact rule version, what each stage means, and the evidence (backtest, parity, gauntlet, stress warnings). Paper autotrade stays blocked until the paper stage is approved; live also needs the lock file.<br>
+      <b>Pending models</b> — gate-passing challengers awaiting your manual promotion to champion.<br>
+      <b>Data QA / L2-L3 panels</b> — register a PATH (file or whole FOLDER; zip/zst read in place, auto-extracted in memory, never written to disk) or DRAG a file; Sync builds per-minute depth features that join onto candidates.<br>
+      <b>Dataset</b> — headline of the labeled table for the selected symbol/timeframe. <b>Latest training run</b> — model-zoo charts vs the gates + buckets + calibration + full raw report expander.<br>
+      <b>Sweep</b> — click any row for FULL details (what data/windows/rules were used) and to prefill the gauntlet. <b>FULL GAUNTLET</b> — the re-verify step: candidate vs adopted default, 7 checks; ADOPT only on 7/7.<br>
+      <b>Report matrix / Replay parity / Audit trail</b> — evidence panels; audit is the append-only governance log.<br>
+      <b>Registry / Training runs</b> — every model artifact + every run; click a run to load its full report.
+      </div></details></div>
+
+  <div class="sec">Run</div>
+  <div class="card col12">
+    <div class="runrow">
+      <select id="sym"><option>QQQ</option><option>SPY</option><option>NQ</option><option>ES</option><option>GC</option><option>ALL</option></select>
+      <select id="tf" title="training timeframe (dataset / ML / NN)"><option>1m</option><option>3m</option><option selected>5m</option>
+        <option>15m</option><option>30m</option><option>1h</option><option>2h</option><option>4h</option>
+        <option value="1d">1d (swing — not implemented)</option><option value="1w">1w (swing — not implemented)</option></select>
+      <button onclick="run('dataqa')">0 · Data QA</button>
+      <button onclick="run('dataset')">1 · Rebuild dataset</button>
+      <button onclick="run('rejects')">1b · Rejected setups</button>
+      <button onclick="run('ml')">2 · Train ML zoo</button>
+      <button onclick="run('nn')">3 · Train NN zoo</button>
+      <button onclick="run('ab')">4 · Entry A/B (all symbols)</button>
+      <button onclick="run('sweep')">5 · Sweep entry params</button>
+      <button onclick="run('heads')">6 · Train heads (tp2/stop/expR/no-trade)</button>
+      <button onclick="run('similarity')">7 · Similarity clusters</button>
+      <button onclick="run('report')">8 · Report matrix + cost stress</button>
+      <button onclick="run('parity')">9 · Replay parity</button>
+      <button onclick="run('threshold')">10 · Threshold study</button>
+      <button onclick="run('pairs')">11 · DIR-fast pairs</button>
+      <button onclick="run('geometry')" title="ultimate-goal check: WR/PF/DD per TP×stop geometry (45t futures / $4 equities)">12 · Target geometry</button>
+      <button onclick="run('nqwr')" title="futures high-WR search: stop budget × TP × regime grid (NQ/ES)">13 · Futures 75% WR</button>
+      <span class="mut" id="runhint">ALL = pooled multi-symbol · one subprocess at a time</span>
+    </div>
+    <div class="log" id="runlog">—</div>
+  </div>
+
+  <div class="sec">L2 / L3 depth data (read IN PLACE from any disk — only synthesized features persist)</div>
+  <div class="grid">
+    <div class="card col6"><h2>Register a path (recommended for big files)</h2>
+      <div class="runrow">
+        <input id="l2path" placeholder="E:\data\nq_mbp10.csv.zst  (external drive fine — nothing is copied)" style="flex:1;min-width:280px">
+        <span class="mut" style="font-size:10px;align-self:center" title="the file's own symbol column decides the label — a wrong manual pick can never mix the data (multi-symbol files split automatically; files WITHOUT a symbol column are refused with instructions)">symbol: AUTO</span>
+        <button onclick="l2register()">Register</button>
+      </div>
+      <div id="dropzone" style="margin-top:10px;border:2px dashed var(--line);border-radius:10px;padding:22px;text-align:center;color:var(--mut)">
+        …or DRAG a depth file here (csv/parquet) — streamed &amp; synthesized in memory, raw never saved · symbol auto-detected from the file</div>
+      <div class="note" id="l2msg"></div></div>
+    <div class="card col6"><h2>Registered sources</h2><div class="scroll" id="l2sources">—</div>
+      <div class="note">formats auto-detected: Databento MBP-1/10 (L2), MBO (L3), trades, ohlcv ·
+      run <b>l2sync</b> via Register → Sync to build per-minute l2_* features that join onto candidates</div></div>
+  </div>
+
+  <div class="sec">Continuous training &amp; governance (AITP — promotion is always YOUR click)</div>
+  <div class="grid">
+    <div class="card col4"><h2>Continuous training</h2>
+      <div class="runrow" style="margin-bottom:8px">
+        <button id="contbtn" onclick="contToggle()">Start</button>
+        <select id="continterval"><option value="60">every 1h</option><option value="240">every 4h</option>
+          <option value="360" selected>every 6h</option><option value="720">every 12h</option><option value="1440">daily</option></select>
+      </div>
+      <div class="note" id="contstat">off</div>
+      <div class="log" id="conthist" style="max-height:130px">—</div>
+      <div class="note">cycles dataset → ML → NN per lineage (QQQ, SPY, NQ, ES, <b>QQQ@15m, SPY@15m</b>, ALL)
+        with <b>--no-promote</b>: gate-passing challengers land below as PENDING for your approval.
+        Fed by the live journal — learning runs <b>without paper approval</b>.</div></div>
+    <div class="card col4"><h2>Journal → Training Lab <span class="r mut" id="jfnote">the journal IS the dataset</span></h2>
+      <div id="journalfeed" class="scroll" style="max-height:210px;overflow:auto">—</div>
+      <div class="note">Every taken+resolved live signal (with its PIT snapshot) becomes a training row,
+        tf-matched (5m→5m · 15m→15m). Grows with live QQQ/SPY data; <b>only the journal is saved</b>
+        (bars are transient). No paper approval needed — this feeds continuous learning directly.</div></div>
+    <div class="card col4"><h2>Evolution — emergent drafts <span class="r mut">mined nightly, never auto-adopted</span></h2>
+      <div class="runrow" style="margin-bottom:6px"><button onclick="loadEvolve(true)">Mine now</button></div>
+      <div id="evolve" class="scroll" style="max-height:210px;overflow:auto">—</div>
+      <div class="note">Journal / exit-TP / reject mining drafts <code>emergent-*</code> candidates that
+        enter the normal gauntlet → ladder path. The engine proposes; the gauntlet judges.</div></div>
+    <div class="card col4"><h2>Strategy approval ladder <span class="r" id="apprver"></span></h2>
+      <div id="approvals" class="scroll">loading…</div>
+      <div class="runrow" style="margin-top:10px">
+        <button id="bigapprove" style="background:#123a2a;border-color:var(--good);font-weight:700"
+                onclick="approveAndPaper()">✓ APPROVE + paper + continuous learning</button>
+      </div>
+      <div class="note" id="paperstat"></div>
+      <div class="note">one click = ladder approved for the SELECTED version + paper autotrade +
+        continuous training armed + the lineage joins the STRATEGY DUEL below; live stays
+        hard-locked in config regardless.</div>
+      <h2 style="margin-top:12px">Strategy duel <span class="r mut">approved lineages, head-to-head</span></h2>
+      <div id="duel" class="scroll">—</div></div>
+    <div class="card col4"><h2>Pending models (gate-passed, awaiting approval)</h2>
+      <div class="scroll" id="pending">—</div></div>
+    <div class="card col12"><h2>Historical data QA <span class="r">run 0 · Data QA to refresh</span></h2>
+      <div class="scroll" id="dataqa">—</div></div>
+    <div class="card col12"><h2>Entry-parameter sweep <span class="r">ranked in-sample (70%) · judged out-of-sample (30%) — run 5 · Sweep · CLICK a row for full details + gauntlet prefill</span></h2>
+      <div class="scroll" id="sweep">—</div>
+      <div id="sweepdetail" class="log" style="display:none;max-height:260px;margin-top:10px"></div></div>
+    <div class="card col12"><h2>FULL GAUNTLET — re-verify a candidate before adopting <span class="r">7 checks, candidate vs adopted default</span></h2>
+      <div class="runrow" style="flex-wrap:wrap">
+        <select id="gsym"><option>QQQ</option><option selected>SPY</option><option>NQ</option><option>ES</option></select>
+        <select id="gtf"><option selected>5m</option><option>1m</option><option>3m</option><option>15m</option><option>30m</option><option>1h</option><option>2h</option><option>4h</option></select>
+        <label class="mut">ctx <input type="checkbox" id="gctx" checked style="width:auto"></label>
+        <label class="mut">cooldown <input id="gcd" value="0" style="width:52px"></label>
+        <label class="mut">stale <input id="gstale" value="12" style="width:52px"></label>
+        <label class="mut">retest <input id="gretest" value="0.25" style="width:56px"></label>
+        <select id="gmode"><option value="edge" selected>edge</option><option value="impulse_mid">impulse_mid</option><option value="vwap">vwap</option></select>
+        <label class="mut">minPB <input id="gminpb" value="0.05" style="width:56px"></label>
+        <label class="mut">timeout <input id="gtimeout" value="8" style="width:52px"></label>
+        <label class="mut">volX <input id="gvolx" value="0" style="width:52px"></label>
+        <button class="primary" onclick="runGauntlet()">▶ Run full gauntlet</button>
+      </div>
+      <div class="scroll" id="gauntlet" style="margin-top:10px">—</div></div>
+    <div class="card col6"><h2>Report matrix + cost stress <span class="r">run 8 to refresh</span></h2>
+      <div class="scroll" id="matrix">—</div></div>
+    <div class="card col6"><h2>Replay parity <span class="r">candidates ≡ engine trades</span></h2>
+      <div class="scroll" id="parity">—</div>
+      <h2 style="margin-top:14px">Audit trail</h2><div class="log" id="audittrail" style="max-height:150px">—</div></div>
+  </div>
+
+  <div class="sec">Dataset (labeled candidates — one rule version at a time)</div>
+  <div class="grid">
+    <div class="card col12"><div class="tiles" id="dstiles">loading…</div>
+      <div class="note" id="dsnote"></div></div>
+  </div>
+
+  <div class="sec">Latest training run <span id="repname" style="text-transform:none;letter-spacing:0"></span></div>
+  <div class="grid">
+    <div class="card col6"><h2>Model zoo — OOS AUC (purged walk-forward) <span class="r">gate &gt; 0.52</span></h2>
+      <div class="chartbox"><canvas id="aucChart"></canvas></div></div>
+    <div class="card col6"><h2>Model zoo — OOS Brier <span class="r">must beat the base-rate line</span></h2>
+      <div class="chartbox"><canvas id="brierChart"></canvas></div></div>
+    <div class="card col4"><h2>Promotion gates</h2><div id="gates" class="scroll">—</div></div>
+    <div class="card col4"><h2>Expected R by confidence bucket (OOS)</h2><div class="scroll" id="buckets">—</div></div>
+    <div class="card col4"><h2>Calibration (predicted vs observed)</h2><div class="scroll" id="calib">—</div></div>
+  </div>
+
+  <div class="sec">Entry-standard A/B (data drive)</div>
+  <div class="grid">
+    <div class="card col6"><h2>Avg net R per trade — variant × symbol</h2>
+      <div class="chartbox"><canvas id="abChart"></canvas></div></div>
+    <div class="card col6"><h2>A/B table</h2><div class="scroll" id="abtab">—</div>
+      <div class="note">baseline = pre-standard plain-ORB · layer3_only = watch/cooldown/stale/pullback ·
+      standard = + Structure+VWAP context (adopted: equities ON / futures OFF)</div></div>
+  </div>
+
+  <div class="sec">Model registry &amp; run history</div>
+  <div class="grid">
+    <div class="card col6"><h2>Registry (champions in green)</h2><div class="scroll" id="registry">—</div></div>
+    <div class="card col6"><h2>Training runs (click to view)</h2><div class="scroll" id="reports">—</div></div>
+  </div>
+</div>
+
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const S = [css('--s1'), css('--s2'), css('--s3'), css('--s4'), css('--s5')];   // fixed slot order
+const INK = css('--txt'), MUT = css('--mut'), GRID = css('--grid');
+Chart.defaults.color = MUT; Chart.defaults.borderColor = GRID;
+Chart.defaults.font.family = 'system-ui,"Segoe UI",sans-serif'; Chart.defaults.font.size = 11;
+let aucChart, brierChart, abChart;
+const fmt = (x, d=3) => (x === null || x === undefined || Number.isNaN(x)) ? '—' : (+x).toFixed(d);
+// fetch with LOUD failures: a 404 means the SERVER IS RUNNING OLD CODE — restart uvicorn.
+const j = async u => {
+  const res = await fetch(u);
+  if (res.status === 404) throw new Error('endpoint missing — RESTART the server (uvicorn is running old code)');
+  return res.json();
+};
+// USA time display (user 2026-07-05): render every timestamp in ET; fall back to system time.
+function fmtET(iso, withDate){
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso).slice(0, 16);
+  try{
+    return d.toLocaleString('en-US', {timeZone: 'America/New_York', hour12: false,
+      ...(withDate ? {month: 'short', day: '2-digit'} : {}), hour: '2-digit', minute: '2-digit',
+      second: withDate ? undefined : '2-digit'}) + ' ET';
+  }catch(e){ return d.toLocaleString(); }               // fallback: system time
+}
+const elapsed = iso => { if (!iso) return ''; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000) | 0;
+  return s < 60 ? `${s}s` : `${(s/60)|0}m ${s%60}s`; };
+
+/* ---- run control ---- */
+async function run(kind, extraArgs){
+  const sym = document.getElementById('sym').value;
+  const tf = document.getElementById('tf').value;
+  let args = extraArgs || '';
+  if (!extraArgs && ['dataset','ml','nn','heads','sweep'].includes(kind) && tf !== '5m') args = `--tf=${tf}`;
+  const log = document.getElementById('runlog');
+  try{
+    const res = await fetch(`/api/training/run?kind=${kind}&sym=${sym}&args=${encodeURIComponent(args)}`,
+                            {method: 'POST'});
+    if (res.status === 404){ log.textContent = 'ERROR: /api/training/run not found — the SERVER IS RUNNING OLD CODE. Stop uvicorn and start it again.'; return; }
+    const r = await res.json();
+    if (r.error){ log.textContent = 'error: ' + r.error; return; }
+    log.textContent = `${kind} ${r.sym || sym} STARTED ${fmtET(new Date().toISOString())} — log streams here; results refresh in their panel when done.`;
+  }catch(e){ log.textContent = 'error: ' + e.message; }
+  poll();
+}
+
+let polling = null;
+async function poll(force){
+  const st = await j('/api/training/status').catch(e => ({error: e.message}));
+  if (st.error){ document.getElementById('runlog').textContent = 'ERROR: ' + st.error; return; }
+  const dot = document.getElementById('rundot'), txt = document.getElementById('runtxt');
+  const c = st.continuous || {};
+  if (st.running){ dot.className = 'dot on';
+    txt.textContent = `RUNNING ${st.kind} ${st.sym||''} — started ${fmtET(st.started)} (${elapsed(st.started)})`; }
+  else if (c.on && c.current){ dot.className = 'dot on';
+    txt.textContent = `continuous: ${c.current} — cycle started ${fmtET(c.last_start)} (${elapsed(c.last_start)})`; }
+  else { dot.className = 'dot off'; txt.textContent = st.rc === null ? (c.on ? 'continuous armed' : 'idle')
+    : `done (${st.kind} ${st.sym||''}, rc=${st.rc}, started ${fmtET(st.started)})`; }
+  if (st.log && st.log.length) document.getElementById('runlog').textContent = st.log.join('\n');
+  renderCont(c);
+  const busy = st.running || (c.on && c.current);
+  if (busy){ if (!polling) polling = setInterval(() => poll(), 3000); }
+  else if (polling){ clearInterval(polling); polling = null; loadAll(); }
+}
+
+/* ---- continuous training ---- */
+let contOn = false;
+function renderCont(c){
+  contOn = !!c.on;
+  const b = document.getElementById('contbtn');
+  b.textContent = contOn ? 'Stop' : 'Start';
+  b.style.borderColor = contOn ? css('--s5') : '';
+  document.getElementById('contstat').textContent = contOn
+    ? `ON · every ${c.interval_min} min · cycle ${c.cycle}` +
+      (c.current ? ` · NOW RUNNING: ${c.current} (since ${fmtET(c.last_start)}, ${elapsed(c.last_start)})` : '') +
+      (c.last_end ? ` · last cycle finished ${fmtET(c.last_end, true)}` : '')
+    : 'off';
+  const h = (c.history || []).slice(-8).reverse();
+  document.getElementById('conthist').textContent = h.length
+    ? h.map(x => `${fmtET(x.ts)} ${x.job} rc=${x.rc} ${x.tail && x.tail.length ? '· ' + x.tail[x.tail.length-1].slice(0,80) : ''}`).join('\n')
+    : '—';
+}
+async function contToggle(){
+  const iv = document.getElementById('continterval').value;
+  await fetch(`/api/training/continuous?on=${contOn ? 0 : 1}&interval_min=${iv}`, {method: 'POST'});
+  poll();
+}
+window.contToggle = contToggle;
+
+/* ---- approvals (multi-lineage: ORB core + each gauntlet-passed module) ---- */
+let _apprVer = '';
+async function loadApprovals(){
+  const st = await j('/api/approval/status' + (_apprVer ? `?version=${encodeURIComponent(_apprVer)}` : ''));
+  _apprVer = st.strategy_version;
+  const vers = st.available_versions || [st.strategy_version];
+  document.getElementById('apprver').innerHTML = vers.length > 1
+    ? `<select id="apprversel" onchange="_apprVer=this.value;loadApprovals()">` +
+      vers.map(v => `<option${v === st.strategy_version ? ' selected' : ''}>${v}</option>`).join('') + `</select>`
+    : st.strategy_version;
+  const ab = st.about || {};
+  const ev = st.evidence || {};
+  const evline = Object.entries(ev).map(([k,v]) =>
+    `<span class="${v === true ? 'ok' : v === false ? 'no' : 'mut'}">${k.replaceAll('_',' ')}: ${v}</span>`).join(' · ');
+  const meaning = ab.stage_meaning || {};
+  const rows = Object.entries(st.stages).map(([stage, rec]) => {
+    const done = !!rec;
+    return `<tr><td style="white-space:normal;max-width:260px"><b>${stage}</b>
+        <div class="note" style="margin:2px 0 0">${meaning[stage] || ''}</div></td>
+      <td>${done ? `<span class="badge b-pass">APPROVED</span> <span class="mut">${fmtET(rec.at, true)} ${rec.notes||''}</span>` : '<span class="mut">pending</span>'}</td>
+      <td>${done ? `<button onclick="appr('revoke','${stage}')">Revoke</button>` : `<button onclick="appr('approve','${stage}')">Approve</button>`}</td></tr>`;
+  }).join('');
+  // WHAT YOU ARE APPROVING — the strategy, its rules, and the evidence (user 2026-07-05)
+  const bt = ab.backtest_overall || {};
+  const btLine = Object.entries(bt).map(([s, o]) => `${s} ${o.avg_r > 0 ? '+' : ''}${o.avg_r}R×${o.n}`).join(' · ');
+  const par = ab.replay_parity || {};
+  const parLine = Object.entries(par).map(([s, m]) => `${s} ${m}%`).join(' · ');
+  const gRuns = Object.entries(ab.gauntlet_runs || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+  document.getElementById('approvals').innerHTML =
+    `<details style="margin-bottom:8px"><summary class="mut" style="cursor:pointer"><b>WHAT you are approving</b> — ${st.strategy_version} (click)</summary>
+      <div class="note" style="margin:6px 0">${ab.what_it_is || ''}</div>
+      <div class="note">stages: ${Object.entries(meaning).map(([s, m]) => `<b>${s}</b> = ${m}`).join('<br>')}</div>
+      <div class="note">evidence — backtest: ${btLine || 'run 8·Report'} | parity: ${parLine || 'run 9·Parity'}
+        ${ab.cost_stress_warning && ab.cost_stress_warning.length ? ` | <span class="no">⚠ negative at 2x slip: ${ab.cost_stress_warning.join(', ')}</span>` : ''}
+        ${gRuns ? ` | gauntlet: ${gRuns}` : ''}</div>
+    </details>
+    <table><tr><th>stage</th><th>status</th><th></th></tr>${rows}</table><div class="note">${evline}</div>
+    <div class="note" id="ph78">phase 7–8: loading…</div>`;
+  loadPhase78();
+}
+// AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06): the paper study evaluates itself hourly on the
+// server; this row just SHOWS the readiness — when everything is green the 'live' stage advances
+// automatically (audit-logged) and only the LIVE_APPROVED.lock stays in your hands.
+async function loadPhase78(){
+  try{
+    const p = await j('/api/phase78?advance=false');
+    const c = (p.paper_study||{}).criteria || {};
+    const p7ok = Object.values(p.phase7||{}).every(x=>x.ok===true);
+    const bits = [
+      `paper ${c.n_closed||0}/${c.n_needed} trades`,
+      `${c.window_days||0}/${c.days_needed}d`,
+      `scorecard ${c.scorecard_consistent===true?'✓':c.scorecard_consistent===false?'✗':'…'}`,
+      `hardening ${p7ok?'✓':'…'}`,
+      `exec-quality ${ (p.execution_quality||{}).ok===true?'✓':(p.execution_quality||{}).ok===false?'✗':'…' }`];
+    document.getElementById('ph78').innerHTML =
+      `<b>PHASE 7–8 auto-advance</b> ${p.phase8_ready?'<span class="badge b-pass">READY — live stage auto-advances</span>':'<span class="mut">watching (auto)</span>'} — ${bits.join(' · ')}`
+      + (p.auto_advanced?` <span class="ok">advanced ${fmtET(p.auto_advanced.at,true)}</span>`:'')
+      + ` <span class="mut">· ES excluded (cost-stress) · lock file stays manual</span>`;
+  }catch(e){ document.getElementById('ph78').textContent = 'phase 7–8: ' + e; }
+}
+async function appr(action, stage){
+  let url = `/api/approval/${action}?stage=${stage}&version=${encodeURIComponent(_apprVer)}`;
+  if (action === 'approve'){
+    const notes = prompt(`Approve stage "${stage}" for ${_apprVer}?\nOptional notes:`, '');
+    if (notes === null) return;
+    url += `&notes=${encodeURIComponent(notes)}`;
+  }
+  await fetch(url, {method: 'POST'});
+  loadApprovals();
+}
+window.appr = appr;
+
+/* one-click: approve the whole ladder for the SELECTED version, arm paper autotrade AND
+   continuous training; the lineage joins the strategy duel (user 2026-07-06) */
+async function approveAndPaper(){
+  if (!confirm(`Approve ${_apprVer} for research → replay → PAPER trading,\n` +
+               'arm PAPER autotrade + CONTINUOUS TRAINING, and enter it in the strategy duel?\n\n' +
+               '(Paper account only — live stays hard-locked.)')) return;
+  const notes = prompt('Approval notes (recorded in the audit trail):', 'one-click approval') ?? '';
+  const st = await (await fetch(`/api/approval/approve_paper_all?notes=${encodeURIComponent(notes)}&version=${encodeURIComponent(_apprVer)}`, {method: 'POST'})).json();
+  const p = await (await fetch('/api/control/paper_autotrade?on=1', {method: 'POST'})).json();
+  document.getElementById('paperstat').innerHTML = (p.error
+    ? `<span class="no">approved, but paper autotrade NOT armed: ${p.error}</span>`
+    : `<span class="ok">approved · PAPER AUTOTRADE ON (${p.placed||0} orders so far)</span>`)
+    + ` · <span class="ok">continuous training ${st.continuous_training||''}</span>`;
+  loadApprovals(); loadDuel();
+}
+async function loadDuel(){
+  let d; try{ d = await j('/api/duel'); }catch(e){ return }
+  const el = document.getElementById('duel');
+  const mods = Object.keys(d.lineage || {});
+  if (!mods.length){ el.textContent = '—'; return }
+  el.innerHTML = '<table><tr><th>module</th><th class="num">n</th><th class="num">WR%</th><th class="num">avgR</th><th class="num">totR</th><th class="num">PF</th><th class="num">open</th><th>status</th></tr>' +
+    mods.map(m => {
+      const r = (d.results || {})[m];
+      const joined = (d.joined || {})[m];
+      const opt = (d.options || {})[m];
+      return `<tr><td title="${(d.lineage||{})[m]||''}">${m.replace(/_/g,' ')}` +
+        (opt ? `<div class="mut" style="font-size:9px;margin-top:2px" title="gate-passed options expression (payoff replay F74)">⚡ ${opt}</div>` : '') + `</td>` +
+        (r ? `<td class="num">${r.n}</td><td class="num">${r.win_pct}</td><td class="num">${r.avg_r}</td><td class="num">${r.total_r}</td><td class="num">${r.pf ?? '—'}</td>`
+           : `<td class="num" colspan="5">no resolved trades yet</td>`) +
+        `<td class="num">${(d.open_positions||{})[m]||0}</td>` +
+        `<td>${joined ? '<span class="badge b-pass">IN THE DUEL</span>' : '<span class="mut">awaiting approval</span>'}</td></tr>`;
+    }).join('') + '</table>' +
+    `<div class="note">shadow only — daily rules on completed bars, no orders · last day ${d.last_day || '—'}</div>`;
+}
+window.approveAndPaper = approveAndPaper;
+
+async function loadPaperStat(){
+  try{
+    const h = await j('/api/health');
+    document.getElementById('paperstat').innerHTML = h.paper_autotrade
+      ? '<span class="ok">paper autotrade: ON</span>'
+      : '<span class="mut">paper autotrade: off</span>';
+  }catch(e){}
+}
+
+/* ---- entry-parameter sweep (rows clickable -> full detail + gauntlet prefill) ---- */
+let _sweepData = null;
+async function loadSweep(){
+  const d = await j('/api/training/sweep');
+  _sweepData = d;
+  const el = document.getElementById('sweep');
+  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  const pfmt = p => `ctx ${p.ctx ? 'ON' : 'off'} · cd ${p.cooldown} · stale ${p.stale} · retest ${p.retest}` +
+    (p.mode ? ` · ${p.mode}` : '');
+  let html = `<table><tr><th>sym</th><th>config</th><th>params</th><th class="num">IS avg R (n)</th>
+    <th class="num">OOS avg R (n)</th><th>verdict</th></tr>`;
+  for (const [s, r] of Object.entries(d.symbols || {})){
+    if (r.error){ html += `<tr><td>${s}</td><td colspan="5" class="no">${r.error}</td></tr>`; continue; }
+    const rows = [['default (adopted)', r.default], ['best in-sample', r.best_is]];
+    for (const [label, x] of rows){
+      if (!x) continue;
+      html += `<tr style="cursor:pointer" onclick='sweepDetail(${JSON.stringify(s)}, ${JSON.stringify(label)})'>
+        <td>${s}</td><td>${label}</td><td class="mut">${pfmt(x.params)}</td>
+        <td class="num">${fmt(x.is.avg_r)} (${x.is.trades})</td>
+        <td class="num ${x.oos.avg_r > 0 ? 'ok' : 'no'}">${fmt(x.oos.avg_r)} (${x.oos.trades})</td>
+        <td>${label === 'best in-sample' ? `<span class="${(r.verdict||'').startsWith('candidate') ? 'ok' : 'mut'}">${r.verdict || ''}</span>` : ''}</td></tr>`;
+    }
+  }
+  el.innerHTML = html + `</table><div class="note">grid ${d.grid_size} combos · cutoff ${Math.round((d.cutoff_frac||0.7)*100)}% ·
+    a best-IS combo is only a CANDIDATE if it also beats the default out-of-sample — otherwise it's curve-fit and the default stays.</div>`;
+}
+function sweepDetail(sym, label){
+  const r = (_sweepData.symbols || {})[sym];
+  if (!r) return;
+  const x = label === 'default (adopted)' ? r.default : r.best_is;
+  const box = document.getElementById('sweepdetail');
+  box.style.display = 'block';
+  box.textContent = `FULL DETAIL — ${sym} · ${label}\n` +
+    `WHAT WAS USED:\n${JSON.stringify(r.used || {note: 'rerun the sweep for the used-context block'}, null, 1)}\n` +
+    `PARAMS: ${JSON.stringify(x.params)}\n` +
+    `IN-SAMPLE:  ${JSON.stringify(x.is)}\nOUT-OF-SAMPLE: ${JSON.stringify(x.oos)}\n` +
+    (label !== 'default (adopted)' ? `VERDICT: ${r.verdict}\nTOP-5 IN-SAMPLE:\n` +
+      (r.top5_is || []).map(t => `  ${JSON.stringify(t.params)} IS ${t.is.avg_r} (${t.is.trades}) | OOS ${t.oos.avg_r} (${t.oos.trades})`).join('\n') : '');
+  // prefill the gauntlet inputs with this candidate
+  document.getElementById('gsym').value = sym;
+  document.getElementById('gctx').checked = !!x.params.ctx;
+  document.getElementById('gcd').value = x.params.cooldown;
+  document.getElementById('gstale').value = x.params.stale;
+  document.getElementById('gretest').value = x.params.retest;
+  if (x.params.mode) document.getElementById('gmode').value = x.params.mode;
+}
+window.sweepDetail = sweepDetail;
+
+/* ---- gauntlet ---- */
+async function runGauntlet(){
+  const g = id => document.getElementById(id).value;
+  const args = `--ctx=${document.getElementById('gctx').checked ? 1 : 0} --cooldown=${g('gcd')} ` +
+    `--stale=${g('gstale')} --retest=${g('gretest')} --mode=${g('gmode')} --minpb=${g('gminpb')} ` +
+    `--timeout=${g('gtimeout')} --volx=${g('gvolx')} --tf=${g('gtf')}`;
+  const r = await (await fetch(`/api/training/run?kind=gauntlet&sym=${g('gsym')}&args=${encodeURIComponent(args)}`,
+                               {method: 'POST'})).json();
+  if (r.error) document.getElementById('runlog').textContent = 'error: ' + r.error;
+  poll();
+}
+window.runGauntlet = runGauntlet;
+async function loadGauntlet(){
+  const d = await j('/api/training/gauntlet');
+  const el = document.getElementById('gauntlet');
+  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  let html = '';
+  for (const [key, r] of Object.entries(d.runs || {})){
+    const ok = r.verdict === 'ADOPT_CANDIDATE';
+    html += `<div style="margin-bottom:10px"><b>${key}</b> · ${fmtET(r.generated_at, true)} ·
+      <span class="badge ${ok ? 'b-pass' : 'b-fail'}">${r.verdict}</span> ·
+      ${Object.entries(r.checks).map(([c, v]) => `<span class="${v ? 'ok' : 'no'}">${v ? '✓' : '✗'} ${c}</span>`).join(' · ')}
+      <table style="margin-top:6px"><tr><th></th><th>params</th><th class="num">full avg R (n)</th><th class="num">OOS avg R (n)</th><th class="num">2x slip</th><th>yrs+</th><th class="num">maxDD</th></tr>
+      ${[['candidate', r.candidate], ['default', r.default]].map(([lab, side]) =>
+        `<tr><td>${lab}</td><td class="mut">${JSON.stringify(side.params)}</td>
+         <td class="num">${fmt(side.results.full.avg_r)} (${side.results.full.n})</td>
+         <td class="num ${side.results.oos.avg_r > 0 ? 'ok' : 'no'}">${fmt(side.results.oos.avg_r)} (${side.results.oos.n})</td>
+         <td class="num">${fmt(side.results.slip_2x.avg_r)}</td><td>${side.results.years_pos}</td>
+         <td class="num">${side.results.full.max_dd_r}</td></tr>`).join('')}</table>
+      <details><summary class="mut" style="cursor:pointer">full detail — everything that was used (data span, split, rules, costs, per-side)</summary>
+      <pre class="log" style="white-space:pre-wrap">${JSON.stringify({used: r.used, candidate: r.candidate, default: r.default}, null, 1)}</pre></details></div>`;
+  }
+  el.innerHTML = html || '<span class="mut">no runs yet</span>';
+}
+
+/* ---- pending models ---- */
+async function loadPending(){
+  const r = await j('/api/training/registry');
+  const pend = (r.models || []).filter(m => !m.champion && (m.metrics||{}).gates_passed);
+  document.getElementById('pending').innerHTML = pend.length ?
+    '<table><tr><th>model</th><th>version</th><th class="num">OOS AUC</th><th class="num">holdout</th><th></th></tr>' +
+    pend.map(m => `<tr><td>${m.name}</td><td>${m.version}</td><td class="num">${fmt((m.metrics||{}).oos_auc)}</td><td class="num">${fmt((m.metrics||{}).holdout_auc)}</td>
+      <td><button onclick="approveModel('${m.name}','${m.version}')">Promote to champion</button></td></tr>`).join('') + '</table>'
+    : '<span class="mut">none — continuous runs register gate-passing challengers here</span>';
+}
+async function approveModel(name, version){
+  if (!confirm(`Promote ${name} ${version} to LIVE champion?`)) return;
+  await fetch(`/api/training/approve_model?name=${encodeURIComponent(name)}&version=${encodeURIComponent(version)}`, {method: 'POST'});
+  loadPending(); loadRegistry();
+}
+window.approveModel = approveModel;
+
+/* ---- data QA ---- */
+async function loadDataQA(){
+  const d = await j('/api/training/dataqa');
+  const el = document.getElementById('dataqa');
+  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  const rows = Object.entries(d.symbols || {}).map(([s, r]) => r.error
+    ? `<tr><td>${s}</td><td colspan="7" class="no">${r.error}</td></tr>`
+    : `<tr><td>${s} ${r.ok ? '<span class="badge b-pass">OK</span>' : '<span class="badge b-fail">ISSUES</span>'}</td>
+       <td class="num">${r.rows.toLocaleString()}</td><td>${r.span[0].slice(0,10)} → ${r.span[1].slice(0,10)}</td>
+       <td class="num">${r.dupe_ts}</td><td class="num">${r.high_lt_low + r.bad_wick_geometry}</td>
+       <td class="num">${r.calendar_gaps}</td><td class="num">${r.bars_per_day.avg} / ${r.bars_per_day.expected||'—'}</td>
+       <td class="num">${r.bars_per_day.short_days}</td></tr>`).join('');
+  el.innerHTML = `<table><tr><th>symbol</th><th class="num">bars</th><th>span</th><th class="num">dupes</th>
+    <th class="num">bad candles</th><th class="num">gaps</th><th class="num">bars/day</th><th class="num">short days</th></tr>${rows}</table>
+    <div class="note">generated ${fmtET(d.generated_at, true)} · ${d.tf} ${d.session}</div>`;
+}
+
+/* ---- dataset tiles ---- */
+async function loadDataset(){
+  const sym = document.getElementById('sym').value;
+  const d = await j('/api/training/dataset?sym=' + sym);
+  const t = document.getElementById('dstiles');
+  if (d.error){ t.innerHTML = `<div class="mut">${d.sym}: ${d.error}</div>`; document.getElementById('dsnote').textContent=''; return; }
+  const tile = (v, l, cls='') => `<div class="tile"><div class="v ${cls}">${v}</div><div class="l">${l}</div></div>`;
+  t.innerHTML = tile(d.rows, d.sym + ' candidates') + tile((100*d.win_rate).toFixed(1)+'%', 'win rate')
+    + tile((100*d.tp2_rate).toFixed(1)+'%', 'hit 4R cap') + tile((100*d.stop_rate).toFixed(1)+'%', 'full stop')
+    + tile((d.avg_net_r>=0?'+':'')+fmt(d.avg_net_r), 'avg net R', d.avg_net_r>=0?'ok':'no')
+    + tile(d.n_features, 'PIT features') + tile(d.span ? d.span[0].slice(0,4)+'–'+d.span[1].slice(0,4) : '—', 'span');
+  const nan = Object.entries(d.worst_nan||{}).map(([k,v]) => `${k} ${(100*v).toFixed(0)}%`).join(' · ');
+  document.getElementById('dsnote').textContent =
+    `rule version ${d.strategy_version}` + (nan ? ` · features with missing values: ${nan}` : ' · no missing features');
+}
+
+/* ---- latest report -> zoo charts + gates ---- */
+function bar(ctx, labels, values, refLine, refLabel, betterHigh){
+  const data = { labels, datasets: [{ data: values, backgroundColor: S[0], borderRadius: 4,
+                                      borderSkipped: false, barThickness: 18, label: 'OOS' }]};
+  const opts = { responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+    plugins: { legend: { display: false },
+      tooltip: { callbacks: { label: c => ` ${c.parsed.x.toFixed(3)}` } },
+      annotationLine: {} },
+    scales: { x: { grid: { color: GRID }, ticks: { color: MUT } },
+              y: { grid: { display: false }, ticks: { color: INK } } } };
+  const chart = new Chart(ctx, { type: 'bar', data, options: opts,
+    plugins: [{ id: 'ref', afterDraw(c){ if (refLine === null || refLine === undefined) return;
+      const x = c.scales.x.getPixelForValue(refLine); const g = c.ctx;
+      g.save(); g.strokeStyle = css('--s5'); g.setLineDash([4,3]); g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x, c.chartArea.top); g.lineTo(x, c.chartArea.bottom); g.stroke();
+      g.fillStyle = css('--s5'); g.font = '10px system-ui';
+      g.fillText(refLabel, Math.min(x + 4, c.chartArea.right - 60), c.chartArea.top + 10); g.restore(); } }]});
+  return chart;
+}
+
+function renderReport(rep){
+  if (!rep || rep.error) return;
+  document.getElementById('repname').textContent = ` — ${rep.kind||''} ${rep.sym||''} · ${fmtET(rep.created_at, true)}`;
+  const zoo = rep.zoo || {};
+  const names = Object.keys(zoo);
+  const aucs = names.map(n => zoo[n].oos_auc), briers = names.map(n => zoo[n].oos_brier);
+  const base = rep.win_rate != null ? rep.win_rate * (1 - rep.win_rate) : null;
+  if (aucChart) aucChart.destroy();
+  if (brierChart) brierChart.destroy();
+  aucChart = bar(document.getElementById('aucChart'), names, aucs, 0.52, 'gate 0.52', true);
+  brierChart = bar(document.getElementById('brierChart'), names, briers, base, base ? 'base ' + base.toFixed(3) : '', false);
+  // gates panel
+  const g = document.getElementById('gates');
+  const rows = [];
+  rows.push(['best model', rep.best || '—']);
+  rows.push(['OOS AUC', `${fmt(rep.oos_auc)} ${rep.oos_auc > 0.52 ? '<span class="badge b-pass">PASS</span>' : '<span class="badge b-fail">FAIL</span>'}`]);
+  if (base !== null) rows.push(['OOS Brier vs base', `${fmt(rep.oos_brier,4)} / ${base.toFixed(4)} ${rep.oos_brier < base ? '<span class="badge b-pass">PASS</span>' : '<span class="badge b-fail">FAIL</span>'}`]);
+  if (rep.buckets) rows.push(['bucket monotone', rep.buckets.monotone_ok ? '<span class="badge b-pass">PASS</span>' : '<span class="badge b-fail">FAIL</span>']);
+  rows.push(['PROMOTED', rep.promote ? '<span class="badge b-pass">YES — champion updated</span>' : '<span class="badge b-fail">NO — prior stays live</span>']);
+  if (rep.reason) rows.push(['reason', `<span class="mut">${rep.reason}</span>`]);
+  if (rep.version) rows.push(['version', rep.version]);
+  g.innerHTML = '<table>' + rows.map(r => `<tr><th>${r[0]}</th><td>${r[1]}</td></tr>`).join('') + '</table>';
+  // buckets
+  const bk = document.getElementById('buckets');
+  if (rep.buckets){
+    const ent = Object.entries(rep.buckets).filter(([k]) => k !== 'monotone_ok');
+    bk.innerHTML = '<table><tr><th>P(win) bucket</th><th class="num">n</th><th class="num">exp R</th></tr>' +
+      ent.map(([k,v]) => `<tr><td>${k}</td><td class="num">${v.n}</td><td class="num ${v.exp_r>0?'ok':v.exp_r<0?'no':''}">${v.exp_r===null?'—':(v.exp_r>0?'+':'')+v.exp_r}</td></tr>`).join('') + '</table>';
+  } else bk.textContent = 'run did not reach the bucket gate';
+  // calibration
+  const cal = document.getElementById('calib');
+  if (rep.calibration){
+    cal.innerHTML = '<table><tr><th>bin</th><th class="num">n</th><th class="num">predicted</th><th class="num">observed</th></tr>' +
+      rep.calibration.filter(r => r.n > 0).map(r =>
+        `<tr><td>${r.bin}</td><td class="num">${r.n}</td><td class="num">${fmt(r.p_mean)}</td><td class="num">${fmt(r.y_rate)}</td></tr>`).join('') + '</table>';
+  } else cal.textContent = 'run did not reach calibration';
+  // click-to-view: the FULL raw report of the selected run (user requirement 2026-07-05)
+  cal.innerHTML += `<details style="margin-top:8px"><summary class="mut" style="cursor:pointer">full raw report (everything this run used and produced)</summary>
+    <pre class="log" style="white-space:pre-wrap;max-height:280px">${JSON.stringify(rep, null, 1)}</pre></details>`;
+}
+
+async function loadLatest(name){
+  const list = (await j('/api/training/reports')).reports || [];
+  const tgt = name ? list.find(r => r.name === name) : list[0];
+  const tb = document.getElementById('reports');
+  tb.innerHTML = list.length ? '<table><tr><th>run</th><th>kind</th><th>sym</th><th class="num">samples</th><th class="num">AUC</th><th>promoted</th></tr>' +
+    list.map(r => `<tr style="cursor:pointer" onclick="loadLatest('${r.name}')"><td>${fmtET(r.created_at, true)}</td><td>${r.kind}</td><td>${r.sym||''}</td><td class="num">${r.samples||'—'}</td><td class="num">${fmt(r.oos_auc)}</td><td>${r.promote ? '<span class="badge b-pass">YES</span>' : '<span class="badge b-fail">no</span>'}</td></tr>`).join('') + '</table>'
+    : '<span class="mut">no runs yet — train ML or NN above</span>';
+  if (tgt) renderReport(await j('/api/training/report?name=' + tgt.name));
+}
+window.loadLatest = loadLatest;
+
+/* ---- A/B ---- */
+async function loadAB(){
+  const ab = await j('/api/training/ab');
+  const box = document.getElementById('abtab');
+  if (ab.error){ box.innerHTML = `<span class="mut">${ab.error}</span>`; return; }
+  const syms = Object.keys(ab.symbols || {});
+  const variants = ['baseline', 'layer3_only', 'standard'];
+  const vcolor = { baseline: S[3], layer3_only: S[1], standard: S[0] };
+  if (abChart) abChart.destroy();
+  abChart = new Chart(document.getElementById('abChart'), { type: 'bar',
+    data: { labels: syms, datasets: variants.map(v => ({ label: v, backgroundColor: vcolor[v],
+      borderRadius: 4, borderSkipped: false, maxBarThickness: 26,
+      data: syms.map(s => (ab.symbols[s][v] || {}).avg_net_r ?? null) })) },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'top', labels: { boxWidth: 10, boxHeight: 10, color: INK } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.parsed.y === null ? '—' : c.parsed.y.toFixed(3)} R` } } },
+      scales: { y: { title: { display: true, text: 'avg net R / trade', color: MUT }, grid: { color: GRID } },
+                x: { grid: { display: false }, ticks: { color: INK } } } } });
+  let html = '<table><tr><th>sym</th><th>variant</th><th class="num">trades</th><th class="num">win%</th><th class="num">avg R</th><th class="num">total R</th><th class="num">PF</th><th class="num">maxDD</th><th>yrs+</th></tr>';
+  for (const s of syms) for (const v of variants){
+    const m = ab.symbols[s][v]; if (!m) continue;
+    const hot = (s === 'QQQ' || s === 'SPY') ? v === 'standard' : v === 'layer3_only';
+    html += `<tr${hot ? ' style="background:rgba(45,212,167,.06)"' : ''}><td>${s}</td><td>${v}${hot ? ' <span class="badge b-pass">ADOPTED</span>' : ''}</td><td class="num">${m.trades}</td><td class="num">${m.win_pct}</td><td class="num ${m.avg_net_r>0?'ok':'no'}">${m.avg_net_r>0?'+':''}${m.avg_net_r}</td><td class="num">${m.total_r}</td><td class="num">${m.pf ?? '—'}</td><td class="num">${m.max_dd_r}</td><td>${m.years_pos}</td></tr>`;
+  }
+  box.innerHTML = html + '</table>';
+}
+
+/* ---- registry ---- */
+async function loadRegistry(){
+  const r = await j('/api/training/registry');
+  const el = document.getElementById('registry');
+  el.innerHTML = (r.models && r.models.length) ?
+    '<table><tr><th>model</th><th>version</th><th class="num">OOS AUC</th><th>rule version</th><th>champion</th></tr>' +
+    r.models.map(m => `<tr><td>${m.name}</td><td>${m.version}</td><td class="num">${fmt((m.metrics||{}).oos_auc)}</td><td class="mut">${m.strategy_version||'—'}</td><td>${m.champion ? '<span class="badge b-pass">CHAMPION</span>' : ''}</td></tr>`).join('') + '</table>'
+    : '<span class="mut">registry empty — no model has passed the gates yet (live scoring uses the prior)</span>';
+}
+
+/* ---- L2/L3 data sources ---- */
+async function l2register(){
+  const path = document.getElementById('l2path').value.trim();
+  if (!path){ document.getElementById('l2msg').textContent = 'paste a full path first'; return; }
+  // SYMBOL IS AUTO-DETECTED from the file's own symbol column (user 2026-07-07: no manual pick,
+  // so a wrong name can never mix with the data) — no symbol param sent.
+  const r = await (await fetch(`/api/data/register?path=${encodeURIComponent(path)}`, {method:'POST'})).json();
+  // folder registrations return {folder, registered, sources[]}; single files return {kind, size_mb, id};
+  // multi-symbol files return {path, registered, sources[]}
+  document.getElementById('l2msg').innerHTML = r.error ? `<span class="no">${r.error}</span>`
+    : r.registered !== undefined
+      ? `<span class="ok">${r.registered} source(s) registered (symbols auto-detected${r.sources?': '+[...new Set(r.sources.map(s=>s.symbol))].join(', '):''}) — click SYNC ALL to synthesize</span>`
+      : `<span class="ok">registered ${r.kind} as <b>${r.symbol}</b> (auto, ${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
+  loadL2();
+}
+window.l2register = l2register;
+async function l2sync(id){
+  const r = await (await fetch(`/api/training/run?kind=l2sync&sym=${id}`, {method:'POST'})).json();
+  if (r.error) document.getElementById('l2msg').textContent = r.error; else poll();
+}
+window.l2sync = l2sync;
+async function l2syncAll(){
+  const res = await fetch('/api/data/sync_all', {method:'POST'});
+  if (res.status === 404){
+    document.getElementById('l2msg').textContent =
+      'ERROR 404: the SERVER IS RUNNING OLD CODE — close the old server window and start BOT\\run_server.bat.';
+    return;
+  }
+  const r = await res.json();
+  document.getElementById('l2msg').textContent = r.error ? r.error : 'sync-all started — progress below';
+  l2syncPoll();
+}
+window.l2syncAll = l2syncAll;
+let _l2poll = null;
+async function l2syncPoll(){
+  const s = await j('/api/data/sync_status');
+  const el = document.getElementById('l2msg');
+  if (s.on){
+    el.innerHTML = `<span class="ok">SYNC ALL ${s.done}/${s.total}</span> — now: ${s.current || '…'}` +
+      (s.errors.length ? ` · <span class="no">${s.errors.length} error(s)</span>` : '');
+    if (!_l2poll) _l2poll = setInterval(l2syncPoll, 4000);
+  } else if (s.training && !s.training.startsWith('done')){
+    el.innerHTML = `<span class="ok">sync finished ${s.done}/${s.total} — AUTO-TRAINING: ${s.training}</span>` +
+      ' (dataset → ML → NN per synced symbol, --no-promote; watch the run log + Pending models)';
+    if (!_l2poll) _l2poll = setInterval(l2syncPoll, 4000);
+  } else {
+    if (_l2poll){ clearInterval(_l2poll); _l2poll = null; }
+    if (s.total) el.innerHTML = `<span class="ok">sync-all finished ${s.done}/${s.total}</span>` +
+      (s.errors.length ? ` — <span class="no">${s.errors.join(' · ').slice(0, 300)}</span>` : '') +
+      (s.training ? ` — <span class="ok">datasets + ML + NN retrained automatically</span> (gate-passers appear under Pending models)` :
+                    ' — now Rebuild datasets so the l2_* features join in');
+    loadL2();
+  }
+}
+async function l2retrain(){
+  const res = await fetch('/api/data/retrain_synced', {method:'POST'});
+  const r = res.status === 404 ? {error:'404 — SERVER RUNNING OLD CODE, restart run_server.bat'} : await res.json();
+  document.getElementById('l2msg').textContent = r.error ? r.error :
+    `retrain started for ${(r.symbols||[]).join(', ')} — dataset → ML → NN`;
+  if (!r.error) l2syncPoll();
+}
+window.l2retrain = l2retrain;
+async function loadL2(){
+  const d = await j('/api/data/sources');
+  const el = document.getElementById('l2sources');
+  const n_reg = (d.sources || []).filter(s => s.status === 'registered').length;
+  el.innerHTML = (d.sources && d.sources.length) ?
+    `<div class="runrow" style="margin-bottom:8px">` +
+    (n_reg > 1 ? `<button class="primary" onclick="l2syncAll()">⟳ SYNC ALL (${n_reg} pending)</button>` : '') +
+    ((d.sources || []).some(s => s.status === 'synthesized') ? `<button onclick="l2retrain()" title="dataset → ML → NN for every symbol with synthesized depth features (runs automatically after SYNC ALL — this button re-runs it on demand)">⚙ Rebuild + retrain synced</button>` : '') +
+    `</div>` +
+    '<table><tr><th>sym</th><th>kind</th><th class="num">MB</th><th>status</th><th class="num">feat rows</th><th></th></tr>' +
+    d.sources.map(s => `<tr><td>${s.symbol}</td><td>${s.kind}</td><td class="num">${s.size_mb}</td>
+      <td>${s.status === 'synthesized' ? '<span class="badge b-pass">SYNTHESIZED</span>' : s.status}</td>
+      <td class="num">${s.feature_rows || '—'}</td>
+      <td><button onclick="l2sync('${s.id}')">Sync</button></td></tr>`).join('') + '</table>'
+    : '<span class="mut">none registered — paste a path or drag a file</span>';
+}
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.style.borderColor = css('--s1'); });
+dz.addEventListener('dragleave', () => dz.style.borderColor = '');
+dz.addEventListener('drop', async e => {
+  e.preventDefault(); dz.style.borderColor = '';
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  // symbol AUTO-DETECTED server-side from the file's own symbol column (no manual pick — a
+  // wrong name can never mix with the data; multi-symbol files synthesize per symbol found)
+  dz.textContent = `synthesizing ${f.name} (${(f.size/1e6).toFixed(1)} MB) in memory — symbol auto-detect…`;
+  const r = await (await fetch(`/api/data/synthesize_upload`,
+      {method: 'POST', body: f, headers: {'x-filename': f.name}})).json();
+  dz.textContent = r.error ? `error: ${r.error}`
+    : r.detected_symbols
+      ? `done: ${r.detected_symbols.join(', ')} — ${r.results.map(x=>`${x.symbol} ${x.feature_rows||0} min`).join(' · ')} — raw not saved`
+      : `done: ${r.feature_rows} feature minutes for ${r.symbol} (auto) (${r.span[0]} → ${r.span[1]}) — raw not saved`;
+  loadL2();
+});
+
+/* ---- report matrix + parity + audit ---- */
+async function loadMatrix2(){
+  try{
+    const r = await j('/api/training/report_matrix');
+    const el = document.getElementById('matrix');
+    if (r.error){ el.innerHTML = `<span class="mut">${r.error}</span>`; return; }
+    let html = '<table><tr><th>sym</th><th class="num">n</th><th class="num">avg R</th><th class="num">PF</th><th class="num">2x slip</th><th class="num">lat 2t</th><th class="num">fill 90%</th></tr>';
+    for (const [s, v] of Object.entries(r.symbols || {})){
+      if (v.error) continue;
+      const cs = v.cost_stress || {};
+      const cell = x => { const a = (cs[x]||{}).avg_r; return a === undefined || a === null ? '—' :
+        `<span class="${a > 0 ? 'ok' : 'no'}">${a > 0 ? '+' : ''}${a}</span>`; };
+      html += `<tr><td>${s}</td><td class="num">${v.overall.n}</td><td class="num">${v.overall.avg_r}</td>
+        <td class="num">${v.overall.pf ?? '—'}</td><td class="num">${cell('slip_x2')}</td>
+        <td class="num">${cell('latency_2_ticks')}</td><td class="num">${cell('partial_fill_90pct')}</td></tr>`;
+    }
+    el.innerHTML = html + '</table><div class="note">a symbol whose stress column goes red must not size up until measured execution beats the stress case (ES!)</div>';
+  }catch(e){}
+}
+async function loadParity(){
+  try{
+    const r = await j('/api/training/parity');
+    const el = document.getElementById('parity');
+    if (r.error){ el.innerHTML = `<span class="mut">${r.error}</span>`; return; }
+    el.innerHTML = '<table><tr><th>sym</th><th class="num">trades</th><th class="num">match</th><th></th></tr>' +
+      Object.entries(r.symbols || {}).map(([s, v]) => v.error
+        ? `<tr><td>${s}</td><td colspan="3" class="no">${v.error}</td></tr>`
+        : `<tr><td>${s}</td><td class="num">${v.checked}</td><td class="num">${v.match_pct}%</td>
+           <td>${v.ok ? '<span class="badge b-pass">EXACT</span>' : '<span class="badge b-fail">DRIFT</span>'}</td></tr>`).join('') + '</table>';
+  }catch(e){}
+}
+async function loadAudit(){
+  try{
+    const r = await j('/api/audit?n=25');
+    document.getElementById('audittrail').textContent = (r.records || []).map(x =>
+      `${(x.ts||'').slice(5,19)} ${x.event} ${Object.entries(x).filter(([k]) => !['ts','event'].includes(k)).map(([k,v]) => `${k}=${JSON.stringify(v)}`).join(' ').slice(0,90)}`).join('\n') || '—';
+  }catch(e){}
+}
+
+/* ---- Journal → Training Lab feed (the journal IS the dataset) ---- */
+async function loadJournalFeed(){
+  try{
+    const d = await j('/api/training/journal_feed');
+    const bytf = d.by_symbol_tf || {}, bystrat = d.by_strategy || {}, recent = d.recent || [];
+    const tfk = Object.keys(bytf).sort(), sk = Object.keys(bystrat).sort();
+    let html = '';
+    if(!tfk.length){ html = '<div class="mut">no live journal rows yet — they accrue as the scan runs (approval-free)</div>'; }
+    else{
+      html += '<div class="mut" style="font-size:10px;margin:2px 0">by lineage (tf)</div>'+
+        '<table><tr><th>lineage</th><th class="num">rows</th><th class="num">train</th><th class="num">taken</th><th class="num">WR%</th></tr>'+
+        tfk.map(k=>{const v=bytf[k];return `<tr><td>${k}</td><td class="num">${v.rows}</td><td class="num">${v.trainable_with_features}</td>`+
+          `<td class="num">${v.taken}</td><td class="num">${v.win_rate!=null?(v.win_rate*100).toFixed(0):'—'}</td></tr>`;}).join('')+'</table>';
+      html += '<div class="mut" style="font-size:10px;margin:6px 0 2px">by STRATEGY</div>'+
+        '<table><tr><th>strategy</th><th class="num">rows</th><th class="num">taken</th><th class="num">WR%</th><th class="num">avgR</th></tr>'+
+        sk.map(s=>{const v=bystrat[s];return `<tr><td>${s}</td><td class="num">${v.rows}</td><td class="num">${v.taken}</td>`+
+          `<td class="num">${v.win_rate!=null?(v.win_rate*100).toFixed(0):'—'}</td><td class="num">${v.avg_r!=null?v.avg_r:'—'}</td></tr>`;}).join('')+'</table>';
+      html += '<div class="mut" style="font-size:10px;margin:6px 0 2px">recent trades — which strategy</div>'+
+        '<table><tr><th>when</th><th>strategy</th><th>sym</th><th>tf</th><th>side</th><th>out</th><th class="num">R</th></tr>'+
+        recent.map(t=>`<tr><td class="mut" style="font-size:9px">${t.ts}</td><td>${t.strategy}</td><td>${t.symbol}</td>`+
+          `<td class="mut">${t.tf}</td><td class="${t.side==='long'?'ok':'no'}">${t.side}</td><td class="mut">${t.outcome||'—'}</td>`+
+          `<td class="num ${t.net_r>0?'ok':t.net_r<0?'no':'mut'}">${t.net_r!=null?t.net_r:'—'}</td></tr>`).join('')+'</table>';
+    }
+    const it = d.integrity;
+    if(it) html = (it.ok
+      ? '<div class="ok" style="font-size:10px">✓ integrity: no dupes · no bad levels · every row has its bar</div>'
+      : `<div class="no" style="font-size:10px">⚠ INTEGRITY: ${it.dupes} dupes · ${it.bad_levels} bad levels · ${it.missing_bar_identity} without bar identity — see /api/journal/integrity</div>`) + html;
+    document.getElementById('journalfeed').innerHTML = html;
+    document.getElementById('jfnote').textContent =
+      `${d.total_rows} rows · learning ${d.approval_required?'':'needs NO'} approval`;
+  }catch(e){ document.getElementById('journalfeed').innerHTML = '<span class="dn">'+e+'</span>'; }
+}
+/* ---- Evolution engine — emergent drafts ---- */
+async function loadEvolve(mine){
+  try{
+    if(mine) document.getElementById('evolve').innerHTML='<span class="mut">mining…</span>';
+    const d = await j('/api/evolve'+(mine?'?deep=1':''));
+    const drafts = d.drafts || [];
+    const notes = [].concat(d.slices||[], d.rejects||[]).filter(x=>x&&x.note).map(x=>x.note);
+    let html = drafts.length ? drafts.map(x=>
+      `<div style="margin-bottom:6px"><b>${x.id}</b> <span class="mut">${x.kind}</span>`+
+      `<div class="mut" style="font-size:10px">${(x.spec||'').slice(0,140)}</div></div>`).join('') : '';
+    if(!drafts.length) html = `<div class="mut">${notes[0]||'no drafts yet'} · total drafts ${d.drafts_total||0}</div>`;
+    if(d.mining) html = '<div class="mut">⛏ deep mining running in a subprocess — refresh in a minute…</div>'+html;
+    document.getElementById('evolve').innerHTML = html;
+  }catch(e){ document.getElementById('evolve').innerHTML = '<span class="dn">'+e+'</span>'; }
+}
+window.loadEvolve = loadEvolve;
+async function loadAll(){ loadDataset(); loadLatest(); loadAB(); loadRegistry();
+                          loadApprovals(); loadPending(); loadDataQA(); loadSweep(); loadPaperStat();
+                          loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); loadDuel();
+                          loadJournalFeed(); loadEvolve(false); }
+document.getElementById('sym').addEventListener('change', loadDataset);
+loadAll(); poll();
+</script>
+</body>
+</html>

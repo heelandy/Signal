@@ -1,0 +1,1170 @@
+# BOT Review
+
+Date reviewed: 2026-06-25
+
+Scope reviewed: `BOT/` contains 112 Markdown documents plus one PNG architecture image (`ChatGPT Image Jun 25, 2026, 05_25_55 PM.png`). I found no executable bot source code, dependency manifest, sample runtime config, or test suite inside the folder.
+
+## Summary
+
+This is a broad Trading OS documentation pack, not a buildable bot yet. It is useful as a product and architecture vision: the module taxonomy is consistent, the safety principles are directionally correct, and the image gives a fast top-level map. The main gap is that most documents stop at categories and principles instead of defining contracts that an engineer can implement and test.
+
+Verdict: good concept package; not implementation-ready without a narrower MVP, concrete schemas, executable runbooks, and testable acceptance gates.
+
+## Findings
+
+### High - The folder does not contain a runnable bot
+
+The folder is documentation and an image only. The installation guide lists generic prerequisites and workflow steps, but it does not include actual install commands, a repository layout, service entry points, environment examples, or a smoke-test command (`BOT/INS-001_Installation_Guide.md:13`, `BOT/INS-001_Installation_Guide.md:24`, `BOT/INS-001_Installation_Guide.md:37`). If the goal is to review a real trading bot, there is no code here to execute, lint, test, or safety-audit.
+
+Required fix: add the implementation repo structure, runtime entry point, dependency file, `.env.example`, local startup command, dry-run mode, and a minimal replay/paper smoke test.
+
+### High - Scope is too broad for a first build
+
+The vision says the system should support stocks, ETFs, futures, options, forex, and crypto (`BOT/ESV-001_Executive_Summary_Product_Vision.md:22`, `BOT/MRS-001_Master_Requirements_Specification.md:15`). The BRD includes replay, paper, and live trading in scope (`BOT/BRD-001_Business_Requirements_Document.md:31`, `BOT/BRD-001_Business_Requirements_Document.md:33`), and the roadmap spans ten phases through production readiness (`BOT/MIR-001_Master_Implementation_Roadmap.md:22`, `BOT/MIR-001_Master_Implementation_Roadmap.md:121`).
+
+Required fix: define an MVP. For this workspace, a practical first target would be NQ/MNQ only, replay plus paper only, one market-data path, no live broker orders until the risk and reconciliation layers are proven.
+
+### High - API and event contracts are not implementation-ready
+
+The API reference lists endpoints such as auth, market data, risk, orders, positions, ML, and admin (`BOT/APIREF-001_API_Endpoint_Reference.md:24`, `BOT/APIREF-001_API_Endpoint_Reference.md:118`), but it does not define request bodies, response bodies, validation rules, auth scopes, pagination, rate limits, or concrete error cases. The service-contract document lists fields for trade candidates, risk decisions, and order requests (`BOT/API-001_API_Architecture_Service_Contracts.md:63`, `BOT/API-001_API_Architecture_Service_Contracts.md:82`) but not JSON schemas. The event catalog defines a standard envelope and event domains (`BOT/EVT-001_Event_Catalog_Message_Bus_Specification.md:23`, `BOT/EVT-001_Event_Catalog_Message_Bus_Specification.md:34`) but not payload schemas or compatibility rules beyond general versioning.
+
+Required fix: create OpenAPI specs, JSON Schema event definitions, idempotency-key rules for order endpoints, an error-code table, and an authorization matrix per endpoint.
+
+### High - Database docs name tables but do not define a schema
+
+The database docs list table groups such as `risk_decisions`, `orders`, `positions`, and `audit_logs` (`BOT/DBS-001_Database_Schema_Reference.md:43`, `BOT/DBS-001_Database_Schema_Reference.md:67`; `BOT/DBA-001_Database_Architecture.md:69`). They define naming rules and indexing guidelines (`BOT/DBS-001_Database_Schema_Reference.md:70`, `BOT/DBS-001_Database_Schema_Reference.md:85`) but do not specify columns, constraints, foreign keys, retention, partitions, or migrations.
+
+Required fix: add an actual schema file, either SQL migrations or Prisma/ORM models, including constraints for orders, fills, positions, risk decisions, audit logs, broker credentials metadata, and replay datasets.
+
+### High - Money-risk and live-execution behavior is still underdefined
+
+The risk engine correctly says every trade must pass risk validation (`BOT/RE-001_Risk_Engine.md:10`, `BOT/RE-001_Risk_Engine.md:29`), but the rule set is mostly categories: daily loss, max drawdown, position sizing, correlation limits, news restrictions, broker health, and kill switches (`BOT/RE-001_Risk_Engine.md:58`, `BOT/RE-001_Risk_Engine.md:133`). The risk rule library names maximum position size, maximum risk per trade, minimum risk-to-reward, trailing drawdown, and kill switch actions (`BOT/RRL-001_Risk_Rule_Library.md:30`, `BOT/RRL-001_Risk_Rule_Library.md:89`) without formulas or defaults. The capital preservation document has one useful concrete example for the previous green day rule (`BOT/CPE-001_Capital_Preservation_Engine.md:77`, `BOT/CPE-001_Capital_Preservation_Engine.md:87`), but the rest needs the same level of specificity.
+
+Required fix: define rule formulas, default thresholds, per-account overrides, approval/override flow, state transitions, and test cases for loss limits, prop-firm drawdown, duplicate order prevention, broker disconnects, partial fills, market halts, and bad data.
+
+### Medium - Testing gates are named but not testable
+
+The test catalog lists categories and standard fields (`BOT/TST-001_Test_Case_Catalog.md:13`, `BOT/TST-001_Test_Case_Catalog.md:26`). The acceptance plan says all critical tests must pass and no critical defects can remain (`BOT/ATP-001_Acceptance_Test_Plan.md:51`, `BOT/ATP-001_Acceptance_Test_Plan.md:53`). The replay and paper validation handbooks define workflows and success criteria (`BOT/RVH-001_Replay_Validation_Handbook.md:21`, `BOT/PVH-001_Paper_Trading_Validation_Handbook.md:44`). None of these include concrete test IDs, fixtures, expected outputs, minimum sample sizes, or pass/fail thresholds.
+
+Required fix: add test cases such as `RISK-001 daily loss breach blocks new orders`, `EXEC-002 duplicate order idempotency`, `DATA-003 stale feed blocks execution`, and `REPLAY-001 deterministic replay checksum`.
+
+### Medium - Security controls need enforceable details
+
+The security docs name the right areas: auth, RBAC, MFA, session management, secrets, encryption, audit logging, rate limiting, CSRF/XSS protection, and secure headers (`BOT/SEC-001_Security_Identity_Access_Management_Framework.md:55`, `BOT/SEC-001_Security_Identity_Access_Management_Framework.md:128`). The configuration reference lists expected secret categories and env vars (`BOT/CFG-001_Configuration_Environment_Reference.md:44`, `BOT/CFG-001_Configuration_Environment_Reference.md:58`). Missing details: password hashing standard, token TTLs, refresh-token rotation, broker-key storage model, secret rotation cadence, admin MFA recovery, audit retention, PII/log redaction, and exact RBAC permissions.
+
+Required fix: turn the security section into a checklist with concrete controls and tests, not only principles.
+
+### Medium - Documentation governance has an inconsistency
+
+The final documentation index says the only remaining master artifact is the Complete Project Metadata File (`BOT/FDI-002_Final_Documentation_Index_v2.md:90`, `BOT/FDI-002_Final_Documentation_Index_v2.md:93`), but `META-001_Complete_Project_Metadata_File.md` already exists and identifies itself as the official master metadata repository (`BOT/META-001_Complete_Project_Metadata_File.md:2`, `BOT/META-001_Complete_Project_Metadata_File.md:7`).
+
+Required fix: update the index so it no longer reports an already-present artifact as remaining.
+
+### Medium - Operations and disaster recovery are too generic
+
+Operations documents list useful checklists and incident types (`BOT/MOR-001_Master_Operations_Runbook.md:12`, `BOT/MOR-001_Master_Operations_Runbook.md:52`), but they do not include commands, dashboards, alert thresholds, owners, escalation contacts, rollback commands, or exact recovery verification steps. DR targets are described as configurable rather than fixed (`BOT/DRP-001_Master_Disaster_Recovery_Business_Continuity.md:14`, `BOT/DRP-001_Master_Disaster_Recovery_Business_Continuity.md:15`).
+
+Required fix: define concrete RPO/RTO targets, health checks, alert thresholds, rollback steps, backup restore drills, and post-incident reconciliation requirements.
+
+## Picture Review
+
+The PNG is a strong executive architecture map. It communicates the intended layers clearly: external data sources, user interfaces, core trading modules, platform services, data layer, infrastructure, and end-to-end flow.
+
+The problem is density. It tries to show the entire future platform in one image, so it is hard to use as an implementation guide. The text is readable at full size but too crowded for quick operational use. It also lacks trust boundaries, MVP-versus-future status, live-trading safety boundaries, exact data ownership, and traceability back to specific spec documents.
+
+Recommended image improvements:
+
+- Create two diagrams: `MVP Architecture` and `Target Architecture`.
+- Add a visible boundary between research/paper/replay systems and live execution.
+- Add trust boundaries around broker credentials, user auth, web/API entry points, and external data providers.
+- Mark module maturity: planned, specified, implemented, tested, live-ready.
+- Keep the current picture as a vision diagram, not the build blueprint.
+
+## Strengths
+
+- The safety philosophy is correct: risk cannot be bypassed, broker truth is authoritative, and replay/paper validation must precede live trading (`BOT/ADR-001_Master_Architecture_Decision_Records.md:31`, `BOT/ADR-001_Master_Architecture_Decision_Records.md:37`, `BOT/ADR-001_Master_Architecture_Decision_Records.md:55`).
+- The docs cover the major domains needed for a real automated trading system: market data, risk, execution, order reconciliation, journaling, observability, security, testing, and operations.
+- The repeated focus on auditability and trace IDs is directionally right for a trading system.
+- The module naming and document IDs are consistent enough to become a real documentation system after the inconsistencies are cleaned up.
+
+## Implementation and Improvement Backlog
+
+This is the practical build plan I would take from the BOT folder after reading the docs and the first review. The sequence intentionally starts with a smaller, testable MVP before attempting the full Trading OS target architecture.
+
+### Phase 0 - Documentation Cleanup Before Coding
+
+Implementation:
+
+- Add `BOT/README.md` as the actual entry point. It should explain what the folder is, what is implemented, what is only planned, and how to run any future code.
+- Add `BOT/IMPLEMENTATION_STATUS.md` with each module marked as `planned`, `specified`, `implemented`, `tested`, `paper-ready`, or `live-ready`.
+- Fix the index inconsistency where `FDI-002` says the metadata file is still remaining even though `META-001` exists.
+- Add a `docs-to-code traceability matrix`: requirement -> module -> API/event -> table -> test case.
+
+Improvements:
+
+- Separate target-state language from MVP requirements. Right now many docs read as if all assets, brokers, ML, AI, and live trading are equally current.
+- Replace broad phrases like "low latency", "high availability", "complete auditability", and "near real-time" with measurable targets.
+- Add owners and maturity states to the Master Module Registry.
+
+Deliverables:
+
+- `BOT/README.md`
+- `BOT/IMPLEMENTATION_STATUS.md`
+- updated `FDI-002_Final_Documentation_Index_v2.md`
+- `BOT/TRACEABILITY_MATRIX.md`
+
+### Phase 1 - MVP Architecture
+
+Implementation:
+
+- Define the MVP as NQ/MNQ futures only, replay plus paper only, one market-data path, one strategy path, no live broker orders.
+- Create a simple service layout:
+  - `bot_core/` for orchestration, event routing, config loading, and mode control.
+  - `market_data/` for feed adapters and normalized candles.
+  - `market_truth/` for validation, gap checks, and canonical candles.
+  - `risk/` for risk rules and capital preservation.
+  - `strategy/` for signal generation and candidate ranking.
+  - `execution/` for replay/paper order simulation.
+  - `journal/` for trade lifecycle records.
+  - `tests/` for deterministic fixtures.
+- Build an execution-mode gate that only permits `replay` and `paper` until every live-readiness condition is explicitly met.
+
+Improvements:
+
+- The BOT architecture wants replay -> paper -> approval -> live. Make that a hard state machine, not a guideline.
+- Keep ML, multi-agent AI, options, forex, crypto, multi-broker routing, and live execution out of MVP scope.
+
+Deliverables:
+
+- project scaffold
+- mode state machine
+- MVP architecture diagram
+- MVP config file
+
+### Phase 2 - Market Data and Market Truth
+
+Implementation:
+
+- Define the canonical candle schema: symbol, timestamp UTC, open, high, low, close, volume, source, quality flags, and ingestion timestamp.
+- Implement market-data ingestion from the current workspace data first, then provider adapters later.
+- Add validation checks for missing bars, duplicate timestamps, out-of-order rows, bad OHLC, stale data, and timezone drift.
+- Build a Market Truth output that downstream risk, strategy, replay, and journal modules consume.
+
+Improvements:
+
+- The Market Data and Market Truth docs name provider reconciliation, confidence scoring, and failover, but need exact algorithms and thresholds.
+- Add "bad data blocks execution" rules. If market data is stale or invalid, the system should not produce new paper/live orders.
+
+Deliverables:
+
+- canonical candle schema
+- market data validator
+- market truth builder
+- fixture data for replay
+- tests for stale, duplicate, missing, and invalid bars
+
+### Phase 3 - Risk Engine and Capital Preservation
+
+Implementation:
+
+- Turn the risk docs into executable rule configs.
+- Implement these first:
+  - max risk per trade
+  - max contracts
+  - daily loss limit
+  - maximum drawdown
+  - previous green day protection
+  - max trades per day
+  - cooldown after loss
+  - news/event lockout
+  - market-data health lockout
+  - manual kill switch
+- Every risk decision should return `approved`, `rejected`, or `blocked`, with reason codes and a trace ID.
+
+Improvements:
+
+- Add numeric defaults and formulas. The docs list the right protections but do not yet define enough to code reliably.
+- Add an override workflow that is impossible to use accidentally and always audited.
+- Treat risk as a pure decision service: no hidden database writes required to approve a trade.
+
+Deliverables:
+
+- `risk_rules.yaml` or equivalent
+- risk decision JSON schema
+- reason-code catalog
+- kill-switch state file/table
+- tests for every risk rule
+
+### Phase 4 - Strategy Candidate Flow
+
+Implementation:
+
+- Define a `TradeCandidate` schema based on the API docs: candidate ID, symbol, side, timeframe, setup type, confidence, entry, stop, target, timestamp, strategy version, and evidence.
+- Implement one strategy path first, then route every candidate through the Risk Engine.
+- Add Market Opportunity Queue only after the first strategy produces candidates consistently.
+
+Improvements:
+
+- Keep strategy generation separate from risk approval and execution, as the BOT docs intend.
+- Store every rejected candidate too, because rejected ideas are needed for replay, diagnostics, and learning.
+
+Deliverables:
+
+- trade candidate schema
+- one MVP strategy adapter
+- candidate ranking function
+- rejected-candidate journal
+- replay test for deterministic candidate generation
+
+### Phase 5 - Replay and Paper Execution
+
+Implementation:
+
+- Build a replay broker and paper broker before any live broker adapter.
+- Implement order states: created, validated, submitted, accepted, partially filled, filled, cancelled, rejected, expired, and error.
+- Implement position states: no position, opening, open, reducing, closing, closed, mismatch, unknown, and emergency.
+- Add idempotency keys so duplicate order submissions are rejected or safely reused.
+- Record fills, slippage assumptions, commission assumptions, and position changes.
+
+Improvements:
+
+- The Execution Core, Broker Framework, and Order Manager docs have the correct boundaries, but need concrete state transition rules.
+- Broker truth should be simulated in replay/paper first so reconciliation logic can be tested before real money is involved.
+
+Deliverables:
+
+- replay broker
+- paper broker
+- order state machine
+- position state machine
+- fill simulator
+- duplicate-order/idempotency tests
+
+### Phase 6 - Data Model, API, and Event Contracts
+
+Implementation:
+
+- Create real schemas for:
+  - users/accounts
+  - instruments
+  - market candles
+  - trade candidates
+  - risk decisions
+  - orders
+  - fills
+  - positions
+  - journal entries
+  - audit logs
+  - incidents
+  - capability flags
+- Create OpenAPI specs for the API Reference endpoints.
+- Create JSON Schemas for core events such as `risk.approved`, `risk.rejected`, `order.submitted`, `order.filled`, `position.synced`, and `incident.created`.
+
+Improvements:
+
+- The docs currently list table names and endpoint groups; implementation needs columns, constraints, indexes, payloads, and error semantics.
+- Add versioning rules for API and event schema changes before the first implementation.
+
+Deliverables:
+
+- SQL/Prisma migrations
+- OpenAPI document
+- event schema folder
+- error-code catalog
+- auth-permission matrix
+
+### Phase 7 - Security and Configuration
+
+Implementation:
+
+- Add typed configuration validation at startup.
+- Add `.env.example` with safe placeholders only.
+- Encrypt broker credentials and never expose them to the frontend.
+- Implement RBAC permissions for admin, trader, analyst, read-only, and automation-service roles.
+- Add audit logging for login, config changes, risk overrides, kill switch changes, order actions, broker connection changes, and secret rotation.
+
+Improvements:
+
+- The security docs name the right controls, but they need specifics: token TTLs, password hashing, MFA policy, secret rotation cadence, redaction rules, session expiration, and admin recovery.
+- Use plain text rendering and redacted logs for any operator-visible messages that could contain untrusted external data or secrets.
+
+Deliverables:
+
+- config validator
+- `.env.example`
+- RBAC matrix
+- audit event schema
+- secret redaction helper
+- security tests
+
+### Phase 8 - Observability and Operations
+
+Implementation:
+
+- Track health for market data, market truth, risk, execution, broker/paper broker, database, queues, and background jobs.
+- Add operational dashboards or at minimum generated status JSON.
+- Add incident levels and automatic incident records for broker failure, stale data, database failure, risk failure, and kill switch activation.
+- Add a pre-market checklist, post-market report, and replay validation report.
+
+Improvements:
+
+- Operations docs should include commands, thresholds, alert destinations, recovery steps, and verification checks.
+- DR targets should be fixed for the MVP instead of "configurable".
+
+Deliverables:
+
+- health-check command
+- status JSON
+- incident log
+- pre-market checklist script/report
+- replay validation report
+- backup/restore drill notes
+
+### Phase 9 - UI and Picture Improvements
+
+Implementation:
+
+- Keep the current PNG as the target vision diagram.
+- Add a separate MVP diagram with only the modules being built first.
+- Add a live-safety boundary showing that research, replay, paper, and live execution are isolated.
+- Add trust boundaries around API entry points, broker credentials, market data providers, and admin controls.
+
+Improvements:
+
+- The current picture is strong for vision but too dense for builders.
+- Add module maturity labels so it is clear what is planned, specified, implemented, tested, and live-ready.
+
+Deliverables:
+
+- `BOT/MVP_ARCHITECTURE.md` or PNG
+- updated target architecture diagram
+- module maturity overlay
+
+### Phase 10 - Live Trading Readiness Gate
+
+Implementation:
+
+- Do not connect live brokerage until the following are true:
+  - replay tests are deterministic
+  - paper trading has run for a defined period
+  - risk rules block known bad scenarios
+  - broker reconciliation is proven in simulation
+  - kill switch is tested
+  - logs are redacted
+  - audit history is complete
+  - user approval is explicit
+- Add a live-readiness checklist that must fail closed by default.
+
+Improvements:
+
+- The BOT docs correctly require user approval before live mode; implementation should make live mode impossible without explicit config, successful validation records, and a manual approval action.
+
+Deliverables:
+
+- live readiness checklist
+- live mode approval record
+- live mode lock file or database flag
+- live mode smoke test that does not place real orders
+
+## Highest-Value Immediate Improvements
+
+1. Create `BOT/README.md` and `BOT/IMPLEMENTATION_STATUS.md`.
+2. Limit MVP to NQ/MNQ replay plus paper.
+3. Define `TradeCandidate`, `RiskDecision`, `OrderRequest`, `OrderEvent`, and canonical candle schemas.
+4. Implement risk rules before strategy expansion.
+5. Implement replay/paper broker before any live broker adapter.
+6. Add concrete test cases for stale data, loss limits, duplicate orders, partial fills, market halt, broker disconnect, kill switch, and replay determinism.
+7. Split the PNG into an MVP diagram and a target architecture diagram.
+
+## Recommended Next Steps
+
+1. Freeze an MVP scope: one instrument family, one data source path, one strategy path, replay and paper only.
+2. Create executable contracts: OpenAPI, event schemas, database migrations, risk-rule config, and a minimal replay fixture.
+3. Add a real `README.md` inside `BOT/` with setup, run, test, and smoke-test commands.
+4. Convert the risk and execution docs into test cases before adding live broker support.
+5. Update the picture into separate MVP and target diagrams so builders do not confuse future ambition with current requirements.
+
+## Repo-Wide BOT Integration Summary
+
+This review was expanded from the `BOT/` folder to the full repository. The main repo is not a blank bot project. It already contains a working NQ macro catalyst engine, local dashboard, web alert/admin platform, data verification tools, source-health checks, delivery workflows, and validation utilities. The `BOT/` folder should be treated as the target Trading OS architecture, while the existing repo should be treated as the implementation base.
+
+No source code should be changed until the first build target is agreed.
+
+### What Already Exists
+
+1. Python NQ macro engine
+
+- `macro_pipeline_runner.py` orchestrates the live catalyst pipeline.
+- `catalyser_news.py`, `macro_news_feed.py`, and `macro_earnings_calendar.py` handle macro/news/calendar inputs.
+- `macro_reaction_study.py` builds historical reaction profiles.
+- `macro_regime.py` and `macro_live_regime_builder.py` add market/tape/regime context.
+- `macro_signal_trust.py` and `macro_daily_confirmation.py` adjust signal quality and confidence.
+- `macro_source_health.py`, `macro_data_quality.py`, and `market_data_verify.py` already provide market-data and provider-health checks.
+
+2. Market data and reaction research
+
+- `data/` contains active NQ datasets, including 1m, 5m, 15m, 60m, daily, Yahoo, and Dabento-derived files.
+- `studies/` contains macro reaction profiles, reaction histories, clusters, and validation outputs.
+- `reports/` contains market-data verification, reconciliation, backfill, and adapter reports.
+
+3. Dashboard and operations layer
+
+- `dashboard/` shows current macro signals, trust, performance, alerts, news, stale status, and pipeline status.
+- `tools/start_live_pipeline.ps1`, `tools/status_live_pipeline.ps1`, and `tools/stop_live_pipeline.ps1` operate the live runner, dashboard server, and tape listener.
+- `tools/tape_signal_listener.py` accepts TradingView alert input and feeds the live regime builder.
+
+4. Web app platform
+
+- `web/` is a Next.js/TypeScript app with Auth, Stripe billing, admin review, integrations, alert delivery, audit logs, and account features.
+- `web/src/app/api/engine/alerts/route.ts` receives signed engine alerts from Python.
+- `web/src/lib/engine-ingest-contract.ts` defines the HMAC-protected ingestion contract.
+- `web/src/lib/engine-ingest-store.ts` persists `NewsEvent`, `MarketReaction`, and `Alert` records idempotently.
+- `web/prisma/schema.prisma` already has users, subscriptions, alert preferences, alerts, deliveries, integrations, audit logs, and a basic trade journal.
+
+5. Replay and journal seeds
+
+- `extra/hs_validation.py` can become the base for replay and strategy validation.
+- `extra/tradingview_fills_to_trades.py`, `extra/tradovate_fills_to_trades.py`, and `extra/journal_reconstruct.py` already contain useful fill/journal conversion logic.
+- `web/src/app/account/journal/` already provides a user-scoped trade journal surface.
+
+### Mapping Existing Repo to BOT Modules
+
+BOT Market Data / Market Truth:
+
+- `dabento_nq_adapter.py`
+- `fetch_nq_yahoo.py`
+- `futures_data_adapter.py`
+- `market_data_verify.py`
+- `market_data_source_reconcile.py`
+- `macro_data_quality.py`
+- `macro_timing_audit.py`
+
+BOT Intelligence / Strategy Candidate:
+
+- `catalyser_news.py`
+- `macro_reaction_study.py`
+- `macro_news_feed.py`
+- `macro_live_regime_builder.py`
+- `macro_regime.py`
+- `macro_signal_trust.py`
+- `macro_daily_confirmation.py`
+- `pine/` HIGHSTRIKE scripts
+- `tools/tape_signal_listener.py`
+
+BOT Observability / Operations:
+
+- `macro_source_health.py`
+- `macro_pipeline_runner.py`
+- `macro_pipeline_alerts.py`
+- `macro_alert_notify.py`
+- `dashboard/`
+- PowerShell start/status/stop/schedule tools
+
+BOT API / Event Layer:
+
+- `macro_web_ingest.py`
+- `web/src/app/api/engine/alerts/route.ts`
+- `web/src/lib/engine-ingest-contract.ts`
+- `web/src/lib/engine-ingest-store.ts`
+- Prisma `NewsEvent`, `MarketReaction`, and `Alert` models
+
+BOT User / Admin / Security / Delivery:
+
+- Auth and RBAC helpers
+- protected form actions
+- request security helpers
+- secret redaction
+- admin alert approval/rejection workflow
+- delivery queue and dispatch logic
+- integration settings
+- security and admin audit logs
+
+BOT Replay / Journal Foundation:
+
+- `extra/hs_validation.py`
+- fill converters
+- journal reconstruction tools
+- web trade journal models and account pages
+
+### Main Missing Pieces
+
+The repo does not yet have a complete trading-bot execution layer. The missing implementation areas are:
+
+- canonical `TradeCandidate` contract
+- canonical `RiskDecision` contract
+- real risk engine module with enforceable rules
+- account exposure and portfolio risk schema
+- order management system
+- order state machine
+- execution simulator
+- paper broker adapter
+- live broker adapter
+- position reconciliation
+- broker truth ledger
+- replay loop that turns historical signals into simulated orders and journal records
+- live-readiness gate that blocks live trading until replay and paper validation pass
+
+### What Should Be Built First
+
+The first build should be an auditable BOT spine around the existing NQ catalyst engine. Do not start with live brokerage.
+
+Build order:
+
+1. Create a canonical signal/candidate contract.
+
+- Convert current macro catalyst output into a structured `TradeCandidate` or `RiskSignal`.
+- Include symbol, timeframe, direction, catalyst family, release time, probability, confidence, market bias, trade state, regime conflict, source health, and idempotency key.
+- Keep the existing alert payload compatible with the web ingestion route.
+
+2. Add Market Truth gating.
+
+- Use existing data quality, source health, stale pipeline, and market-data verification outputs.
+- Block candidate generation when active data is stale, source health is critical, or the runner is unhealthy.
+- Make the default behavior fail closed.
+
+3. Add Risk Gate v1.
+
+- Consume `TradeCandidate` plus current fields such as `risk_lock_triggered`, `trade_state`, `market_bias`, confidence, probability, and source health.
+- Output `RiskDecision` with `approved`, `blocked_reason`, `max_contracts`, `max_risk_dollars`, `stop_policy`, `target_policy`, and audit metadata.
+- No broker calls in this phase.
+
+4. Persist candidates and risk decisions.
+
+- Extend the web app later with database tables for candidates and risk decisions.
+- Link them to existing `NewsEvent`, `MarketReaction`, and `Alert` records.
+- Review them in admin before they can become simulated orders.
+
+5. Build replay/paper simulation before broker execution.
+
+- Use historical NQ data and existing validation scripts.
+- Replay `TradeCandidate -> RiskDecision -> SimulatedOrder -> PositionState -> JournalEntry`.
+- Validate deterministic results, slippage assumptions, max loss behavior, duplicate-order prevention, stale-data blocking, and kill-switch behavior.
+
+6. Only after replay and paper validation, consider broker integration.
+
+- Broker support should start with a paper adapter.
+- Live mode should require explicit approval, passing validation records, redacted logging, and a manual kill switch.
+
+### Senior-Engineer Recommendation
+
+The safest and most useful path is to make the current repo an auditable decision engine before making it an execution bot.
+
+The existing code already knows how to:
+
+- collect macro and market inputs
+- score catalyst reactions
+- estimate confidence and trust
+- detect regime conflicts
+- send signed alerts to the web app
+- moderate and deliver alerts
+- show pipeline and signal status
+
+The next layer should decide whether a signal is allowed to become a trade candidate, then whether a candidate is allowed by risk. Execution should remain disabled until replay and paper systems prove that the logic behaves correctly.
+
+Recommended MVP:
+
+- NQ/MNQ only
+- current macro catalyst engine only
+- replay and paper only
+- no live broker
+- fail-closed risk gate
+- admin-visible audit trail
+- deterministic replay tests
+
+This turns the BOT folder from documentation into an implementation plan while reusing the strongest parts of the current repository.
+
+## BOT Folder and Evidence.docx Review - 2026-06-28
+
+Scope reviewed:
+
+- `C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT`
+- `Evidence.docx`
+- BOT Markdown architecture documents
+- BOT architecture PNG
+- loose support files including `example.txt` and `debug.log`
+
+No source code was changed. This review updates the review file only.
+
+### Folder Location Note
+
+The BOT folder is no longer inside `python nq Catalyst`. It is currently located at:
+
+`C:\Users\heela\OneDrive\Área de Trabalho\prediction\BOT`
+
+The current `python nq Catalyst` repo does not contain a `BOT` folder or Word document. The moved folder contains the active BOT documentation set.
+
+### BOT Folder Inventory
+
+The folder contains:
+
+- about 100 Markdown architecture/specification documents
+- `Evidence.docx`
+- `Botreview`
+- one architecture PNG: `ChatGPT Image Jun 25, 2026, 05_25_55 PM.png`
+- `example.txt`
+- `debug.log`
+
+The Markdown set is broad and covers architecture, risk, execution, broker integration, database, API, events, replay, paper validation, testing, operations, security, ML, and future expansion.
+
+### Overall Review
+
+The BOT folder is a strong target architecture library, not an implementation-ready code plan yet.
+
+The best parts are consistent across the documents:
+
+- risk engine is the highest authority
+- risk cannot be bypassed
+- broker truth wins for orders, fills, and positions
+- replay comes before paper trading
+- paper trading comes before live trading
+- live mode requires user approval
+- every decision should be audited
+- deterministic replay is required
+- LLMs should not place live trades
+- broker credentials must stay isolated
+
+The main weakness is that the documents describe what the system should do, but do not yet define the executable contracts, migrations, tests, and commands needed to build it safely.
+
+### High-Severity Findings
+
+1. Architecture intent is strong, but not implementation-ready.
+
+Documents such as `MSA-001_Master_System_Architecture.md`, `MIR-001_Master_Implementation_Roadmap.md`, `MIB-001_Master_Implementation_Book.md`, and `MMR-001_Master_Module_Registry_Dependency_Graph.md` define a good platform shape. They are still too abstract for direct implementation.
+
+Missing implementation details include:
+
+- exact service boundaries
+- exact API request/response examples
+- exact event payloads
+- field types
+- validation rules
+- database constraints
+- indexes
+- retention rules
+- idempotency requirements
+- runnable acceptance tests
+- concrete startup and smoke-test commands
+
+2. Risk and live-trading safety are conceptually correct, but not enforceable yet.
+
+`RE-001_Risk_Engine.md`, `RRL-001_Risk_Rule_Library.md`, `CPE-001_Capital_Preservation_Engine.md`, `PVH-001_Paper_Trading_Validation_Handbook.md`, `RVH-001_Replay_Validation_Handbook.md`, and `PRC-001_Production_Readiness_Checklist.md` all say the right things about safety.
+
+The missing part is enforcement. The docs need concrete mechanisms such as:
+
+- live-mode database flag
+- live-mode lock file
+- required validation records
+- manual approval record
+- kill-switch state table
+- startup checks that fail closed
+- tests proving execution cannot happen without risk approval
+- tests proving live mode cannot start without replay and paper approval
+
+3. API contracts are too thin.
+
+`API-001_API_Architecture_Service_Contracts.md` identifies important objects:
+
+- `Trade Candidate`
+- `Risk Decision`
+- `Order Request`
+- `ML Prediction`
+
+But the fields are minimal and not enough for safe implementation.
+
+The contracts need:
+
+- exact JSON schemas
+- required vs optional fields
+- enum values
+- timestamp format
+- trace ID and correlation ID rules
+- idempotency key rules
+- error-code catalog
+- versioning rules
+- examples for approved and rejected flows
+- examples for stale data, duplicate order, risk lock, broker disconnect, and market halt
+
+4. Database documentation is not migration-ready.
+
+`DBA-001_Database_Architecture.md`, `DBS-001_Database_Schema_Reference.md`, and `ENG-006_Data_Dictionary.md` identify table groups, but they do not define a usable schema.
+
+Missing details include:
+
+- column names
+- data types
+- constraints
+- relationships
+- foreign keys
+- indexes
+- unique keys
+- retention policy
+- audit immutability rules
+- migration order
+
+The data dictionary is currently a placeholder. It should be expanded before implementation begins.
+
+5. Execution and broker docs need failure-mode precision before any broker work.
+
+`EC-001_Execution_Core.md`, `BF-001_Broker_Framework.md`, `BIH-001_Broker_Integration_Handbook.md`, `OMS-001_Order_Manager_Position_Synchronization_Engine.md`, and `PME-001_Position_Management_Engine.md` define the right safety boundaries.
+
+Before any real broker adapter is built, the docs need exact behavior for:
+
+- partial fills
+- rejected orders
+- order timeout
+- duplicate submit
+- reconnect after disconnect
+- broker position mismatch
+- market halt
+- margin rejection
+- stop/target OCO failure
+- emergency flatten
+- reconciliation after restart
+
+### Medium-Severity Findings
+
+1. `Evidence.docx` is useful research material, but not a clean implementation spec.
+
+The Word document is titled `Evidence-Based Quantitative Trading Research Landscape`. It contains useful content about:
+
+- momentum and trend-following evidence
+- factor research
+- statistical arbitrage
+- volatility risk premium
+- market microstructure
+- execution algorithms
+- order-flow imbalance
+- early-entry logic
+- state machines
+- risk rules
+- deployment timeline
+- broker/data-feed comparisons
+- technology stack and DB suggestions
+
+However, it mixes research, strategy notes, formulas, architecture diagrams, broker comparisons, and deployment planning in one long document. It should be split into controlled documents.
+
+Recommended split:
+
+- `RESEARCH_EVIDENCE.md`
+- `MICROSTRUCTURE_ENTRY_MODEL.md`
+- `EARLY_ENTRY_STATE_MACHINE.md`
+- `DATA_FEED_REQUIREMENTS.md`
+- `BROKER_COMPARISON.md`
+- `DEPLOYMENT_TIMELINE.md`
+- `TECH_STACK_DECISION.md`
+
+2. `Evidence.docx` has document-structure issues.
+
+Structural extraction showed:
+
+- 1,558 non-empty paragraphs
+- 14 tables
+- 6 embedded PNG images
+- 0 comments
+- no detected semantic Word heading styles
+- author and last modified by: `Heelandy Jean`
+- created: `2026-06-28T16:38:00Z`
+- modified: `2026-06-28T16:39:00Z`
+
+The document appears visually organized, but the structure is not semantically organized for Word navigation, accessibility, or reliable review.
+
+Needed improvements:
+
+- apply real Word Heading 1, Heading 2, and Heading 3 styles
+- add a table of contents
+- add captions for diagrams and tables
+- add alt text for images
+- remove leftover `Show code` text
+- move formulas into readable math/code blocks
+- make timeline content readable as text, not only as an image
+
+3. At least one table is too wide for the page.
+
+The document uses US Letter page size with 1-inch margins, giving about 9,360 DXA of usable content width.
+
+One table was detected with width `13,388 DXA`, which exceeds the content area. That table is likely to clip, overflow, or render poorly in Word/PDF.
+
+Another table uses auto width instead of a fixed width, which can render inconsistently.
+
+4. Embedded diagrams need cleanup.
+
+The six embedded PNGs include state-machine, architecture, sequence, workflow, and timeline diagrams. They are useful, but some are cropped or too small in the extracted images.
+
+Issues observed:
+
+- no alt text on any image
+- some diagrams appear cropped at the top or bottom
+- some labels are too small for reliable review
+- sequence diagrams need larger page width or landscape pages
+- timeline image is readable as an image but collapses into an unreadable text line when extracted
+
+5. The main BOT architecture PNG is good as a target vision, but too dense for MVP implementation.
+
+`ChatGPT Image Jun 25, 2026, 05_25_55 PM.png` is useful as a full target architecture diagram. It should not be used as the first build plan.
+
+The BOT folder needs a second diagram showing only the MVP implementation path:
+
+`Market Data -> Market Truth -> Trade Candidate -> Risk Decision -> Replay/Paper Order -> Position State -> Journal -> Dashboard`
+
+6. `example.txt` is raw reference material, not controlled documentation.
+
+`example.txt` contains useful vocabulary, ML library suggestions, and project structure ideas. It should either be moved into a notes/archive folder or converted into a controlled reference document.
+
+7. `debug.log` is not part of the spec.
+
+`debug.log` contains a crashpad file-not-found message and should not be treated as BOT documentation.
+
+### Low-Severity Findings
+
+1. Many documents say `Regenerated`, but there is no maturity index.
+
+The folder needs a clear module maturity table:
+
+- planned
+- specified
+- implementation-ready
+- implemented
+- tested
+- replay-ready
+- paper-ready
+- live-ready
+- production
+
+2. Some docs overlap heavily.
+
+Examples:
+
+- `MIB`, `MIR`, `MDEV`, `MDH`, and `MDS` repeat development lifecycle principles.
+- `RVH`, `PVH`, `TVQ`, `ATP`, and `TST` repeat validation principles.
+- `RE`, `RRL`, `CPE`, and `PFR` overlap on risk and capital protection.
+
+This is not wrong, but it makes the folder harder to execute from. A builder needs one authoritative implementation sequence.
+
+3. The docs need a stronger distinction between target architecture and MVP architecture.
+
+The target architecture includes many future modules: AI research, ML platform, multi-asset support, institutional execution, options flow, data lake, model store, and cloud-native infrastructure.
+
+The MVP should be much smaller.
+
+### Best Implementation Path
+
+Do not start with live trading.
+
+The safest build order is:
+
+1. Create `IMPLEMENTATION_STATUS.md`.
+
+Track every BOT module and mark its current state:
+
+- documentation only
+- contract drafted
+- schema drafted
+- implemented
+- tested
+- replay-ready
+- paper-ready
+- live-ready
+
+2. Create `MVP_SCOPE.md`.
+
+Freeze the first build to:
+
+- NQ/MNQ only
+- existing macro catalyst engine only
+- replay and paper only
+- no live broker
+- no ML/LLM live authority
+- risk gate required
+- admin-visible audit trail
+- deterministic replay tests
+
+3. Create `CONTRACTS.md`.
+
+Define exact schemas for:
+
+- `TradeCandidate`
+- `RiskDecision`
+- `OrderRequest`
+- `OrderEvent`
+- `PositionState`
+- `JournalEntry`
+- `MarketCandle`
+- `SourceHealthState`
+- `KillSwitchState`
+
+4. Create `RISK_RULES_MVP.md`.
+
+Define the first enforceable rules:
+
+- stale data blocks trade
+- source health critical blocks trade
+- risk lock blocks trade
+- no stop means no trade
+- duplicate candidate blocks order
+- daily loss limit blocks trade
+- max contracts per symbol
+- max open positions
+- manual kill switch blocks trade
+- live mode disabled by default
+
+5. Create `REPLAY_PLAN.md`.
+
+Define the replay loop:
+
+`Historical Bars -> Signal/Candidate -> RiskDecision -> SimulatedOrder -> Fill Model -> PositionState -> JournalEntry -> Metrics`
+
+6. Create tests before broker work.
+
+Minimum tests:
+
+- stale market data blocks candidate
+- source health critical blocks candidate
+- risk decision rejects over-size trade
+- missing stop rejects trade
+- duplicate order is blocked
+- partial fill handled deterministically
+- broker disconnect pauses submissions
+- position mismatch pauses workflow
+- kill switch blocks all new orders
+- replay produces deterministic results
+- live mode cannot activate without approval record
+
+7. Only after replay and paper pass, build broker adapters.
+
+Broker support should start with:
+
+- replay broker
+- paper broker
+- broker interface tests
+- fake broker failure simulations
+
+Live broker integration should remain locked until all readiness gates pass.
+
+### Senior-Engineer Conclusion
+
+The BOT folder has the right philosophy and a broad target architecture. The main gap is execution discipline.
+
+The folder should be converted from generated architecture notes into controlled implementation artifacts:
+
+- status index
+- MVP scope
+- schemas
+- migrations
+- tests
+- runbooks
+- validation records
+- approval gates
+
+The Word document is useful as evidence and design inspiration, but it should not drive implementation directly until it is split, cleaned, and converted into precise specs.
+
+The correct first build is not a live trading bot. The correct first build is an auditable decision engine:
+
+`Signal -> TradeCandidate -> RiskDecision -> Replay/Paper Simulation -> Journal -> Review Dashboard`
+
+Only after that path is deterministic, tested, and paper-validated should execution or broker integration be considered.
+
+## BOT File Layering Index - 2026-06-28
+
+This index sorts the BOT folder documents by the general project idea: a Trading OS that moves from market data to market truth, feature/intelligence, trade candidates, risk approval, execution, position management, journaling, learning, user operations, validation, and production operations.
+
+The practical system flow is:
+
+`Vision -> Governance -> Core Platform -> Data/Market Truth -> Intelligence -> Strategy/Opportunity -> Risk -> Execution/Broker/Position -> Journal/Learning -> User/Admin -> Validation -> Operations`
+
+### Layer 00 - Review Log and Supporting Evidence
+
+Purpose: review notes, raw evidence, diagrams, and loose reference material. These are useful inputs, but they are not runtime modules.
+
+- `Botreview`
+- `Evidence.docx`
+- `ChatGPT Image Jun 25, 2026, 05_25_55 PM.png`
+- `example.txt`
+- `debug.log`
+
+### Layer 01 - Product Vision, Requirements, and Scope
+
+Purpose: define what the Trading OS is supposed to be, who it serves, and what requirements drive the build.
+
+- `ESV-001_Executive_Summary_Product_Vision.md`
+- `BRD-001_Business_Requirements_Document.md`
+- `MRS-001_Master_Requirements_Specification.md`
+- `FSD-001_Functional_Specification_Document.md`
+- `NFR-001_Non_Functional_Requirements_Specification.md`
+- `META-001_Complete_Project_Metadata_File.md`
+- `MPI-001_Master_Project_Index_Documentation_Catalog.md`
+- `FDI-002_Final_Documentation_Index_v2.md`
+- `GLO-001_Glossary_Terminology_Reference.md`
+- `FAQ-001_FAQ_Best_Practices_Guide.md`
+
+### Layer 02 - Master Architecture, Roadmap, Governance, and Engineering Standards
+
+Purpose: define the top-level architecture, module ownership, implementation sequence, engineering standards, and project governance.
+
+- `MSA-001_Master_System_Architecture.md`
+- `MAB-001_Master_Architecture_Book.md`
+- `MIR-001_Master_Implementation_Roadmap.md`
+- `MIB-001_Master_Implementation_Book.md`
+- `MMR-001_Master_Module_Registry_Dependency_Graph.md`
+- `ADR-001_Master_Architecture_Decision_Records.md`
+- `MDEV-001_Master_Developer_Book.md`
+- `MDH-001_Master_Developer_Handbook.md`
+- `MDS-001_Master_Development_Standards_Engineering_Guidelines.md`
+- `RCR-001_Rules_Configuration_Capability_Registry.md`
+- `ENG-003_State_Machine_Catalog.md`
+- `ENG-004_Sequence_Diagram_Catalog.md`
+- `ENG-005_UML_Component_Catalog.md`
+- `ENG-006_Data_Dictionary.md`
+- `ENG-007_Configuration_Templates.md`
+- `FEF-001_Future_Expansion_Innovation_Framework.md`
+
+### Layer 03 - Core Platform, API, Events, Security, and Configuration
+
+Purpose: provide the platform shell, service contracts, event bus, security framework, and configuration model that all modules rely on.
+
+- `TOS-001_Trading_OS_Core.md`
+- `API-001_API_Architecture_Service_Contracts.md`
+- `APIREF-001_API_Endpoint_Reference.md`
+- `MAP-001_Master_API_Book.md`
+- `EVT-001_Event_Catalog_Message_Bus_Specification.md`
+- `CFG-001_Configuration_Environment_Reference.md`
+- `SEC-001_Security_Identity_Access_Management_Framework.md`
+- `SDNA-001_Security_DNA_Handbook.md`
+
+### Layer 04 - Data Architecture, Market Data, Market Truth, and Instruments
+
+Purpose: build trusted market inputs before any signal, strategy, risk decision, or execution action is allowed.
+
+- `DBA-001_Database_Architecture.md`
+- `DBS-001_Database_Schema_Reference.md`
+- `MDB-001_Master_Database_Book.md`
+- `DLK-001_Data_Lake_Knowledge_Platform.md`
+- `MDE-001_Market_Data_Engine.md`
+- `MTE-001_Market_Truth_Engine.md`
+- `MTA-001_Market_Truth_Algorithms_Handbook.md`
+- `ACS-001_Asset_Class_Specification_Handbook.md`
+- `FCH-001_Futures_Contract_Handbook.md`
+
+### Layer 05 - Feature Engineering, Market Intelligence, News, and Context
+
+Purpose: turn trusted data into features, regimes, news context, entity context, and market intelligence.
+
+- `FEE-001_Feature_Engineering_Engine.md`
+- `MIE-001_Market_Intelligence_Engine.md`
+- `GMI-001_Global_Market_Intelligence_Engine.md`
+- `MEI-001_Market_Entity_Intelligence_Engine.md`
+- `FIE-001_Futures_Intelligence_Engine.md`
+- `NIH-001_News_Intelligence_Handbook.md`
+- `NRE-001_News_Reaction_Engine.md`
+- `ORM-001_Opening_Range_Matrix_Engine.md`
+
+### Layer 06 - Strategy, Opportunity, Entry, Exit, and Explainability
+
+Purpose: convert intelligence into explainable trade opportunities and candidate decisions before risk evaluation.
+
+- `TSL-001_Trading_Strategy_Library.md`
+- `SDE-001_Strategy_Decision_Engine.md`
+- `MOQ-001_Market_Opportunity_Queue.md`
+- `EIE-001_Entry_Intelligence_Engine.md`
+- `XIE-001_Exit_Intelligence_Engine.md`
+- `DIE-001_Decision_Intelligence_Explainability_Engine.md`
+
+### Layer 07 - Risk, Capital Preservation, Prop Firm Rules, and Assumptions
+
+Purpose: protect capital and enforce the rule that no trade can move forward without risk approval.
+
+- `RE-001_Risk_Engine.md`
+- `RRL-001_Risk_Rule_Library.md`
+- `CPE-001_Capital_Preservation_Engine.md`
+- `PFR-001_Prop_Firm_Rule_Library.md`
+- `RSK-001_Risk_Register_Project_Assumptions.md`
+
+### Layer 08 - Execution, Broker Framework, Orders, Positions, Accounts, and Portfolio
+
+Purpose: safely transform approved risk decisions into replay, paper, or live execution while reconciling broker truth.
+
+- `EC-001_Execution_Core.md`
+- `BF-001_Broker_Framework.md`
+- `BIH-001_Broker_Integration_Handbook.md`
+- `OMS-001_Order_Manager_Position_Synchronization_Engine.md`
+- `PME-001_Position_Management_Engine.md`
+- `AME-001_Account_Management_Engine.md`
+- `PIE-001_Portfolio_Intelligence_Engine.md`
+
+### Layer 09 - Trade Journal, Performance, Learning, ML, AI, and Knowledge
+
+Purpose: record every trade lifecycle, measure performance, learn from outcomes, and support future ML/AI without giving AI live authority.
+
+- `TLJ-001_Trade_Lifecycle_Journal_Engine.md`
+- `PFI-001_Performance_Intelligence_Engine.md`
+- `PLE-001_Performance_Learning_Engine.md`
+- `TKB-001_Trading_Knowledge_Brain.md`
+- `MLP-001_Machine_Learning_Platform.md`
+- `ML-001_Feature_Store_Dictionary.md`
+- `ML-002_Dataset_Specification.md`
+- `ML-003_Model_Registry_Specification.md`
+- `ML-004_Champion_Challenger_Framework.md`
+- `ML-005_ML_Validation_Handbook.md`
+- `ML-006_Continuous_Learning_Handbook.md`
+- `ML-007_LLM_Integration_Architecture.md`
+- `ML-008_Multi_Agent_AI_Framework.md`
+- `ARL-001_AI_Research_Lab.md`
+
+### Layer 10 - User Platform, Admin, Dashboards, and User Operations
+
+Purpose: give traders, admins, and operators usable surfaces for monitoring, configuration, review, approvals, and reporting.
+
+- `RPF-001_Retail_Platform_User_Experience_Framework.md`
+- `MDG-001_Monitoring_Dashboard_Guide.md`
+- `ADM-001_Administrator_Guide.md`
+- `MUM-001_Master_User_Operations_Manual.md`
+- `MUSR-001_Master_User_Book.md`
+
+### Layer 11 - Testing, Replay, Paper Validation, Readiness, Release, and Upgrade
+
+Purpose: prove the system is safe before moving from development to replay, paper, live eligibility, and production.
+
+- `TVQ-001_Testing_Validation_QA_Framework.md`
+- `TST-001_Test_Case_Catalog.md`
+- `RTG-001_Regression_Testing_Guide.md`
+- `RVH-001_Replay_Validation_Handbook.md`
+- `PVH-001_Paper_Trading_Validation_Handbook.md`
+- `ATP-001_Acceptance_Test_Plan.md`
+- `PRC-001_Production_Readiness_Checklist.md`
+- `RLC-001_Release_Checklist.md`
+- `UPG-001_Upgrade_Guide.md`
+- `PTG-001_Performance_Tuning_Guide.md`
+
+### Layer 12 - Infrastructure, Deployment, Operations, Observability, and Recovery
+
+Purpose: operate the system reliably with deployment automation, monitoring, incident response, capacity planning, networking, and disaster recovery.
+
+- `DIA-001_Deployment_Infrastructure_Architecture.md`
+- `IPG-001_Infrastructure_Provisioning_Guide.md`
+- `CICD-001_CI_CD_Pipeline_Release_Management.md`
+- `MOP-001_Master_Operations_Book.md`
+- `MOR-001_Master_Operations_Runbook.md`
+- `OMP-001_Observability_Monitoring_Incident_Response_Platform.md`
+- `ENG-001_Logging_Observability_Standard.md`
+- `ENG-002_Error_Code_Catalog.md`
+- `CAP-001_Capacity_Planning_Guide.md`
+- `NET-001_Networking_Architecture_Guide.md`
+- `BRDR-001_Backup_Restore_Disaster_Recovery_Handbook.md`
+- `DRP-001_Master_Disaster_Recovery_Business_Continuity.md`
+- `INS-001_Installation_Guide.md`
+- `TSG-001_Troubleshooting_Guide.md`
+
+### Recommended MVP Layer Path
+
+The full folder describes a large Trading OS. The first build should not use every layer at once. The practical MVP path should be:
+
+1. Core platform and contracts: `TOS`, `API`, `EVT`, `DBA`, `DBS`
+2. Market foundation: `MDE`, `MTE`, `MTA`, `ACS`, `FCH`
+3. Intelligence and signal source: `FEE`, `MIE`, `NRE`, `ORM`
+4. Candidate and opportunity: `SDE`, `MOQ`, `EIE`
+5. Risk gate: `RE`, `RRL`, `CPE`, `PFR`
+6. Replay and paper execution only: `EC`, `OMS`, `PME`, `BF`, `BIH`
+7. Journal and validation: `TLJ`, `PFI`, `RVH`, `PVH`, `TVQ`, `TST`
+8. User/admin review surface: `RPF`, `MDG`, `ADM`
+9. Operations: `MOR`, `OMP`, `PRC`, `RLC`
+
+Senior-engineer rule: do not implement the whole target architecture first. Build the narrow path from trusted market data to audited risk decision, replay/paper simulation, journal, and review dashboard. Live broker execution stays locked until replay and paper validation prove the path is safe.

@@ -1,0 +1,900 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © heelandy
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE ORB — AUTO  (webhook automation twin of HIGHSTRIKE_ORB_STACK · NQ/MNQ 5m primary)
+// Same validated engine as the STACK indicator, as an executable strategy that emits broker-ready
+// webhook JSON. Validated stack (walk-forward graduated):
+//   • SESSIONS    — US RTH (flagship) + Asia/Tokyo (F22) + London (F29), all 17/17 yrs on NQ 5m,
+//                   plus an Auto mode that runs all three OR cycles per trade-day by the clock.
+//   • TREND GATE  — TF-adaptive HH/HL swing-STRUCTURE state (st_state) ≤5m, EMA ≥15m       (F20)
+//   • VWAP CAP    — entry order only rests while the level is ≤ k·ATR beyond session VWAP   (F16)
+//   • STOP        — STRUCTURE-anchored at the last HH/HL swing (~half the risk, exp +0.74→+1.00R) (F25b)
+//   • EXIT        — TRAIL 2ATR chandelier (cut short / run long); broker-held fixed-TP bracket kept
+//                   as a fallback mode (most robust if the webhook pipe dies mid-trade)       (F27b)
+//
+// WEBHOOK LAYER (provider-agnostic — ready for whenever the keys/URLs arrive):
+//   Format presets: TradersPost · PickMyTrade/Tradovate · Generic JSON (for an n8n/CF-worker relay
+//   that fans out to MULTIPLE accounts/brokers) · Custom template (%TICKER% %ACTION% %QTY% %ENTRY%
+//   %STOP% %TP% %EVENT% placeholders). Token / account-id / extra-raw-JSON inputs are embedded into
+//   every payload. One TradingView alert = ONE webhook URL, so multi-PROVIDER = either the Generic
+//   format into a relay, or this script added twice with different presets.
+//
+// ALERTS it fires (set ONE alert = "Order fills and alert() function calls", webhook = bridge URL):
+//   • ARMED      (alert)       — heads-up when a setup is ready, before the touch (text or JSON)
+//   • ENTRY      (order fill)  — entry + initial structure SL (+ TP in bracket mode) as JSON
+//   • TRAIL SYNC (alert, opt.) — stop-update JSON each time the chandelier ratchets ≥ N ticks (relay/PMT)
+//   • EXIT       (order fill)  — flatten JSON when the trail/stop/TP fills in TV
+//   • SESSION END(order fill)  — flatten JSON at the session cutoff (nothing held across sessions)
+// In TRAIL mode the broker holds the INITIAL structure stop as the catastrophic bracket; the
+// chandelier is managed here and exits by webhook (market). See docs/AUTOMATION_SETUP.md.
+// ⚠️ FUTURES (NQ1!/MNQ1!): trade-day rolls at 18:00 ET (Globex) so Asia stays contiguous.
+// ⚠️ Forward paper-test fills ≥2 weeks before sizing (the one remaining adoption gate).
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+strategy("HIGHSTRIKE ORB AUTO", overlay=true,
+     initial_capital=100000, pyramiding=0, max_labels_count=100,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     commission_type=strategy.commission.cash_per_order, commission_value=0.52,
+     slippage=2, process_orders_on_close=false, calc_on_every_tick=true)
+// COSTS PER-INSTRUMENT: defaults = futures (MNQ 0.52/order, 2-tick). For shares set commission 0 +
+// slippage 1 in Strategy Tester -> Properties (header values must be const).
+// SPEED: calc_on_every_tick=true so the resting stop-entry fills the INSTANT price touches the level.
+// Only ORDER FILLS post the trade webhooks, so intrabar recalc can't spam orders.
+
+// ───────────────────────── SESSION ─────────────────────────
+sess_preset = input.string("Auto (Asia + London + RTH by clock)", "Session", group="Session",
+              options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "London (0300-0330 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
+              tooltip="Auto runs all THREE cycles per trade-day: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). Each cycle flattens at its cutoff.")
+or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
+cut_custom  = input.int(300, "Custom: stop new entries after HHMM (ET)", group="Session", minval=0, maxval=2359)
+sess_tz     = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="Session")
+eod_hhmm    = input.int(1558, "RTH flatten HHMM (ET, RTH preset only)", group="Session", minval=0, maxval=2359,
+              tooltip="Standalone RTH flattens here (entries already stop at 15:00). Asia/London/Auto flatten at the session cutoff.")
+// ───────────────────────── DIRECTION / ORB ─────────────────────────
+long_on  = input.bool(true, "LONG",  group="Direction", inline="d")
+short_on = input.bool(true, "SHORT", group="Direction", inline="d")
+brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
+auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip="<=5m -> 0.0, else 0.25 ATR. OFF = manual.")
+allow_reentry = input.bool(false, "Allow re-entry (re-arm inside OR)", group="ORB",
+            tooltip="F76 (2026-07-06): EQUITIES stay OFF/1 (re-entry cohorts LOSE: QQQ −0.093R, SPY −0.524R; OOS better single-entry). FUTURES: turn ON + Max entries 3 (NQ re-entry cohort +0.164R). Re-arms when price falls back inside the OR.")
+max_entries_in = input.int(1, "Max entries per side / session (0 = UNLIMITED)", group="ORB", minval=0,   // F76: equity re-entries lose (QQQ -0.09 / SPY -0.52 cohorts); futures charts: set 3
+            tooltip="0 = NO cap: uncapped re-entries — the zone state machine still requires a fresh confirmed break each time and hard-blocks an INVALIDATED side (confirmed close beyond the opposite OR edge).")
+int max_entries = max_entries_in <= 0 ? 9999 : max_entries_in
+brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="F59: a FILL needs a FULL-BODY close beyond the level. Default close-confirm = on a bar that CLOSES above OR high (long)/below OR low (short), AUTO sends a MARKET entry (fills ~next open), in lockstep with the STACK signal. 'Wick / touch' = a resting buy/sell-STOP at the level (intrabar fill). Broker holds the SL+TP bracket either way.")
+strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be STRONG — body ≥ this fraction of the full range AND the right colour (bullish long / bearish short). Default 0.25 = validated sweet spot (F59b, best on NQ/QQQ; rejects dojis/long-wick rejections). Higher (0.4-0.6) cuts trades + lowers edge. 0 = any close beyond the level.")
+wait_ft_in   = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="F59c (user rule): don't fire on the breakout candle — WAIT for the NEXT candle to CONTINUE the trend (higher close long / lower close short), then market-enter. Stops 'fired into a reversal' entries. Validated: improves QQQ/SPY, ~neutral NQ. Default ON, in lockstep with STACK. F77 (2026-07-06): QQQ EXCEPTION — turn OFF on QQQ charts (the wait-created trades LOSE -0.54R there; QQQ fills the breakout candle itself, OOS 0.87). SPY/NQ keep it.")
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)
+// ───────────────────────── STRUCTURE GATE ─────────────────────────
+trend_mode = input.string("Off — plain ORB (F58 default)", "Trend gate", group="Structure gate",
+             options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
+             tooltip="USER FILL RULE: entries fire only DURING A CLEAR TREND (long = structure UPtrend ≤5m / EMA-up ≥15m; short the mirror). Default ON (Auto), in lockstep with STACK. NOTE F58: the gate doesn't ADD expectancy net of honest fills — it's the entry SETUP (clean-trend breakouts only), not a statistical edge. 'Off — plain ORB' trades every breakout.")
+struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
+auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="Fast-direction study (2026-07): NQ/futures keep the FULL structure edge at lb=3 with MORE + EARLIER breakout entries; QQQ needs lb=5; SPY ~tied. ON = futures 3 / equity 5. Matches HIGHSTRIKE_ORB_STACK.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
+fast_dir   = input.bool(true, "1-MINUTE direction feed (structure at 1m speed on ANY chart TF)", group="Structure gate",
+             tooltip="STALENESS FIX (user 2026-07, matches HIGHSTRIKE_ORB_STACK): the trend-gate st_state is computed from 1-MINUTE bars via request.security, so every chart timeframe flips direction as fast as the 1m chart (pivots confirm in eff_lb MINUTES, not eff_lb chart bars). Stop anchors stay on the chart-TF swings (validated risk geometry unchanged). No-op on a 1m chart. NOTE: gating entries by 1m structure is a behavior change vs the chart-TF backtest — forward-verify before sizing.")
+struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
+trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
+trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
+// ───────────────────────── VWAP CAP ─────────────────────────
+cap_on = input.bool(false, "VWAP-extension cap", group="VWAP cap", tooltip="F58: the cap HURTS honest fills (removes the late-momentum winners, F57). Default OFF, in lockstep with STACK.")
+cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
+// ───────────────────────── REGIME ─────────────────────────
+local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
+local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Regime", step=0.25)
+block_range_in = input.bool(false,  "Block RANGE regime", group="Regime",
+              tooltip="F76 (2026-07-06): FUTURES leave OFF (blocked chop cohort is POSITIVE: NQ +0.19R, ES +0.18R, OOS up); EQUITIES turn ON (their OOS degrades without the block). Matches the BOT per-asset block_range.")
+macro_en       = input.bool(true,  "MACRO filter ON", group="Regime")
+macro_standdown= input.bool(true,  "Stand-down vs SPY trend", group="Regime")
+spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Regime")
+vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Regime")
+vix_calm = input.float(15.0, "VIX calm",     group="Regime", step=1)
+vix_vol  = input.float(25.0, "VIX volatile", group="Regime", step=1)
+vix_ext  = input.float(35.0, "VIX extreme",  group="Regime", step=1)
+spy_adx_min = input.float(25.0, "Macro ADX min", group="Regime", step=1)
+persist_n   = input.int(3, "Regime persistence bars", group="Regime", minval=1)
+block_d     = input.bool(true, "Block REGIME D", group="Regime")
+block_b_ses = input.string("Off", "Block REGIME B trend", group="Regime",
+              options=["Off", "London only", "All sessions"],
+              tooltip="F31/F31f (2026-06-12): regime B carries a validated edge in ALL 3 sessions (~2.4x trades, OOS stronger than IS) — but London gets riskier unblocked at tight daily limits (blow-up 0→13% on the tight eval profile). Default keeps the B-block during LONDON HOURS (03:00-09:30 ET) only; RTH + Asia trade regime B. 'All sessions' = the old fully-blocked behavior. D stays blocked regardless. Matches STACK.")
+// ───────────────────────── RISK PLAN (the two graduated upgrades) ─────────────────────────
+stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Risk plan",
+            options=["Structure swing (HH/HL)", "OR edge"],
+            tooltip="F25b: stop at the last HH/HL swing (vs the OR edge) ~halves risk per trade and lifts R.")
+sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR (manual)", group="Risk plan", step=0.1)
+auto_minstop= input.bool(true, "Auto min-stop per instrument (futures 0.5 / equity 0.75 ATR)", group="Risk plan",
+            tooltip="F51 (2026-06-22): a 0.5-ATR floor is noise-tight on equities/ETFs (median QQQ structure stop ≈0.57 ATR); 0.75 ATR is expectancy-neutral and less whippy. ON = futures 0.5 / stocks-funds 0.75. OFF = manual value for all. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_min_stop = auto_minstop ? (syminfo.type == "futures" ? 0.5 : 0.75) : min_stop_atr
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk plan", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk plan", tooltip="Arm-timing graduate: equities take a tight 1.5-ATR max stop (lifts QQQ/SPY, caps reversals sooner); futures keep 2.5 (tight whipsaws them). ON = equity/ETF 1.5, futures 2.5. Matches HIGHSTRIKE_ORB_STACK.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+ormid_bias  = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate", tooltip="GRADUATED (2026-07): the OR closed in its UPPER half (close>OR mid) = day biased LONG (block shorts); lower half = biased SHORT (block longs). Additive edge (NQ +0.17->+0.29, SPY +0.35->+0.56); dropped counter-bias trades are the losers; survives 3x slip. Matches HIGHSTRIKE_ORB_STACK.")
+// ───────────────────────── ENTRY STANDARD (canonical 2026-07-04 — one entry across STACK/AUTO/OPTIONS/BOT/engine) ─────────────────────────
+ctx_source   = input.string("Auto (equities Struct+VWAP · futures A∨B∨C)", "Layer-1 context — arming gate", group="Entry standard",
+            options=["Auto (equities Struct+VWAP · futures A∨B∨C)", "Any engine aligned (A∨B∨C, 07.4)", "OR-mid only (DIR-A, 07.3)", "Structure + VWAP (fallback B)", "Off"],
+            tooltip="07.4 (user 2026-07-05): DIR-FAST fires when EITHER engine aligns — A = VWAP side (+the OBLIGATORY OR-mid via the watch machine), B = 1m-fed structure, C = the COMBINED SLOPE ENGINE strong read (S >= 0.30). Blocks only when EVERY engine disagrees. A/B: NQ identical (+0.172->+0.173), ES +0.087->+0.090 — the user rule at zero cost. EQUITIES keep STRUCT+VWAP (their edge: QQQ +0.507 vs +0.320 under A∨B∨C). AUTO picks per instrument. Matches HIGHSTRIKE_ORB_STACK.")
+instant_fill_in = input.bool(true, "Fill instantly when the arm gate is aligned (no next-candle wait)", group="Entry standard",
+            tooltip="USER RULE (2026-07-05, 07.3): ARMED (futures: beyond the obligatory OR-mid; equities: Struct+VWAP) + strong full-body break -> fills IMMEDIATELY; the F59c wait applies only unaligned. PER-ASSET A/B: lifts NQ, ~neutral QQQ/SPY, HURTS ES — turn OFF on an ES chart. Matches STACK.")
+watch_gate   = input.bool(true, "Layer 3: close beyond OR mid activates WATCH", group="Entry standard",
+            tooltip="The entry order rests/fires ONLY while the side is WATCHING: a confirmed DIRECTIONAL-BODY close beyond the OR MID toward the side. A confirmed close back across the mid CANCELS the watch (order pulled) and starts the cooldown. Matches HIGHSTRIKE_ORB_STACK.")
+cooldown_n_in = input.int(3, "Cooldown bars after a watch cancel", group="Entry standard", minval=0,
+            tooltip="COOLDOWN RULE: after a watch cancel at the OR mid, no re-watch/re-entry for this many confirmed bars — kills the chop-around-the-mid churn.")
+stale_n_in   = input.int(0, "Stale: max bars in WATCH without a fill (0 = off)", group="Entry standard", minval=0,
+            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: 24 on ES (the AUTO per-asset toggle sets it — its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
+retest_atr_in = input.float(0.5, "Pullback: retest within xATR of the target", group="Entry standard", step=0.25, minval=0.0,
+            tooltip="PULLBACK MODE: once price runs more than the chase cap past the OR level without a clean fill, do NOT chase — entries stay blocked until price returns within this many ATR of the retest target. 0 = off. GAUNTLET-ADOPTED per asset: ES 0.5 / others 0.25 (the AUTO per-asset toggle sets these — no manual per-chart setting needed).")
+// ── PULLBACK REFINEMENTS (deep-research doc, adopted 2026-07-05 — rule orb-standard-2026.07.1; matches STACK) ──
+retest_target_in = input.string("OR edge", "Pullback: retest target", group="Entry standard",
+            options=["OR edge", "Impulse midpoint", "VWAP"],
+            tooltip="WHERE the pullback must return to before the entry order re-arms: broken OR edge (default) / 50% of the extension impulse / session VWAP. F78 (2026-07-06): Impulse midpoint ADOPTED on NQ/MNQ (+13.5R, better DD — AUTO sets it there); VWAP tested and REJECTED (blocked cohort +0.305R x26 on NQ).")
+min_pb_atr   = input.float(0.05, "Pullback: min retrace from extension (xATR, 0=off)", group="Entry standard", step=0.05, minval=0.0,
+            tooltip="ANTI-SPIKE: the retrace from the extension extreme must be at least this deep before a retest counts (doc 0.05-0.10 ATR).")
+pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=forever)", group="Entry standard", minval=0,
+            tooltip="FRESHNESS: no retest within this many bars = stale for the cycle (RANGE) until the mid is lost (doc 3-8 bars).")
+vol_confirm  = input.float(0.0, "Fill: min volume x 20-bar avg (0=off)", group="Entry standard", step=0.1, minval=0.0,
+            tooltip="RELATIVE-VOLUME CONFIRMATION on the entry bar (doc 1.2-2.0x). DEFAULT OFF until gauntleted.")
+chase_max_in = input.float(0.0, "Max chase past level (xATR, 0=off)", group="Entry standard", step=0.25, minval=0.0,
+            tooltip="DEFAULT 0 = OFF (F75, 2026-07-06, matches STACK): the chased late entries ARE the winners (QQQ +0.59R / SPY +0.70R blocked cohorts; ES lost 62% of expectancy). NQ/MNQ EXCEPTION: 1.5 (AUTO sets it) — there the cap is a DD-holder, widened 1.0->1.5 by F78 (+20.7R, same maxDD). >0 enables no-chase/pullback-retest.")
+exit_mode = input.string("Fixed TP bracket (broker-held)", "Exit", group="Risk plan",
+            options=["Trail (ATR chandelier)", "Fixed TP bracket (broker-held)", "Scale 50% @ TP1 → BE → TP2"],
+            tooltip="DEFAULT = 'Fixed TP bracket' (F34b graduate): full position to a fixed-R cap on the structure stop (set Take-profit R = 4 below) = ~2× the trail's MEDIAN $/trade, honest PF, walk-forward-validated on NQ/QQQ/SPY/ES/GC + 2× slip, best for steady eval accumulation; also survives a dead webhook pipe (broker holds SL+TP). 'Scale' (added 2026-07-05 for STACK parity — TP1 was missing from AUTO): bank 50% at TP1 (R below), move the runner's stop to BREAK-EVEN, target TP2. TRAIL UPDATE — F84 (2026-07-07): under the full 07.7 stack with net costs the chandelier trail passed the COMPLETE 7/7 gauntlet on both equities (QQQ +0.305R PF 1.70 OOS +0.539 · SPY +0.223 PF 1.51 OOS +0.403, 2x-costs positive, 7/9 yrs) — graduated as lineage trail-eq-0.1 (~50% WR, expectancy-first); flip to Trail on QQQ/SPY charts to run it. The F50 eval-account caveat (lower median $/trade) keeps the bracket as DEFAULT. Matches HIGHSTRIKE_ORB_STACK.")
+trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
+tp_rr       = input.float(4.0, "Take-profit R (bracket TP2)", group="Risk plan", step=0.5,
+            tooltip="F34b: 4R is the graduated cap (only level surviving 2× slip on all 5 instruments; 2R/3R die on ES/GC). The structure stop puts this ~4× the typical stop distance in points.")
+tp1_rr      = input.float(1.5, "TP1 R (scale mode)", group="Risk plan", step=0.25,
+            tooltip="F64: 1.5R is the best scale point (beats 1.0R) — medMFE ≈ 1R, so TP1 at 1.5R banks the high-probability move. Matches STACK/BOT (T1_RR=1.5). Scale mode only.")
+// ───────────────────────── SIZING ─────────────────────────
+fixed_qty   = input.int(1, "Fixed qty: contracts/shares (0 = risk-based)", group="Sizing", minval=0,
+              tooltip="Futures: contracts. EQUITIES: SHARES. 0 = size from Risk $ per trade (structure stop ~halves risk, so risk-based sizes larger — capped below).")
+risk_dlr    = input.float(150.0, "Risk $ per trade (qty=0)", group="Sizing", step=25)
+max_qty     = input.int(10, "Max qty safety cap", group="Sizing", minval=1)
+// ───────────────────────── PROP EVAL GUARDRAILS (F26/F26c — full funded ruleset) ─────────────────────────
+eval_on    = input.bool(false, "EVAL: prop guardrails", group="Prop Eval")
+eval_target= input.float(3000.0, "EVAL: profit target $ (0 = off)", group="Prop Eval", step=100,
+             tooltip="When cumulative profit since the strategy started reaches this, the script flattens and STOPS entering — pass secured, don't give it back. 0 disables.")
+daily_loss = input.float(700.0, "EVAL: daily loss limit $", group="Prop Eval", step=50)
+trail_dd   = input.float(1500.0, "EVAL: trailing max loss $", group="Prop Eval", step=100)
+eval_buf   = input.float(200.0, "EVAL: halt buffer $", group="Prop Eval", step=50,
+             tooltip="Halt EARLY by this much: daily halt at -(daily-buffer), trailing halt at peak-(trail-buffer). F26c sizing for $3000/$1500/$700-800: risk $250-300/trade across all sessions. ⚠ TV equity tracks fills since the alert went live — the BROKER is the source of truth; reconcile daily.")
+eval_anchor= input.time(timestamp("12 Jun 2026 00:00 -0400"), "EVAL: ledger start", group="Prop Eval",
+             tooltip="Equity BEFORE this moment is ignored by the guardrails. Set it to your eval's first day — otherwise the whole backtest history counts and the profit target / trailing DD trip the instant you enable EVAL.")
+// ───────────────────────── WEBHOOK ─────────────────────────
+wh_provider = input.string("TradersPost", "Webhook format", group="Webhook",
+              options=["TradersPost", "PickMyTrade / Tradovate", "Generic JSON (relay / multi-account)", "Custom template"],
+              tooltip="Generic JSON carries the FULL trade plan + accountIds[] — point it at a relay (n8n / Cloudflare worker / TradersPost multi-broker) to fan out to several accounts/providers. Custom template: build any schema with %TICKER% %ACTION% %QTY% %ENTRY% %STOP% %TP% %EVENT% %TOKEN% %ACCOUNT%.")
+wh_ticker_ov= input.string("", "Ticker override (blank = chart symbol)", group="Webhook",
+              tooltip="e.g. send MNQ (root) or MNQZ2026 (front month) while charting NQ1!. Leave blank to send the chart ticker.")
+wh_qty_ph   = input.string("{{strategy.order.contracts}}", "Qty field", group="Webhook",
+              tooltip="What goes in the JSON quantity. Default = TradingView fill-contracts placeholder; some bridges want a literal number.")
+wh_token    = input.string("", "API token (PickMyTrade etc.)", group="Webhook")
+wh_account  = input.string("", "Account ID (primary)", group="Webhook")
+wh_accounts = input.string("", "Account IDs, comma-separated (Generic relay, no spaces)", group="Webhook",
+              tooltip="Emitted as accountIds:[...] in Generic JSON so one webhook can drive MULTIPLE accounts via a relay. Leave blank for single-account.")
+wh_extra    = input.string("", "Extra raw JSON fields", group="Webhook",
+              tooltip='Appended verbatim into every payload, e.g. "duplicate_position_allow":true,"risk_percentage":0 — whatever the provider needs when the keys arrive.')
+armed_as_json = input.bool(false, "ARMED alert as JSON (default: human text)", group="Webhook",
+              tooltip="OFF: ARMED is a readable heads-up (route to phone/Discord). ON: ARMED is an event:armed JSON a relay can consume. Bridges that choke on non-order text need this OFF + a second non-webhook alert.")
+sync_on     = input.bool(false, "Send TRAIL stop updates to webhook", group="Webhook",
+              tooltip="ON: every time the chandelier ratchets >= N ticks, fire an event:stop_update JSON so the relay/bridge can move the broker stop. OFF (default): broker keeps the initial structure stop; the trail exits via the EXIT webhook (market). TradersPost has no stop-modify — leave OFF there.")
+sync_ticks  = input.int(20, "Min ratchet ticks per update", group="Webhook", minval=1)
+tmpl_entry  = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","quantity":%QTY%,"entry":%ENTRY%,"stopLoss":%STOP%,"takeProfit":%TP%,"event":"%EVENT%"}', "Custom ENTRY template", group="Webhook")
+tmpl_exit   = input.text_area('{"ticker":"%TICKER%","action":"%ACTION%","event":"%EVENT%"}', "Custom EXIT template", group="Webhook")
+// ───────────────────────── DISPLAY ─────────────────────────
+show_plan        = input.bool(true, "Show stop / target lines", group="Display")
+show_gated       = input.bool(true, "Show entry levels while the gate is BLOCKED (dimmed)", group="Display",
+                   tooltip="Bright yellow = the order is RESTING (would fire on a touch). Dim gray = the level exists but a gate (trend/regime/VWAP-cap/eval) blocks it, so NO order is working there.")
+show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
+show_dash        = input.bool(true, "Show dashboard", group="Display")
+
+// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F78, 2026-07-06) ─────────────────────────
+// ONE toggle applies every cohort-adopted per-asset setting by instrument — no manual per-chart
+// setup (user 2026-07-06: "make them automatic on the script"). OFF = the manual inputs above.
+//   chase-cap : NQ/MNQ 1.5 (F78: 1.0->1.5 gains +20.7R, same maxDD) · everything else 0 (the chased entries are the winners)
+//   retest target: NQ/MNQ Impulse midpoint (F78: +13.5R, better DD) · others OR edge
+//   stale     : ES 24 (its blocked cohort is negative; DD -47->-71 without) · others 0
+//   cooldown  : ES 3 · others 0
+//   next-bar wait (wait_ft): OFF on QQQ (wait-created trades lose -0.54R) · ON elsewhere
+//   instant fill: OFF on ES + SPY (SPY always-wait OOS 0.386->0.620) · ON on NQ/MNQ/QQQ
+//   RANGE-regime block: equities ON · futures OFF (chop cohort positive: NQ +0.19 ES +0.18)
+//   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
+auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
+string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
+bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
+bool _aES  = _aroot == "ES" or _aroot == "MES"
+bool _aQQQ = _aroot == "QQQ"
+bool _aSPY = _aroot == "SPY"
+float chase_max   = auto_asset ? (_aNQ ? 1.5 : 0.0) : chase_max_in
+int   stale_n     = auto_asset ? (_aES ? 24 : 0) : stale_n_in
+int   cooldown_n  = auto_asset ? (_aES ? 3 : 0) : cooldown_n_in
+bool  wait_ft     = auto_asset ? not _aQQQ : wait_ft_in
+bool  instant_fill = auto_asset ? not (_aES or _aSPY) : instant_fill_in
+bool  block_range = auto_asset ? syminfo.type != "futures" : block_range_in
+float retest_atr  = auto_asset ? (_aES ? 0.5 : 0.25) : retest_atr_in
+string retest_target = auto_asset ? (_aNQ ? "Impulse midpoint" : "OR edge") : retest_target_in
+
+// ───────────────────────── CORE ─────────────────────────
+atr14 = ta.atr(14)
+[dip, dim, adxV] = ta.dmi(14, 14)
+atr_pct = close > 0 ? atr14 / close * 100.0 : 0.0
+emaF = ta.ema(close, trend_ema_f)
+emaS = ta.ema(close, trend_ema_s)
+bool trend_up   = close > emaS and emaF > emaS
+bool trend_down = close < emaS and emaF < emaS
+float vwap_c = ta.vwap
+pt_val = syminfo.pointvalue
+// TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so a session crossing midnight stays contiguous.
+int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+int o_now  = (et_min - 1080 + 1440) % 1440
+bool is_auto = sess_preset == "Auto (Asia + London + RTH by clock)"
+bool phase_rth    = is_auto and o_now >= 930 and o_now < 1260   // 09:30-15:00 ET = RTH cycle
+bool phase_london = is_auto and o_now >= 540 and o_now < 930    // 03:00-09:30 ET = London cycle
+string or_start = is_auto ? (phase_rth ? "0930-1000" : phase_london ? "0300-0330" : "1900-2000") :
+     sess_preset == "US RTH (0930-1000 ET)" ? "0930-1000" :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "1900-2000" :
+     sess_preset == "London (0300-0330 ET)" ? "0300-0330" : or_custom
+int cut_hhmm = is_auto ? (phase_rth ? 1500 : phase_london ? 800 : 300) :
+     sess_preset == "US RTH (0930-1000 ET)" ? 1500 :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? 300 :
+     sess_preset == "London (0300-0330 ET)" ? 800 : cut_custom
+int trade_end = ((cut_hhmm / 100) * 60 + (cut_hhmm % 100) - 1080 + 1440) % 1440
+// flatten: standalone RTH at eod_hhmm (entries stop 15:00); every other mode at the session cutoff
+int flat_hhmm = (not is_auto and sess_preset == "US RTH (0930-1000 ET)") ? eod_hhmm : cut_hhmm
+int flat_min  = ((flat_hhmm / 100) * 60 + (flat_hhmm % 100) - 1080 + 1440) % 1440
+string sess_lbl = is_auto ? (phase_rth ? "RTH" : phase_london ? "London" : "Asia") :
+     sess_preset == "US RTH (0930-1000 ET)" ? "RTH" :
+     sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" :
+     sess_preset == "London (0300-0330 ET)" ? "London" : "Custom"
+bool new_day = ta.change(time("D")) != 0                        // CME futures: rolls at 18:00 ET = trade-day start
+int td_dow = dayofweek(time + 6 * 60 * 60 * 1000, sess_tz)      // weekday of the TRADE-day (Sun-eve = Mon)
+bool wkday = td_dow != dayofweek.saturday and td_dow != dayofweek.sunday
+int tf_s = timeframe.in_seconds()
+float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
+
+// ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
+float ph = ta.pivothigh(high, eff_lb, eff_lb)
+float pl = ta.pivotlow(low,  eff_lb, eff_lb)
+var float ph_last = na
+var float ph_prev = na
+var float pl_last = na
+var float pl_prev = na
+var int   st_state = 0
+int st_prev = st_state
+if not na(ph)
+    if na(ph_last) or math.abs(ph - ph_last) / ph_last * 100.0 >= struct_tol
+        ph_prev := ph_last
+        ph_last := ph
+if not na(pl)
+    if na(pl_last) or math.abs(pl - pl_last) / pl_last * 100.0 >= struct_tol
+        pl_prev := pl_last
+        pl_last := pl
+bool s_hh = not na(ph_last) and not na(ph_prev) and ph_last > ph_prev
+bool s_lh = not na(ph_last) and not na(ph_prev) and ph_last < ph_prev
+bool s_hl = not na(pl_last) and not na(pl_prev) and pl_last > pl_prev
+bool s_ll = not na(pl_last) and not na(pl_prev) and pl_last < pl_prev
+// GAP-AWARE claim guard (STRUC fix 2026-07): UP only while close >= last swing low; DOWN only
+// while close <= last swing high — stale HH/HL pairs from the old leg can no longer re-claim a
+// trend the price has already broken (the 'Bullish Trend while price dumped' bug).
+if s_hh and s_hl and close >= pl_last
+    st_state := 1
+else if s_ll and s_lh and close <= ph_last
+    st_state := 2
+else if (s_hh and s_ll) or (s_hl and s_lh)
+    st_state := 3
+// GAP-AWARE CHoCH: no crossing bar required — in a fast move the swing reference steps toward
+// price via new pivots, so the crossing close[1] test could never fire and the state went stale.
+if st_prev == 2 and not na(ph_last) and close > ph_last
+    st_state := 0
+if st_prev == 1 and not na(pl_last) and close < pl_last
+    st_state := 0
+
+// ───────────────────────── 1-MINUTE DIRECTION FEED (fast_dir — same machine, 1m context; lockstep w/ STACK) ─────────────────────────
+// COMBINED SLOPE ENGINE (user research 2026-07): S = 0.50*(closeSlope/ATR) + 0.30*(bodyMidSlope/ATR)
+// + 0.20*bodyPressure. Uses EVERY candle in the window (regression, not first/last), body midpoints
+// catch open/close progression, recency-weighted body pressure kills the one-big-candle illusion.
+// ATR-normalized => comparable across instruments/TFs (~ATRs advanced per bar). Bands: |S|>=0.10
+// directional, >=0.30 strong (starting thresholds — tune per TF via the gauntlet before gating).
+f_slope_comb(int N) =>
+    float _sc = ta.linreg(close, N, 0) - ta.linreg(close, N, 1)
+    float _mid0 = (open + close) / 2.0
+    float _sm = ta.linreg(_mid0, N, 0) - ta.linreg(_mid0, N, 1)
+    float _a = ta.atr(14)
+    float _num = 0.0
+    float _den = 0.0
+    for _i = 0 to N - 1
+        float _w = 1.0 + (N - 1 - _i) / float(math.max(N - 1, 1))
+        float _b = close[_i] - open[_i]
+        _num += _w * _b
+        _den += _w * math.abs(_b)
+    float _bp = _den > 0 ? _num / _den : 0.0
+    _a > 0 ? 0.50 * (_sc / _a) + 0.30 * (_sm / _a) + 0.20 * _bp : 0.0
+f_struct_1m() =>
+    float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+    float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
+    var float _phL = na
+    var float _phP = na
+    var float _plL = na
+    var float _plP = na
+    var int _st = 0
+    int _stp = _st
+    if not na(_ph)
+        if na(_phL) or math.abs(_ph - _phL) / _phL * 100.0 >= struct_tol
+            _phP := _phL
+            _phL := _ph
+    if not na(_pl)
+        if na(_plL) or math.abs(_pl - _plL) / _plL * 100.0 >= struct_tol
+            _plP := _plL
+            _plL := _pl
+    bool _hh = not na(_phL) and not na(_phP) and _phL > _phP
+    bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
+    bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
+    bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
+    if _hh and _hl and close >= _plL
+        _st := 1
+    else if _ll and _lh and close <= _phL
+        _st := 2
+    else if (_hh and _ll) or (_hl and _lh)
+        _st := 3
+    if _stp == 2 and not na(_phL) and close > _phL
+        _st := 0
+    if _stp == 1 and not na(_plL) and close < _plL
+        _st := 0
+    [_st, f_slope_comb(12)]
+[st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+bool use_fast_dir = fast_dir and tf_s > 60
+int st_dir = use_fast_dir ? st_1m : st_state                      // DIRECTION state at 1m speed (stops stay chart-TF)
+float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S (1m feed on any TF)
+// ENTRY STANDARD Layer 1 — arming gate (07.4: futures A∨B∨C — any engine aligns; matches STACK)
+bool eff_ctx = ctx_source != "Off"
+bool is_auto_ctx = str.startswith(ctx_source, "Auto")
+bool use_dirB = ctx_source == "Structure + VWAP (fallback B)" or
+     (is_auto_ctx and syminfo.type != "futures" and syminfo.type != "crypto")
+bool use_midonly = ctx_source == "OR-mid only (DIR-A, 07.3)"
+// DIR-FAST C (user 2026-07-05): the combined slope engine's STRONG read (|S| >= 0.30, 1m-fed)
+bool dirC_up = slope_dir >= 0.30
+bool dirC_dn = slope_dir <= -0.30
+bool ctx_up = use_dirB ? (st_dir == 1 and close > vwap_c) : use_midonly ? true :
+     (close > vwap_c or st_dir == 1 or dirC_up)
+bool ctx_dn = use_dirB ? (st_dir == 2 and close < vwap_c) : use_midonly ? true :
+     (close < vwap_c or st_dir == 2 or dirC_dn)
+int dir_slp = slope_dir >= 0.10 ? 1 : slope_dir <= -0.10 ? -1 : 0
+
+// ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
+bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
+bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
+bool eff_up   = gate_off ? true : use_struct ? (st_dir == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_dir == 2) : trend_down
+
+// ───────────────────────── MACRO REGIME ─────────────────────────
+spy_b() =>
+    [_a,_b,sadx] = ta.dmi(14,14)
+    [close, ta.ema(close,20), ta.ema(close,50), sadx]
+vix_b() => ta.sma(close,5)
+[spc, se20, se50, sadx] = request.security(spy_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+vix5 = request.security(vix_sym, "D", vix_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+bool spy_up = not na(spc) and spc > se20 and se20 > se50
+bool spy_dn = not na(spc) and spc < se20 and se20 < se50
+bool spy_trend = (spy_up or spy_dn) and not na(sadx) and sadx >= spy_adx_min
+string reg_raw = "-"
+if not na(vix5)
+    reg_raw := vix5 >= vix_ext ? "D" : vix5 >= vix_vol ? "C" : (vix5 < vix_calm and spy_trend) ? "A" : (vix5 < vix_vol and not spy_trend) ? "B" : spy_trend ? "A" : "B"
+var int reg_cnt = 0
+var string reg_pend = "-"
+var string reg_conf = "-"
+int need = reg_raw == "D" ? 0 : persist_n
+if reg_raw == "D"
+    reg_conf := "D"
+    reg_pend := "D"
+    reg_cnt := need
+else if reg_raw == reg_pend
+    reg_cnt += 1
+    if reg_cnt >= need
+        reg_conf := reg_raw
+else
+    reg_pend := reg_raw
+    reg_cnt := 1
+string regime = reg_conf != "-" ? reg_conf : reg_raw
+// F31f: B-block can be session-scoped — London hours = 03:00-09:30 ET (o_now 540-930 on the trade-day clock), matches STACK
+bool b_block_now = block_b_ses == "All sessions" or (block_b_ses == "London only" and o_now >= 540 and o_now < 930)
+bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and b_block_now))
+bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
+bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
+int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
+bool local_ok = not block_range or local_regime != 2
+
+// ───────────────────────── OPENING RANGE ─────────────────────────
+bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+bool reset_now = is_auto ? (in_or and not in_or[1]) : new_day   // auto: reset at each session's OR start
+var float or_high = na
+var float or_low  = na
+var bool  or_set  = false
+if reset_now
+    or_high := na
+    or_low  := na
+    or_set  := false
+if in_or
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = false
+if not in_or and not na(or_high)
+    if not or_set
+        or_mid  := (or_high + or_low) / 2.0
+        or_bull := close > or_mid                                  // OR-mid bias: which half did the OR close in?
+    or_set := true
+float brk_buf = atr14 * eff_brk
+
+// ───────────────────────── ENTRY + STOP LEVELS ─────────────────────────
+var float Le = na
+var float Se = na
+var bool  traded_l = false
+var bool  traded_s = false
+var int   n_l = 0
+var int   n_s = 0
+// ORB ZONE STATE MACHINE (staleness fix 2026-07, mirrors HIGHSTRIKE_ORB_STACK): a PENDING side is
+// HARD-INVALIDATED on a confirmed close beyond the OPPOSITE OR edge or a pre-entry tag of its own
+// proposed stop -> the resting order is CANCELLED (arm_* goes false -> strategy.cancel below) and the
+// side stays blocked until price RECLAIMS the breakout edge on a confirmed close. A confirmed close on
+// the wrong side of OR mid = WATCH: the pending entry order is pulled until price re-crosses the mid
+// (fresh break still required). Confirmed bars only — no intrabar state flips.
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false
+var bool s_above_mid = false
+// CANONICAL WATCH MACHINE (entry standard 2026-07-04, mirrors HIGHSTRIKE_ORB_STACK): latched watch
+// per side + cooldown after a mid cancel + stale/RANGE age + pullback extension (don't chase).
+var bool l_watch = false
+var bool s_watch = false
+var int  l_cd = 0
+var int  s_cd = 0
+var int  l_wage = 0
+var int  s_wage = 0
+var bool l_range = false
+var bool s_range = false
+var bool l_ext = false
+var bool s_ext = false
+var float l_ext_hi = na
+var float s_ext_lo = na
+var int   l_pb_age = 0
+var int   s_pb_age = 0
+if reset_now
+    Le := na
+    Se := na
+    traded_l := false
+    traded_s := false
+    n_l := 0
+    n_s := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
+    l_watch := false
+    s_watch := false
+    l_cd := 0
+    s_cd := 0
+    l_wage := 0
+    s_wage := 0
+    l_range := false
+    s_range := false
+    l_ext := false
+    s_ext := false
+    l_ext_hi := na
+    s_ext_lo := na
+    l_pb_age := 0
+    s_pb_age := 0
+if or_set and na(Le) and not na(or_high) and not na(or_low)
+    Le := or_high + brk_buf                                     // breakout entry levels (frozen at OR close)
+    Se := or_low  - brk_buf
+// stop anchor: last HH/HL swing (structure) or the OR edge. Recomputed while ARMED, frozen at fill.
+float anchorL = (stop_mode == "Structure swing (HH/HL)" and not na(pl_last)) ? pl_last : or_low
+float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? ph_last : or_high
+var float Ls = na
+var float Ss = na
+if not na(Le) and strategy.position_size <= 0
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * eff_min_stop)
+if not na(Se) and strategy.position_size >= 0
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * eff_min_stop)
+bool is_trail = exit_mode == "Trail (ATR chandelier)"
+bool is_scale = exit_mode == "Scale 50% @ TP1 → BE → TP2"   // TP1 parity with STACK (2026-07-05)
+float Ltp = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp_rr      // bracket-mode targets only
+float Stp = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp_rr
+
+// ───────────────────────── VWAP-EXTENSION CAP (order rests only while NEAR) ─────────────────────────
+float extL = na(Le) ? na : (Le - vwap_c) / atr14
+float extS = na(Se) ? na : (vwap_c - Se) / atr14
+bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
+bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
+
+// ───────────────────────── GATES ─────────────────────────
+// auto guard: 18:00-19:00 ET (trade-day start, pre-Asia-OR) still carries yesterday's RTH levels — no orders there
+bool stale_gap = is_auto and o_now < 60
+bool window = or_set and wkday and o_now < trade_end and not na(Le) and not stale_gap
+// frozen day bias only on the STRUCT+VWAP (B) pair — the live mid supersedes it on MID+VWAP
+bool eff_bias = ormid_bias and use_dirB
+bool gate_long  = long_on  and eff_up   and (not eff_ctx or ctx_up) and macro_allow and macro_long_ok  and local_ok and (not eff_bias or or_bull)          // +Layer-1 context (auto per instrument)
+bool gate_short = short_on and eff_down  and (not eff_ctx or ctx_dn) and macro_allow and macro_short_ok and local_ok and (not eff_bias or or_bull == false)
+if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
+    traded_l := false
+if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
+    traded_s := false
+
+// ───────────────────────── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ─────────────────────────
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    l_below_mid := close < or_mid                       // zone latches (display/why)
+    s_above_mid := close > or_mid
+    // ── canonical WATCH machine (Layer 3, mirrored long/short — confirmed closes only) ──
+    if l_cd > 0
+        l_cd -= 1
+    if s_cd > 0
+        s_cd -= 1
+    if l_watch and close < or_mid                       // watch cancelled at the mid -> cooldown
+        l_watch := false
+        l_ext := false
+        l_range := false
+        l_cd := cooldown_n
+        l_ext_hi := na
+        l_pb_age := 0
+    else if not l_watch and l_cd == 0 and close > or_mid and close > open
+        l_watch := true                                 // clean directional close beyond the mid
+        l_wage := 0
+    else if l_watch
+        l_wage += 1
+        if stale_n > 0 and l_wage > stale_n and strategy.position_size <= 0
+            l_range := true                             // stale setup -> RANGE (no trade this cycle)
+        if l_ext                                        // refinements: impulse extreme + timeout
+            l_ext_hi := na(l_ext_hi) ? high : math.max(l_ext_hi, high)
+            l_pb_age += 1
+            if pb_timeout > 0 and l_pb_age > pb_timeout
+                l_range := true
+                l_ext := false
+                l_ext_hi := na
+                l_pb_age := 0
+        else if strategy.position_size <= 0 and not traded_l and chase_max > 0 and retest_atr > 0 and not na(Le) and high > Le + atr14 * chase_max
+            l_ext := true                               // over-extended pre-fill -> PULLBACK
+            l_ext_hi := high
+            l_pb_age := 0
+    float l_tgt = retest_target == "Impulse midpoint" and not na(l_ext_hi) and not na(Le) ? (Le + l_ext_hi) / 2.0 : retest_target == "VWAP" ? vwap_c : Le
+    bool  l_deep = min_pb_atr <= 0 or (not na(l_ext_hi) and (l_ext_hi - low) >= atr14 * min_pb_atr)
+    if l_ext and l_deep and not na(l_tgt) and low <= l_tgt + atr14 * retest_atr
+        l_ext := false                                  // valid retest -> order can re-arm
+        l_ext_hi := na
+        l_pb_age := 0
+    if s_watch and close > or_mid
+        s_watch := false
+        s_ext := false
+        s_range := false
+        s_cd := cooldown_n
+        s_ext_lo := na
+        s_pb_age := 0
+    else if not s_watch and s_cd == 0 and close < or_mid and close < open
+        s_watch := true
+        s_wage := 0
+    else if s_watch
+        s_wage += 1
+        if stale_n > 0 and s_wage > stale_n and strategy.position_size >= 0
+            s_range := true
+        if s_ext
+            s_ext_lo := na(s_ext_lo) ? low : math.min(s_ext_lo, low)
+            s_pb_age += 1
+            if pb_timeout > 0 and s_pb_age > pb_timeout
+                s_range := true
+                s_ext := false
+                s_ext_lo := na
+                s_pb_age := 0
+        else if strategy.position_size >= 0 and not traded_s and chase_max > 0 and retest_atr > 0 and not na(Se) and low < Se - atr14 * chase_max
+            s_ext := true
+            s_ext_lo := low
+            s_pb_age := 0
+    float s_tgt = retest_target == "Impulse midpoint" and not na(s_ext_lo) and not na(Se) ? (Se + s_ext_lo) / 2.0 : retest_target == "VWAP" ? vwap_c : Se
+    bool  s_deep = min_pb_atr <= 0 or (not na(s_ext_lo) and (high - s_ext_lo) >= atr14 * min_pb_atr)
+    if s_ext and s_deep and not na(s_tgt) and high >= s_tgt - atr14 * retest_atr
+        s_ext := false
+        s_ext_lo := na
+        s_pb_age := 0
+    if strategy.position_size <= 0 and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true                               // LONG dead: closed below OR low / tagged its stop pre-entry
+    else if l_invalid and close > or_high
+        l_invalid := false                              // reclaim -> WAITING; a completely new confirmation must re-arm
+    if strategy.position_size >= 0 and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true                               // SHORT mirror
+    else if s_invalid and close < or_low
+        s_invalid := false
+
+// ───────────────────────── EVAL guardrails (daily loss + trailing DD + profit target) ─────────────────────────
+bool ev_live = time >= eval_anchor
+var float day_eq = na
+if new_day or na(day_eq)
+    day_eq := strategy.equity
+var float start_eq = na
+if na(start_eq) or (ev_live and not ev_live[1])     // re-baseline at the ledger start
+    start_eq := strategy.equity
+var float peak_eq = na
+peak_eq := na(peak_eq) or not ev_live ? strategy.equity : math.max(peak_eq, strategy.equity)
+bool eval_day_halt = eval_on and ev_live and (strategy.equity - day_eq) <= -math.max(daily_loss - eval_buf, 0)
+bool eval_dd_halt  = eval_on and ev_live and strategy.equity <= peak_eq - math.max(trail_dd - eval_buf, 0)
+bool eval_passed   = eval_on and ev_live and eval_target > 0 and (strategy.equity - start_eq) >= eval_target
+bool eval_block    = eval_day_halt or eval_dd_halt or eval_passed
+if eval_block and not eval_block[1]
+    alert("HIGHSTRIKE AUTO " + syminfo.ticker + (eval_passed ? " — EVAL TARGET REACHED ✓ standing down" : eval_day_halt ? " — EVAL DAILY-LOSS HALT" : " — EVAL TRAILING-DD HALT"), alert.freq_once_per_bar)
+bool flat = strategy.position_size == 0
+
+f_units(entry, stop) =>
+    rk = math.abs(entry - stop)
+    int u = int(fixed_qty > 0 ? fixed_qty : (rk > 0 ? math.floor(risk_dlr / (rk * pt_val)) : 0))
+    math.min(max_qty, math.max(1, u))
+
+// ───────────────────────── WEBHOOK JSON BUILDERS (provider switch) ─────────────────────────
+string wh_ticker = wh_ticker_ov == "" ? syminfo.ticker : wh_ticker_ov
+f_px(float p) => str.tostring(p, format.mintick)
+f_extra() => wh_extra == "" ? "" : "," + wh_extra
+f_accounts() =>
+    string out = ""
+    if wh_accounts != ""
+        arr = str.split(wh_accounts, ",")
+        for i = 0 to array.size(arr) - 1
+            out := out + (i > 0 ? "," : "") + '"' + array.get(arr, i) + '"'
+    out == "" ? (wh_account == "" ? "" : '"' + wh_account + '"') : out
+f_tmpl(string t, string act, float e, float sl, float tp, string ev) =>
+    string s = str.replace_all(t, "%TICKER%", wh_ticker)
+    s := str.replace_all(s, "%ACTION%", act)
+    s := str.replace_all(s, "%QTY%", wh_qty_ph)
+    s := str.replace_all(s, "%ENTRY%", na(e) ? "0" : f_px(e))
+    s := str.replace_all(s, "%STOP%", na(sl) ? "0" : f_px(sl))
+    s := str.replace_all(s, "%TP%", na(tp) ? "0" : f_px(tp))
+    s := str.replace_all(s, "%EVENT%", ev)
+    s := str.replace_all(s, "%TOKEN%", wh_token)
+    s := str.replace_all(s, "%ACCOUNT%", wh_account)
+    s
+// ENTRY payload: act = buy|sell. Trail mode sends NO take-profit (broker holds only the structure SL).
+f_entry_json(string act, float e, float sl, float tp) =>
+    string j = ""
+    if wh_provider == "TradersPost"
+        j := '{"ticker":"' + wh_ticker + '","action":"' + act + '","quantity":' + wh_qty_ph +
+             ',"stopLoss":{"type":"stop","stopPrice":' + f_px(sl) + '}' +
+             (is_trail or na(tp) ? "" : ',"takeProfit":{"type":"limit","limitPrice":' + f_px(tp) + '}') + f_extra() + '}'
+    else if wh_provider == "PickMyTrade / Tradovate"
+        // verify key names vs current PickMyTrade docs when the token arrives
+        j := '{"symbol":"' + wh_ticker + '","data":"' + act + '","quantity":' + wh_qty_ph +
+             ',"price":0,"sl":' + f_px(sl) + ',"tp":' + (is_trail or na(tp) ? "0" : f_px(tp)) +
+             ',"token":"' + wh_token + '","account_id":"' + wh_account + '","date":"{{timenow}}"' + f_extra() + '}'
+    else if wh_provider == "Generic JSON (relay / multi-account)"
+        j := '{"event":"entry","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","action":"' + act +
+             '","quantity":' + wh_qty_ph + ',"entryLevel":' + f_px(e) + ',"stopLoss":' + f_px(sl) +
+             ',"takeProfit":' + (is_trail or na(tp) ? "null" : f_px(tp)) +
+             ',"exitMode":"' + (is_trail ? "trail" : "bracket") + '","trailAtr":' + str.tostring(trail_atr) +
+             ',"session":"' + sess_lbl + '","timeframe":"' + timeframe.period + '"' +
+             (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+             (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+    else
+        j := f_tmpl(tmpl_entry, act, e, sl, tp, "entry")
+    j
+// EXIT / flatten payload: ev = exit (stop/trail/tp fill) | session_end | eval_halt
+f_exit_json(string ev) =>
+    string j = ""
+    if wh_provider == "TradersPost"
+        j := '{"ticker":"' + wh_ticker + '","action":"exit"' + f_extra() + '}'
+    else if wh_provider == "PickMyTrade / Tradovate"
+        j := '{"symbol":"' + wh_ticker + '","data":"close","quantity":0,"price":0' +
+             ',"token":"' + wh_token + '","account_id":"' + wh_account + '","date":"{{timenow}}"' + f_extra() + '}'
+    else if wh_provider == "Generic JSON (relay / multi-account)"
+        j := '{"event":"' + ev + '","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","action":"exit"' +
+             ',"session":"' + sess_lbl + '"' + (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+             (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+    else
+        j := f_tmpl(tmpl_exit, "exit", na, na, na, ev)
+    j
+f_stop_update_json(float sl) =>
+    '{"event":"stop_update","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","stopLoss":' + f_px(sl) +
+     ',"session":"' + sess_lbl + '"' + (f_accounts() == "" ? "" : ',"accountIds":[' + f_accounts() + ']') +
+     (wh_token == "" ? "" : ',"token":"' + wh_token + '"') + ',"sentAt":"{{timenow}}"' + f_extra() + '}'
+f_armed_json(string side, float e, float sl, float tp) =>
+    '{"event":"armed","source":"HIGHSTRIKE_ORB_AUTO","ticker":"' + wh_ticker + '","side":"' + side +
+     '","entryLevel":' + f_px(e) + ',"stopLoss":' + f_px(sl) +
+     ',"takeProfit":' + (is_trail or na(tp) ? "null" : f_px(tp)) + ',"session":"' + sess_lbl + '","sentAt":"{{timenow}}"' + f_extra() + '}'
+
+// ───────────────────────── ARMED + RESTING ORDERS ─────────────────────────
+// the order rests ONLY while every gate (incl. the VWAP cap) holds — cancel pulls it the moment one breaks
+bool past_flat = o_now >= flat_min
+// zone state machine: INVALID hard-blocks the side; the CANONICAL WATCH gate (entry standard) lets
+// the entry order rest ONLY while the side is WATCHING — active watch, no cooldown, not stale
+// (RANGE), not extended (PULLBACK). arm_* false -> strategy.cancel pulls the resting order.
+bool watch_ok_l = not watch_gate ? not l_below_mid : (l_watch and l_cd == 0 and not l_range and not l_ext)
+bool watch_ok_s = not watch_gate ? not s_above_mid : (s_watch and s_cd == 0 and not s_range and not s_ext)
+bool arm_l = window and not past_flat and not traded_l and not l_invalid and watch_ok_l and gate_long  and cap_long_ok  and not eval_block and flat and not na(Ls) and (Le - Ls > 0)
+bool arm_s = window and not past_flat and not traded_s and not s_invalid and watch_ok_s and gate_short and cap_short_ok and not eval_block and flat and not na(Ss) and (Ss - Se > 0)
+if arm_l and not arm_l[1]
+    alert(armed_as_json ? f_armed_json("long", Le, Ls, Ltp) :
+         "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] LONG ARMED — buy-stop " + f_px(Le) + " | SL " + f_px(Ls) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Ltp)), alert.freq_once_per_bar)
+if arm_s and not arm_s[1]
+    alert(armed_as_json ? f_armed_json("short", Se, Ss, Stp) :
+         "HIGHSTRIKE AUTO " + wh_ticker + " [" + sess_lbl + "] SHORT ARMED — sell-stop " + f_px(Se) + " | SL " + f_px(Ss) + (is_trail ? " | trail " + str.tostring(trail_atr, "#.#") + "ATR" : " | TP " + f_px(Stp)), alert.freq_once_per_bar)
+// F59b/c close-confirm fill: a strong full-body breakout candle, then (wait_ft) the NEXT candle continues the trend
+bool qual_l = close >= Le and close > open and body_strong
+bool qual_s = close <= Se and close < open and body_strong
+// INSTANT FILL WHEN ALIGNED (user 2026-07-05, matches STACK): aligned pair + beyond the mid ->
+// the breakout candle itself fills; the F59c continuation wait applies only unaligned.
+bool alignedA_l = ctx_up and or_set and not na(or_mid) and close > or_mid
+bool alignedA_s = ctx_dn and or_set and not na(or_mid) and close < or_mid
+bool fill_l = (wait_ft and not (instant_fill and alignedA_l)) ? (qual_l[1] and close > close[1]) : qual_l
+bool fill_s = (wait_ft and not (instant_fill and alignedA_s)) ? (qual_s[1] and close < close[1]) : qual_s
+bool dir_seq = input.bool(true, "Direction sequence (price pushing the trade way)", group="ORB", tooltip="F61: only fire/arm while close>close[1]>close[2] (long) / mirror (short). Graduate on the touch fill, ~neutral on close-confirm. Default ON.")
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+// LIVE==BACKTEST FIX (review 2026-07): with calc_on_every_tick=true the close-confirm conditions
+// (fill_l/seq use `close`) evaluate INTRABAR on the realtime bar — a live entry could fire mid-bar
+// on a level the finished candle never confirms, which the backtest (final closes only) never does.
+// Close-confirm decisions now wait for the CONFIRMED bar; the wick/touch resting-stop mode keeps
+// its intended intrabar fill.
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+// no-chase guard (entry standard, matches STACK): close-confirm fills only while the bar touched
+// within chase_max ATR of the level — past that, pullback mode holds the side for the retest.
+bool near_l = chase_max <= 0 or (not na(Le) and low  <= Le + atr14 * chase_max)
+bool near_s = chase_max <= 0 or (not na(Se) and high >= Se - atr14 * chase_max)
+// relative-volume confirmation on the entry bar (deep-research refinement; default OFF)
+float volSMA20 = ta.sma(volume, 20)
+bool vcx_ok = vol_confirm <= 0 or (not na(volSMA20) and volSMA20 > 0 and volume >= volSMA20 * vol_confirm)
+if arm_l and (not conf_close or (fill_l and near_l and vcx_ok)) and seq_l and cc_bar_ok      // close-confirm = market entry on the confirmed candle; touch = resting buy-stop at Le
+    strategy.entry("L", strategy.long, qty=f_units(Le, Ls), stop=conf_close ? na : Le, alert_message=f_entry_json("buy", Le, Ls, Ltp))
+else
+    strategy.cancel("L")
+if arm_s and (not conf_close or (fill_s and near_s and vcx_ok)) and seq_s and cc_bar_ok
+    strategy.entry("S", strategy.short, qty=f_units(Se, Ss), stop=conf_close ? na : Se, alert_message=f_entry_json("sell", Se, Ss, Stp))
+else
+    strategy.cancel("S")
+
+// ───────────────────────── POSITION MANAGEMENT (frozen SL -> trail ratchet OR broker bracket OR TP1 scale) ─────────────────────────
+var float t_sl = na
+var float t_tp = na
+var float t_tp1 = na          // scale mode: TP1 level frozen at entry
+var bool  tp1_hit = false     // scale mode: 50% banked -> runner stop to break-even
+var float sync_sl = na        // last stop level pushed to the webhook (trail sync)
+bool just_long  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+bool just_short = strategy.position_size < 0 and strategy.position_size[1] >= 0
+if just_long
+    traded_l := true
+    n_l += 1
+    t_sl := Ls
+    t_tp := Ltp
+    t_tp1 := na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp1_rr
+    tp1_hit := false
+    sync_sl := Ls
+if just_short
+    traded_s := true
+    n_s += 1
+    t_sl := Ss
+    t_tp := Stp
+    t_tp1 := na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp1_rr
+    tp1_hit := false
+    sync_sl := Ss
+if strategy.position_size > 0
+    if is_trail and not just_long
+        t_sl := math.max(t_sl, close - trail_atr * atr14)            // chandelier ratchet
+    if is_scale
+        if not tp1_hit and not just_long and not na(t_tp1) and high >= t_tp1
+            tp1_hit := true                                          // 50% banked at TP1
+        // two broker-held exits: 50% at TP1, runner to TP2 with the stop at BE after TP1
+        strategy.exit("Lx1", from_entry="L", qty_percent=50, stop=t_sl, limit=t_tp1, alert_message=f_exit_json("exit"))
+        strategy.exit("Lx2", from_entry="L", stop=tp1_hit ? strategy.position_avg_price : t_sl, limit=t_tp, alert_message=f_exit_json("exit"))
+    else
+        strategy.exit("Lx", from_entry="L", stop=t_sl, limit=is_trail ? na : t_tp, alert_message=f_exit_json("exit"))
+if strategy.position_size < 0
+    if is_trail and not just_short
+        t_sl := math.min(t_sl, close + trail_atr * atr14)
+    if is_scale
+        if not tp1_hit and not just_short and not na(t_tp1) and low <= t_tp1
+            tp1_hit := true
+        strategy.exit("Sx1", from_entry="S", qty_percent=50, stop=t_sl, limit=t_tp1, alert_message=f_exit_json("exit"))
+        strategy.exit("Sx2", from_entry="S", stop=tp1_hit ? strategy.position_avg_price : t_sl, limit=t_tp, alert_message=f_exit_json("exit"))
+    else
+        strategy.exit("Sx", from_entry="S", stop=t_sl, limit=is_trail ? na : t_tp, alert_message=f_exit_json("exit"))
+// optional trail->broker stop sync (relay/PMT only; OFF default — see header)
+if sync_on and is_trail and not flat and math.abs(t_sl - sync_sl) >= sync_ticks * syminfo.mintick
+    alert(f_stop_update_json(t_sl), alert.freq_once_per_bar)
+    sync_sl := t_sl
+
+// ───────────────────────── SESSION-END FLATTEN ─────────────────────────
+var bool flat_sent = false
+if just_long or just_short
+    flat_sent := false
+if (past_flat or reset_now) and strategy.position_size != 0 and not flat_sent
+    strategy.close_all(comment="SESSION END", alert_message=f_exit_json("session_end"))
+    flat_sent := true
+if eval_block and strategy.position_size != 0 and not flat_sent                  // eval halt/target: flatten + stand down
+    strategy.close_all(comment=eval_passed ? "EVAL TARGET" : "EVAL HALT", alert_message=f_exit_json(eval_passed ? "eval_target" : "eval_halt"))
+    flat_sent := true
+
+// ───────────────────────── VISUALS ─────────────────────────
+bool l_live = arm_l or strategy.position_size > 0
+bool s_live = arm_s or strategy.position_size < 0
+float l_stop_now = strategy.position_size > 0 ? t_sl : Ls
+float s_stop_now = strategy.position_size < 0 ? t_sl : Ss
+plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
+plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
+plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+// dimmed entry levels while a gate BLOCKS the side (no order resting there)
+plot(show_gated and window and flat and not traded_l and not l_invalid and not arm_l ? Le : na, "Long entry (gated)",  color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_gated and window and flat and not traded_s and not s_invalid and not arm_s ? Se : na, "Short entry (gated)", color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_plan and l_live ? l_stop_now : na, "Long stop",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(show_plan and s_live ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(show_plan and l_live and not is_trail ? (strategy.position_size > 0 ? t_tp : Ltp) : na, "Long TP",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(show_plan and s_live and not is_trail ? (strategy.position_size < 0 ? t_tp : Stp) : na, "Short TP", color=color.new(color.green, 10), style=plot.style_linebr)
+// markers anchored AT the entry level (NOT the bar high/low — that floated BUY/SELL off the
+// entry line and stacked them). Le/Se = the level the broker order rests at.
+if just_long
+    label.new(bar_index, Le, "BUY",  yloc=yloc.price, style=label.style_triangleup,   color=color.new(color.lime, 0), textcolor=color.white, size=size.tiny)
+if just_short
+    label.new(bar_index, Se, "SELL", yloc=yloc.price, style=label.style_triangledown, color=color.new(color.red, 0),  textcolor=color.white, size=size.tiny)
+bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
+bgcolor(eval_block and not eval_passed ? color.new(color.red, 82) : na)
+bgcolor(eval_passed ? color.new(color.green, 88) : na)
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le = na
+var label lbl_Ls = na
+var label lbl_Lt = na
+var label lbl_Se = na
+var label lbl_Ss = na
+var label lbl_St = na
+if barstate.islast and show_line_labels
+    string trail_txt = "TRAIL " + str.tostring(trail_atr, "#.#") + "ATR "
+    lbl_Le := f_setlbl(lbl_Le, l_live, Le, "▲ ENTRY " + f_px(Le), color.new(color.yellow, 0))
+    lbl_Ls := f_setlbl(lbl_Ls, l_live, l_stop_now, (strategy.position_size > 0 and is_trail ? trail_txt : "STOP ") + f_px(l_stop_now), color.new(color.red, 0))
+    lbl_Lt := f_setlbl(lbl_Lt, l_live and not is_trail, strategy.position_size > 0 ? t_tp : Ltp, "TP +" + str.tostring(tp_rr, "#.#") + "R", color.new(color.green, 0))
+    lbl_Se := f_setlbl(lbl_Se, s_live, Se, "▼ ENTRY " + f_px(Se), color.new(color.yellow, 0))
+    lbl_Ss := f_setlbl(lbl_Ss, s_live, s_stop_now, (strategy.position_size < 0 and is_trail ? trail_txt : "STOP ") + f_px(s_stop_now), color.new(color.red, 0))
+    lbl_St := f_setlbl(lbl_St, s_live and not is_trail, strategy.position_size < 0 ? t_tp : Stp, "TP +" + str.tostring(tp_rr, "#.#") + "R", color.new(color.green, 0))
+
+// ───────────────────────── DASHBOARD ─────────────────────────
+f_st(s) => s == 1 ? "UP (HH+HL)" : s == 2 ? "DOWN (LL+LH)" : s == 3 ? "RANGE" : "—"
+var table t = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 65), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_dash
+    // canonical state line (entry standard): WATCH = order resting (past the mid); ARMED = context
+    // aligned, waiting for the mid; PULLBACK / COOLDOWN / RANGE = the docs' execution guards.
+    string st = not or_set ? "OR forming…" : strategy.position_size != 0 ? "IN TRADE" : eval_passed ? "TARGET ✓ — done" : eval_block ? "EVAL HALT" : not window or past_flat ? "window closed" : (arm_l or arm_s) ? "WATCH — order resting" : (l_invalid and s_invalid) ? "BOTH SIDES INVALID" : l_invalid ? "LONG INVALID (short gated)" : s_invalid ? "SHORT INVALID (long gated)" : (l_ext or s_ext) ? "PULLBACK — wait for the retest" : (l_cd > 0 or s_cd > 0) ? "COOLDOWN — watch cancelled at OR mid" : (l_range or s_range) ? "RANGE — stale watch, standing down" : (gate_long or gate_short) ? "ARMED — waiting for OR-mid close" : "waiting (no gated setup)"
+    color stc = strategy.position_size != 0 ? color.lime : eval_passed ? color.lime : (arm_l or arm_s) ? color.aqua : (l_invalid or s_invalid) ? color.rgb(139, 0, 0) : eval_block ? color.red : (l_ext or s_ext) ? color.rgb(187, 134, 252) : color.orange
+    string prov = wh_provider == "TradersPost" ? "TradersPost" : wh_provider == "PickMyTrade / Tradovate" ? "PickMyTrade" : wh_provider == "Generic JSON (relay / multi-account)" ? "Generic→relay" : "Custom"
+    table.cell(t,0,0,"ORB AUTO", text_color=color.yellow, text_size=size.small)
+    table.cell(t,1,0, wh_ticker + "  " + timeframe.period, text_color=color.silver, text_size=size.small)
+    table.cell(t,0,1,"Session", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,1, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,0,2,"Status", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,2, st, text_color=stc, text_size=size.tiny)
+    table.cell(t,0,3,"Trend gate", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,3, gate_off ? "OFF (plain ORB)" : use_struct ? "STRUCT" + (use_fast_dir ? "·1m" : "") + ": " + f_st(st_dir) : "EMA: " + (trend_up ? "UP" : trend_down ? "DOWN" : "flat"), text_color=gate_off ? color.silver : eff_up ? color.lime : eff_down ? color.red : color.gray, text_size=size.tiny)
+    table.cell(t,0,4,"Stop", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,4, (stop_mode == "Structure swing (HH/HL)" ? "structure swing" : "OR edge"), text_color=color.red, text_size=size.tiny)
+    table.cell(t,0,5,"Exit", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,5, is_trail ? "trail " + str.tostring(trail_atr, "#.#") + "ATR (broker SL = initial)" : "bracket SL/TP +" + str.tostring(tp_rr, "#.#") + "R", text_color=color.teal, text_size=size.tiny)
+    table.cell(t,0,6,"VWAP cap", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,6, not cap_on ? "off" : (cap_long_ok and cap_short_ok ? "NEAR ✓" : "EXT ⚠ (order pulled)"), text_color=cap_long_ok and cap_short_ok ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(t,0,7,"Regime", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,7, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=color.aqua, text_size=size.tiny)
+    table.cell(t,0,8,"Webhook", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,8, prov + (wh_account != "" ? " · acct set" : "") + (wh_accounts != "" ? " · multi" : ""), text_color=color.silver, text_size=size.tiny)
+    table.cell(t,0,9,"Eval", text_color=color.silver, text_size=size.tiny)
+    string evtxt = not eval_on ? "off" : eval_passed ? "TARGET ✓ +" + str.tostring(strategy.equity - start_eq, "#") :
+         (eval_day_halt ? "DAY HALT" : eval_dd_halt ? "DD HALT" : "ok") +
+         "  day " + str.tostring(strategy.equity - day_eq, "#") + "/" + str.tostring(-daily_loss, "#") +
+         " · dd " + str.tostring(strategy.equity - peak_eq, "#") + "/" + str.tostring(-trail_dd, "#") +
+         (eval_target > 0 ? " · tgt " + str.tostring(strategy.equity - start_eq, "#") + "/" + str.tostring(eval_target, "#") : "")
+    table.cell(t,1,9, evtxt, text_color=not eval_on ? color.gray : eval_passed ? color.lime : eval_block ? color.red : color.silver, text_size=size.tiny)
+    table.cell(t,0,10,"DIR·slope", text_color=color.silver, text_size=size.tiny)
+    table.cell(t,1,10, "S=" + str.tostring(slope_dir, "#.##") + (dir_slp > 0 ? " ▲" : dir_slp < 0 ? " ▼" : " —") + " · Struct" + (st_dir == 1 ? "▲" : st_dir == 2 ? "▼" : "—") + (use_fast_dir ? " (1m)" : ""), text_color=dir_slp > 0 ? color.lime : dir_slp < 0 ? color.red : color.gray, text_size=size.tiny)

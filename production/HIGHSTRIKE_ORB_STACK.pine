@@ -1,0 +1,1118 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © heelandy
+// ═══════════════════════════════════════════════════════════════════
+// HIGHSTRIKE ORB — STACK  (PRIMARY production indicator · the unified validated 5m system · NQ/MNQ futures)
+// Merges STRUCTURE (US RTH) + ASIA (Tokyo) + LONDON into ONE file with a SESSION switch (incl. an Auto mode
+// that runs all three OR cycles per trade-day by the clock), plus the two graduated exit/risk upgrades.
+// All three sessions validate on NQ/MNQ 5m: RTH (flagship), Asia (F22), London (F29). Engine upgrades:
+//   • TREND GATE   — TF-adaptive HH/HL swing-STRUCTURE state (st_state) ≤5m, EMA ≥15m   (F20)
+//   • VWAP CAP     — skip breakouts > k·ATR beyond session VWAP (k=2.0)                  (F16)
+//   • TIME GATE    — skip entries the first ~hour after each session's OR closes (≥11:00 RTH / 21:00 Asia /
+//                    04:30 London ET). Graduated F38/F39: +33-50% exp, ~half the DD, every session + instrument.
+//   • OB CONFLUENCE— require the breakout to fire AT an order block (demand/supply zone). Graduated F41 (the
+//                    strongest filter; robust over params F47). TIME ⊕ OB = F45 ≈ 2× stack expectancy (live-validated).
+//   • STOP         — STRUCTURE-anchored: rest the stop at the last HH/HL swing, not the OR edge.
+//                    Walk-forward graduated (F25b): exp +0.74→+1.00R, ~half the risk per trade.
+//   • EXIT         — TRAIL (ATR chandelier). Walk-forward graduated (F27b): the filtered stack trends
+//                    hard, so let winners run. trail 2ATR = most slip-robust (the NQ/MNQ default).
+//   Together: CUT LOSSES SHORT (structure stop) + LET WINNERS RUN (trail). Scale-to-TP exit kept as an option.
+// ⚠️ FUTURES (NQ1!/MNQ1!): `time("D")` rolls at 18:00 ET (Globex), the trade-day this is built on — so the
+//    Asia session that crosses midnight stays contiguous and the day/OR/once-per-day lock reset correctly.
+// ⚠️ st_state AND the order blocks are PORTED from hs_harness.py. st_state RECONCILE (F28) settled offline (edge
+//    invariant to the pivot tie-rule). The OB port (F41) still needs a TV compile + reconcile vs the harness OB.
+//    Forward-paper-test fills before sizing (esp. Asia).
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+indicator("HIGHSTRIKE ORB — STACK", overlay=true, max_labels_count=300, max_lines_count=300)
+
+// ───────────────────────── SESSION ─────────────────────────
+sess_preset = input.string("Auto (Asia + London + RTH by clock)", "Session", group="Session",
+              options=["US RTH (0930-1000 ET)", "Asia / Tokyo (1900-2000 ET)", "Auto (Asia + London + RTH by clock)", "Custom"],
+              tooltip="Auto runs all THREE cycles per trade-day by the clock: Asia OR 19:00-20:00 (trade to 03:00), London OR 03:00-03:30 (trade to 08:00), RTH OR 09:30-10:00 (trade to 15:00). One chart covers all sessions.")
+or_custom   = input.session("1900-2000", "Custom OR window (ET)", group="Session")
+cut_custom  = input.int(300, "Custom: stop new signals after HHMM (ET)", group="Session", minval=0, maxval=2359)
+sess_tz     = input.string("America/New_York", "Timezone", options=["America/New_York","America/Chicago","Europe/London"], group="Session")
+// ───────────────────────── DIRECTION / ORB ─────────────────────────
+long_on  = input.bool(true, "LONG",  group="Direction", inline="d")
+short_on = input.bool(true, "SHORT", group="Direction", inline="d")
+brk_buf_atr = input.float(0.10, "Breakout strength (clear OR by x ATR)", group="ORB", step=0.05, minval=0.0)
+auto_tf  = input.bool(true, "Auto breakout buffer per TF", group="ORB", tooltip="≤5m -> 0.0, else 0.25 ATR. OFF = manual.")
+allow_reentry = input.bool(true, "Allow re-entry / re-test (re-arm inside OR)", group="ORB",
+            tooltip="Re-arm inside the OR for another breakout. F76 (2026-07-06): the re-entry cohorts are NEGATIVE on equities (QQQ −0.093R, SPY −0.524R; OOS better single-entry) and positive on NQ (+0.164) — so auto max-entries now gives EQUITY 1 / FUTURES 3. This toggle stays ON so futures re-arm; the per-type cap below does the real work.")
+auto_maxe = input.bool(true, "Auto max-entries (futures 3 / equity 1)", group="ORB",
+            tooltip="F76 (2026-07-06): futures 3 (re-entry cohort +0.164R on NQ) / EQUITIES 1 (re-entry cohorts LOSE: QQQ −0.093R, SPY −0.524R — OOS is better single-entry). Auto picks by symbol type; OFF = use the manual value below.")
+max_entries_in = input.int(3, "Max entries per side / session (manual, 0 = UNLIMITED)", group="ORB", minval=0,
+            tooltip="0 = NO cap (uncapped re-entries; the zone state machine still requires a fresh confirmed break each time and hard-blocks an INVALIDATED side). Requires 'Auto max-entries' OFF.")
+int max_entries = auto_maxe ? (syminfo.type == "futures" ? 3 : 1) : (max_entries_in <= 0 ? 9999 : max_entries_in)   // F76: equity re-entries lose (QQQ -0.09, SPY -0.52 cohorts) -> 1
+entry_delay  = input.int(0, "Arm delay: skip entries N min after OR close", group="ORB", minval=0,
+            tooltip="ADOPTED 0 (2026-07, per user + arm-timing test): ARM at the OR CLOSE (delay 0) so you catch the move near the level instead of waiting an hour — paired with the chase-cap below (enter within 1 ATR of the level, else wait for the RETEST). Arm-timing: delay-0 ≈ delay-60 per-trade on NQ (+0.170 vs +0.173), slightly under 60 on QQQ/SPY, but gives EARLIER entries + more trades (the F38/F39 skip-first-hour trades a small per-trade edge for the wait). Set 60 to restore F38/F39 (no entries until ~11:00 RTH / ~21:00 Asia / ~04:30 London ET). F76 re-confirm (2026-07-06): the first-hour cohort is POSITIVE on every symbol (QQQ +0.35, SPY +0.30, NQ +0.20, ES +0.05) — delay-0 stands.")
+chase_max_in = input.float(0.0, "Max chase past level (xATR, 0=off)", group="ORB", step=0.25, minval=0.0,
+            tooltip="DEFAULT 0 = OFF (F75 blocker-edge, 2026-07-06): the 'chased' late confirmed entries ARE the winners — the cap was blocking +0.59R/trade on QQQ (n127 cohort), +0.70R on SPY (n132) and cost ES 62% of its expectancy; rule orb-standard-2026.07.5 trades them. NQ/MNQ EXCEPTION: 1.5 on those charts (AUTO sets it) — there the cap is a RISK knob, not an edge knob, and F78 (2026-07-06) widened it 1.0->1.5: +20.7R at the SAME maxDD (the extra latitude admits +0.445R x42 winners and drops losers). Any value >0 enables the no-chase/PULLBACK-retest behavior.")
+brk_confirm  = input.string("Candle close beyond level (full body)", "Breakout fill", group="ORB",
+            options=["Candle close beyond level (full body)", "Wick / touch (resting stop)"],
+            tooltip="What counts as a FILL. 'Candle close beyond level' (DEFAULT, per user) = the bar must CLOSE above the OR high (long) / below the OR low (short) — a full-body break, no wick-only fills; the fill is booked at that CLOSE (honest, never better than the close). 'Wick / touch' = a resting stop fills intrabar the instant price tags OR high+buffer (the F58-validated stop entry — earlier, but a wick that closes back inside still counts). The close-confirm entry is being honest-tested separately (F59).")
+strong_body  = input.float(0.25, "Strong-close: min body / candle range", group="ORB", step=0.05, minval=0.0, maxval=1.0,
+            tooltip="Close-confirm only (user rule): the breakout candle must be a STRONG, decisive candle — body |close−open| ≥ this fraction of the full range (high−low) AND the right colour (BULLISH long / BEARISH short). Default 0.25 = the VALIDATED sweet spot (F59b): rejects dojis / long-wick rejection candles and is BEST on NQ/QQQ (NQ +0.215→+0.233R). Demanding a visually bigger body (0.4-0.6) keeps cutting trades and LOWERS the edge (at 0.5: NQ +0.150R, SPY fails the CI gate) — raise it only if you want a stronger candle and accept fewer/weaker-tested signals. 0 = any close beyond the level.")
+min_or_width = input.float(2.4, "Vol-expansion: min OR-width × ATR", group="ORB", step=0.1, minval=0.0,
+            tooltip="GRADUATED (2026-07): the ORB edge concentrates in WIDE opening-range (volatility-expansion) days; the NARROW-OR third is DEAD on all 4 instruments (NQ/ES/QQQ/SPY). Filtering to OR-width/ATR ≥ this lifts exp +49-64% RTH (NQ +0.158→+0.259, QQQ +0.264→+0.417, SPY +0.270→+0.402), robust across the q20-q50 threshold sweep, walk-forward OOS holds, and ADDITIVE to the HH/HL structure gate (independent lever; dominant on NQ). 2.4 ≈ the bottom-third cutoff. The breakout's OR-width is (OR high − OR low)/ATR, frozen at the OR close.")
+volexp_filter = input.bool(false, "Filter narrow-OR entries (require vol-expansion)", group="ORB",
+            tooltip="DEFAULT OFF — GRADE-ONLY since 07.5 (F75, 2026-07-06): under the full layered entry (watch machine + strong body + continuation + dir-seq) the narrow-OR cohort is POSITIVE on every symbol (QQQ +0.37, SPY +0.42, NQ +0.10, ES ~0) — the 2026-07-01 graduation was measured against PLAIN ORB, which no longer exists. The dashboard GRADE still flags narrow-OR setups (A+ needs a wide OR). ON = restore the hard block.")
+wait_ft_in   = input.bool(true, "Wait for next-candle continuation (2-candle confirm)", group="ORB",
+            tooltip="Close-confirm only (user rule): don't fire on the breakout candle itself — WAIT for the NEXT candle to CONTINUE the trend (close higher than the breakout candle for a long, lower for a short), then fill on that continuation candle. Stops 'fired into a reversal' entries (a one-bar pop above the OR that immediately rolls over). VALIDATED (F59c): improves QQQ (+0.283→+0.304) and SPY (+0.232→+0.344, PF 1.66) substantially, ~neutral on NQ — all pass the CI gate. Default ON. F77 (2026-07-06): QQQ EXCEPTION — turn OFF on QQQ charts (the wait-created trades LOSE -0.54R there; QQQ fills the breakout candle itself, OOS 0.87). SPY/NQ keep it.")
+dir_seq      = input.bool(true, "Direction sequence (price must be pushing the trade way)", group="ORB",
+            tooltip="USER RULE (example.txt / Evidence early-entry): only fire while price is actually MOVING the trade direction — a LONG needs close > close[1] AND close[1] > close[2] (the 101→102→103 up-sequence); a SHORT the mirror down-sequence. Blocks the counter-trend / 'middle-of-nowhere' touches. VALIDATED F61: on the 'Wick / touch' fill mode this is a real graduate (NQ +0.151→+0.261R PF 1.26→1.47, QQQ +0.276→+0.448, SPY +0.257→+0.383; yrs+ 13/17·9/9·8/9, OOS holds, survives 2× slip). On the close-confirm fill it's already implied by the strong-body + continuation confirm, so it's ~neutral there. Default ON.")
+// ───────────────────────── ENTRY STANDARD (canonical 2026-07-04 — one entry across STACK/AUTO/OPTIONS/BOT/engine) ─────────────────────────
+ctx_source   = input.string("Auto (equities Struct+VWAP · futures A∨B∨C)", "Layer-1 context — arming gate", group="Entry standard",
+            options=["Auto (equities Struct+VWAP · futures A∨B∨C)", "Any engine aligned (A∨B∨C, 07.4)", "OR-mid only (DIR-A, 07.3)", "Structure + VWAP (fallback B)", "Off"],
+            tooltip="USER RULE (2026-07-05, rule orb-standard-2026.07.3): OR_MID IS OBLIGATORY — it is the ONLY hard arm condition on futures/crypto; VWAP, STRUCTURE and SLOPE only GRADE (+VWAP = B, +STRUCT = A, +SLOPE = A+; no VWAP = C), they never block or delay a fill. A/B on the rebuilds: dropping the VWAP arm-gate costs ~nothing on futures (NQ +0.180->+0.172, ES ~flat) and un-blocks the arms VWAP was wrongly vetoing. EQUITIES keep STRUCT+VWAP as the hard arm — the same A/B shows it IS their edge (QQQ +0.507 vs +0.314 mid-only, SPY +0.448 vs +0.203). AUTO picks per instrument. A∨B∨C (user 2026-07-05, DIR-FAST C) = arm when ANY engine aligns: A = VWAP side (+the obligatory mid), B = 1m-fed structure, C = the COMBINED SLOPE ENGINE strong read (S >= 0.30) — blocks only when every engine disagrees; A/B-tested per asset before it can become the Auto default.")
+watch_gate   = input.bool(true, "Layer 3: close beyond OR mid activates WATCH", group="Entry standard",
+            tooltip="A side may only FILL while it is WATCHING: a confirmed DIRECTIONAL-BODY close beyond the OR MID toward the side (long: close > mid on an up candle; short mirror). A confirmed close back across the mid CANCELS the watch and starts the cooldown. This is the LIVE mid tracking from the docs — it complements the frozen OR-mid day bias toggle above.")
+cooldown_n_in = input.int(3, "Cooldown bars after a watch cancel", group="Entry standard", minval=0,
+            tooltip="COOLDOWN RULE: after a watch is cancelled at the OR mid, no immediate re-watch/re-entry for this many confirmed bars — kills the chop-around-the-mid churn. A NEW clean close beyond the mid is then required.")
+stale_n_in   = input.int(0, "Stale: max bars in WATCH without a fill (0 = off)", group="Entry standard", minval=0,
+            tooltip="RANGE / STALE-SETUP RULE — DEFAULT 0 = OFF since 07.6 (F77, 2026-07-06): the stale-blocked cohorts are POSITIVE on QQQ (+0.58R x123) / SPY (+0.24 x135) / NQ (+0.18 x180) — standing down cost real money. ES EXCEPTION: 24 on ES (the AUTO per-asset toggle sets it — its cohort is NEGATIVE -0.05 and maxDD explodes -47->-71R without the rule).")
+retest_atr_in = input.float(0.5, "Pullback: retest within xATR of the target", group="Entry standard", step=0.25, minval=0.0,
+            tooltip="PULLBACK MODE: once price runs more than the chase cap (Max-chase above) past the OR level WITHOUT a clean fill, do NOT chase — the side shows PULLBACK and fills stay blocked until price returns within this many ATR of the retest target. Then the normal fill rules re-check. 0 = plain no-chase guard only. GAUNTLET-ADOPTED per asset: ES 0.5 / others 0.25 (the AUTO per-asset toggle sets these — no manual per-chart setting needed).")
+// ── PULLBACK REFINEMENTS (deep-research doc, adopted 2026-07-05 — rule version orb-standard-2026.07.1) ──
+retest_target_in = input.string("OR edge", "Pullback: retest target", group="Entry standard",
+            options=["OR edge", "Impulse midpoint", "VWAP"],
+            tooltip="WHERE the pullback must return to before fills unblock. 'OR edge' = the broken OR high/low (default, role-reversal retest). 'Impulse midpoint' = 50% of the extension impulse (edge -> extension extreme) — catches profit-taking without a full boundary revisit; F78 (pullback deep-research 2026-07-06): ADOPTED on NQ/MNQ — releases earlier than a full edge revisit, +13.5R with better DD and the trades it drops were losers (AUTO sets it there). 'VWAP' = the session-VWAP retest — tested F78: LOSES on NQ (blocked cohort +0.305R x26), stays unadopted.")
+min_pb_atr   = input.float(0.05, "Pullback: min retrace from extension (xATR, 0=off)", group="Entry standard", step=0.05, minval=0.0,
+            tooltip="ANTI-SPIKE (deep-research): the retrace from the extension extreme must be AT LEAST this deep before a retest counts — never buy/sell an unrelieved vertical. Doc default 0.05-0.10 ATR.")
+pb_timeout   = input.int(8, "Pullback: max bars waiting for the retest (0=forever)", group="Entry standard", minval=0,
+            tooltip="FRESHNESS (deep-research): if the retest hasn't come within this many bars the OR setup is stale — the side stands down (RANGE) until the mid is lost and a fresh watch cycle begins. Doc default 3-8 bars.")
+vol_confirm  = input.float(0.0, "Fill: min volume x 20-bar avg (0=off)", group="Entry standard", step=0.1, minval=0.0,
+            tooltip="RELATIVE-VOLUME CONFIRMATION (deep-research): the fill trigger bar must print at least this multiple of 20-bar average volume (doc: 1.2-2.0x). DEFAULT OFF until gauntleted.")
+instant_fill_in = input.bool(true, "Fill instantly when the arm gate is aligned (no next-candle wait)", group="Entry standard",
+            tooltip="USER RULE (2026-07-05, 07.3): when the side is ARMED — futures/crypto: price beyond the OBLIGATORY OR-mid (VWAP no longer delays anything, it only grades); equities: the Struct+VWAP arm — the strong full-body breakout candle FILLS IMMEDIATELY; the F59c next-candle continuation wait applies only to UNALIGNED setups. PER-ASSET A/B: ON lifts NQ (+0.163->+0.189 avg R) and is ~neutral QQQ/SPY, but HURTS ES (+0.090->+0.057) and — under the 07.5 live-identical base (F77) — SPY: ALWAYS-WAIT lifts SPY OOS 0.386->0.620. OFF on ES and SPY (the AUTO per-asset toggle sets it).")
+// ───────────────────────── STRUCTURE GATE ─────────────────────────
+trend_mode = input.string("Off — plain ORB (F58 default)", "Trend gate", group="Structure gate",
+             options=["Off — plain ORB (F58 default)", "Auto (structure <=5m / EMA >=15m)", "Structure (HH/HL)", "EMA trend"],
+             tooltip="DEFAULT OFF — STRUCTURE IS A GRADE, NOT A GATE (user 2026-07-03, backed by the latency data): the HH/HL swing-structure LAGS — when OR+VWAP+SLOPE already agree, 5m structure is aligned only ~50-55% of the time and takes a MEDIAN 40-50 MIN (p75 200) to catch up, so a structure GATE MISSES clean breakouts (price runs past the OR before structure confirms). Entry now fires on the breakout + OR-mid bias + dir-sequence (validated +0.164R NQ, PASS); STRUCTURE drives the GRADE (A+ when st_dir aligned + wide OR) and size, it no longer BLOCKS. Cost vs the structure gate: ~-0.10R per-trade on average, but it CATCHES the breakouts the gate skipped. The 1m st_dir feed cuts the lag to ~1-2 min so the grade upgrades near the break. Turn back ON (Auto) to REQUIRE confirmed structure (higher per-trade, fewer/later entries).")
+struct_lb  = input.int(5, "Structure pivot lookback (L=R, manual)", group="Structure gate", minval=2)
+auto_lb    = input.bool(true, "Auto structure speed (futures 3 / equity 5)", group="Structure gate", tooltip="FASTER STRUCTURE (2026-07 fast-direction study): NQ/futures keep the FULL structure edge at lb=3 (pivots confirm 2 bars sooner = MORE + EARLIER breakout entries, same exp on NQ); QQQ needs lb=5 (lb=3 fails its gauntlet); SPY ~tied. ON = futures 3 / equity 5. OFF = the manual value above for every instrument.")
+int eff_lb = auto_lb ? (syminfo.type == "futures" ? 3 : 5) : struct_lb
+fast_dir   = input.bool(true, "1-MINUTE direction feed (structure + slope at 1m speed on ANY chart TF)", group="Structure gate",
+             tooltip="STALENESS FIX (user 2026-07): on a 5m chart the swing structure confirms pivots 15-25 MINUTES late, so st_state still read 'Bullish Trend' while price had already dumped below the OR low — while the 1m chart flipped within minutes. ON = the DIRECTION reads (trend-gate st_state + the DIR-fast Struct/Slope arrows) come from 1-MINUTE bars via request.security, so EVERY chart timeframe reacts at 1m speed; each context keeps its own AUTOMATIC pivot lookback (futures 3 / equity 5 — on 1m bars that is a 3-5 MINUTE pivot confirm). STOP ANCHORS stay on the chart-TF swings (validated risk geometry unchanged). On a 1m chart this is a no-op. OFF = the old chart-TF-only read. NOTE: gating entries by 1m structure is a behavior change vs the chart-TF backtest — forward-verify before sizing.")
+struct_tol = input.float(0.10, "Structure tolerance %", group="Structure gate", step=0.05)
+ormid_bias = input.bool(true, "OR-mid bias — trade only the OR's closing half", group="Structure gate",
+            tooltip="GRADUATED (2026-07): a 2nd DIRECTIONAL filter on top of the trend gate — the OPENING RANGE sets the day's bias: if the OR CLOSED in its UPPER half (close > OR mid) the day is biased LONG so SHORTS are blocked; lower half = biased SHORT so LONGS blocked. ADDITIVE + robust: bias-aligned lifts exp NQ +0.169->+0.290, QQQ +0.392->+0.478, SPY +0.351->+0.563 (all PASS the gauntlet); the DROPPED counter-bias trades are the LOSERS (NQ -0.10, SPY -0.05, ES -0.14); survives 2x/3x slip. Fixes NQ year-consistency (10/17->13/17). Turn OFF to trade both breakouts regardless of the OR's bias.")
+trend_ema_f = input.int(21, "Trend EMA fast (EMA mode)", group="Structure gate", minval=2)
+trend_ema_s = input.int(50, "Trend EMA slow (EMA mode)", group="Structure gate", minval=5)
+// ───────────────────────── VWAP CAP ─────────────────────────
+cap_on = input.bool(false, "VWAP-extension cap", group="VWAP cap", tooltip="F58 (2026-06-23): the cap HURTS honest fills — it removes the late-momentum breakouts that ARE the winners (F57); NQ exp decays monotonically as k tightens. Default OFF. Toggle on only to suppress over-extended entries by preference.")
+cap_k  = input.float(2.0, "Cap k (xATR beyond VWAP)", group="VWAP cap", step=0.25, minval=0.5)
+// ───────────────────────── ORDER-BLOCK CONFLUENCE (F41) ─────────────────────────
+ob_on   = input.bool(false, "Order-block confluence", group="Order block",
+          tooltip="F58 (2026-06-23): adds ~0 net of HONEST fills — the F41/F45 'lift' was the F56 stale-fill artifact; it only thins trades. Default OFF. Toggle on for the institutional demand/supply confluence by preference (only take the breakout at a bullish OB long / bearish OB short). Ported from hs_harness.py.")
+ob_body = input.float(0.3, "OB: min displacement body x ATR", group="Order block", step=0.1)
+ob_vol  = input.float(0.7, "OB: min volume x SMA20",          group="Order block", step=0.1)
+ob_keep = input.int(5,     "OB: keep last N zones",           group="Order block", minval=1)
+ob_dist = input.float(3.0, "OB: invalidate beyond x ATR",     group="Order block", step=0.5)
+// ───────────────────────── REGIME ─────────────────────────
+local_adx_min = input.float(20.0, "Local ADX min", group="Regime", step=1)
+local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Regime", step=0.25)
+block_range_in = input.bool(false,  "Block RANGE regime", group="Regime",
+              tooltip="F76 (2026-07-06): per-asset — FUTURES trade the chop (the blocked cohort is POSITIVE: NQ +0.19R x309, ES +0.18R x326, OOS up on both) = leave OFF on NQ/MNQ/ES; EQUITIES keep the block (their OOS degrades without it) = turn ON on QQQ/SPY charts. Matches the BOT engine per-asset block_range.")
+macro_en       = input.bool(true,  "MACRO filter ON", group="Regime")
+macro_standdown= input.bool(true,  "Stand-down vs SPY trend", group="Regime")
+spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Regime")
+vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Regime")
+vix_calm = input.float(15.0, "VIX calm",     group="Regime", step=1)
+vix_vol  = input.float(25.0, "VIX volatile", group="Regime", step=1)
+vix_ext  = input.float(35.0, "VIX extreme",  group="Regime", step=1)
+spy_adx_min = input.float(25.0, "Macro ADX min", group="Regime", step=1)
+persist_n   = input.int(3, "Regime persistence bars", group="Regime", minval=1)
+block_d     = input.bool(true, "Block REGIME D", group="Regime")
+block_b_ses = input.string("Off", "Block REGIME B trend", group="Regime",
+              options=["Off", "London only", "All sessions"],
+              tooltip="F31/F31f (2026-06-12): regime B carries a validated edge in ALL 3 sessions (~2.4x trades, OOS stronger than IS) — but London gets riskier unblocked at tight daily limits (blow-up 0→13% on the tight eval profile). Default keeps the B-block during LONDON HOURS (03:00-09:30 ET) only; RTH + Asia trade regime B. 'All sessions' = the old fully-blocked behavior. D stays blocked regardless.")
+// ───────────────────────── RISK PLAN (the two graduated upgrades) ─────────────────────────
+stop_mode = input.string("Structure swing (HH/HL)", "Stop placement", group="Risk plan",
+            options=["Structure swing (HH/HL)", "OR edge"],
+            tooltip="F25b: resting the stop at the last HH/HL swing (vs the OR edge) ~halves risk per trade and lifts R, walk-forward confirmed.")
+sl_buf_atr  = input.float(0.3, "Stop buffer beyond anchor x ATR", group="Risk plan", step=0.1)
+min_stop_atr= input.float(0.5, "Min stop x ATR (manual)", group="Risk plan", step=0.1)
+auto_minstop= input.bool(true, "Auto min-stop per instrument (futures 0.5 / equity 0.75 ATR)", group="Risk plan",
+            tooltip="F51 (2026-06-22): a 0.5-ATR floor is noise-tight on equities/ETFs (median structure stop on QQQ ≈0.57 ATR) and drives the 'instant TP1' look; 0.75 ATR is expectancy-NEUTRAL on the NQ/QQQ sweep and less whippy. ON = futures use 0.5, stocks/funds use 0.75. OFF = use the manual value above for every instrument.")
+float eff_min_stop = auto_minstop ? (syminfo.type == "futures" ? 0.5 : 0.75) : min_stop_atr
+sl_max_atr  = input.float(2.5, "Max stop x ATR (manual)", group="Risk plan", step=0.25)
+auto_slmax  = input.bool(true, "Auto max-stop per instrument (equity 1.5 / futures 2.5 ATR)", group="Risk plan",
+            tooltip="ADOPTED (2026-07 arm-timing): cap the structure stop TIGHTER on equities — a 1.5-ATR max stop lifts QQQ +0.266→+0.392 / SPY +0.286→+0.351 and cuts drawdown (equities don't need the room, and a reversal is capped sooner). FUTURES keep 2.5: a tight cap WHIPSAWS them (NQ at 1.5 fails the CI gate, win% 42→31 — they need room). ON = equity/ETF 1.5, futures 2.5. OFF = use the manual value above for every instrument.")
+float eff_sl_max = auto_slmax ? (syminfo.type == "futures" ? 2.5 : 1.5) : sl_max_atr
+exit_mode = input.string("Full → cap @ TP2 (struct stop)", "Exit", group="Risk plan",
+            options=["Trail (ATR chandelier)", "Scale 50% @ TP1 → BE → TP2", "Full → cap @ TP2 (struct stop)"],
+            tooltip="DEFAULT = 'Full → cap @ TP2' (F34b graduate): full position to the TP2 R-cap (default 4R) on the structure stop — no scale, no trail. Honest PF (3-6) + ~2× the trail's median $/trade, best for steady eval accumulation. TRAIL UPDATE — F84 (2026-07-07): under the FULL 07.7 stack with net costs the chandelier trail PASSED the complete 7/7 gauntlet on BOTH equities (QQQ exp +0.305R CI-lo +0.16 OOS +0.539 PF 1.70 2x-costs +0.278 · SPY +0.223 / +0.067 / +0.403 / PF 1.51 / +0.194, 7/9 yrs each) — graduated as its OWN lineage trail-eq-0.1 (~50% WR, expectancy-first; approvable on /training). The F50 caveat still applies to EVAL accounts (lower median $/trade than the cap), so the DEFAULT stays the cap — flip to Trail on QQQ/SPY charts to run the graduated expectancy profile. 'Scale' = bank 50% @ TP1, runner BE→TP2.")
+trail_atr   = input.float(2.0, "Trail x ATR (chandelier)", group="Risk plan", step=0.5, minval=0.5)
+tp1_rr      = input.float(1.5, "TP1 R (scale mode)", group="Risk plan", step=0.25,
+            tooltip="F64 (2026-06-29): 1.5R is the BEST scale point (beats 1.0R) — medMFE ≈ 1R, so TP1 at 1.5R banks the high-probability move; 4R is the fat-tail cap. Matches the BOT (T1_RR=1.5).")
+tp2_rr      = input.float(4.0, "TP2 R (scale mode)", group="Risk plan", step=0.25)
+show_plan   = input.bool(true, "Show stop / target lines", group="Display")
+show_gated  = input.bool(true, "Show entry levels while the gate is BLOCKED (dimmed)", group="Display",
+              tooltip="The bright yellow entry line only shows when a touch would FIRE (trend + regime gates clear). This adds a dim gray line at the same level while a gate blocks it — so you always see where the trigger sits; the dashboard says why it's blocked.")
+show_line_labels = input.bool(true, "Write ENTRY / STOP / TP on the chart", group="Display")
+show_dash = input.bool(true, "Show dashboard", group="Display")
+show_vwap = input.bool(true, "Show session VWAP on the chart", group="Display",
+            tooltip="The session VWAP line (user 2026-07-05) — the Layer-1 arming reference (OR-mid + VWAP) and the 'VWAP' pullback-retest target. Colored by price side: above = lime, below = red.")
+risk_dlr  = input.float(250.0, "Risk $ per trade (size readout)", group="Display", step=25,
+            tooltip="ENTRY rows show suggested contracts = risk$ / (stop distance × the ticker's point value). Auto-adjusts per SECURITY via syminfo.pointvalue (NQ vs MNQ vs SPY vs GC). Display only — the AUTO strategy places the real risk-sized order.")
+// ───────────────────────── PROP EVAL (signal-sim guardrails — the AUTO strategy is the real enforcer) ─────────────────────────
+eval_on    = input.bool(false, "EVAL: prop guardrails", group="Prop Eval",
+             tooltip="Tracks this indicator's SIGNAL PnL (R x risk $, stop-price fills, no costs/slippage) against the funded rules and STOPS SIGNALLING when one trips: entry lines pulled, fire alerts suppressed, dashboard shows the reason. Display layer — the AUTO strategy enforces on real fills.")
+eval_risk  = input.float(300.0, "EVAL: risk $ per trade (1R)", group="Prop Eval", step=25)
+eval_target= input.float(3000.0, "EVAL: profit target $ (0 = off)", group="Prop Eval", step=100)
+daily_loss = input.float(700.0, "EVAL: daily loss limit $", group="Prop Eval", step=50)
+trail_dd   = input.float(1500.0, "EVAL: trailing max loss $", group="Prop Eval", step=100)
+eval_buf   = input.float(200.0, "EVAL: halt buffer $ (halt early)", group="Prop Eval", step=50)
+eval_anchor= input.time(timestamp("12 Jun 2026 00:00 -0400"), "EVAL: ledger start", group="Prop Eval",
+             tooltip="Signal PnL BEFORE this moment is ignored. Set it to your eval's first day — otherwise the ledger counts the whole chart history and the profit target / trailing DD trip the instant you enable EVAL.")
+eval_cap   = input.int(5, "EVAL: max signals / day (0 = off)", group="Prop Eval", minval=0)
+eval_lock  = input.int(2, "EVAL: lock day after N losing signals (0 = off)", group="Prop Eval", minval=0,
+             tooltip="F31e day throttle: stop signalling for the rest of the trade-day after N signal-sim losers (and/or the signal cap). Historically FREE (identical pass/blow-up rates) — discipline insurance, active only with EVAL on.")
+
+// ───────────────────────── AUTO PER-ASSET KNOBS (F75–F78, 2026-07-06) ─────────────────────────
+// ONE toggle applies every cohort-adopted per-asset setting by instrument — no manual per-chart
+// setup (user 2026-07-06: "make them automatic on the script"). OFF = the manual inputs above.
+//   chase-cap : NQ/MNQ 1.5 (F78: 1.0->1.5 gains +20.7R, same maxDD) · everything else 0 (the chased entries are the winners)
+//   stale     : ES 24 (its blocked cohort is negative; DD -47->-71 without) · others 0
+//   cooldown  : ES 3 · others 0
+//   next-bar wait (wait_ft): OFF on QQQ (wait-created trades lose -0.54R) · ON elsewhere
+//   instant fill: OFF on ES + SPY (SPY always-wait OOS 0.386->0.620) · ON on NQ/MNQ/QQQ
+//   RANGE-regime block: equities ON · futures OFF (chop cohort positive: NQ +0.19 ES +0.18)
+//   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
+//   retest target: NQ/MNQ Impulse midpoint (F78: +13.5R, better DD) · others OR edge
+auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
+string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
+bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
+bool _aES  = _aroot == "ES" or _aroot == "MES"
+bool _aQQQ = _aroot == "QQQ"
+bool _aSPY = _aroot == "SPY"
+float chase_max   = auto_asset ? (_aNQ ? 1.5 : 0.0) : chase_max_in
+int   stale_n     = auto_asset ? (_aES ? 24 : 0) : stale_n_in
+int   cooldown_n  = auto_asset ? (_aES ? 3 : 0) : cooldown_n_in
+bool  wait_ft     = auto_asset ? not _aQQQ : wait_ft_in
+bool  instant_fill = auto_asset ? not (_aES or _aSPY) : instant_fill_in
+bool  block_range = auto_asset ? syminfo.type != "futures" : block_range_in
+float retest_atr  = auto_asset ? (_aES ? 0.5 : 0.25) : retest_atr_in
+string retest_target = auto_asset ? (_aNQ ? "Impulse midpoint" : "OR edge") : retest_target_in
+
+// ───────────────────────── CORE ─────────────────────────
+atr14 = ta.atr(14)
+[dip, dim, adxV] = ta.dmi(14, 14)
+atr_pct = close > 0 ? atr14 / close * 100.0 : 0.0
+emaF = ta.ema(close, trend_ema_f)
+emaS = ta.ema(close, trend_ema_s)
+bool trend_up   = close > emaS and emaF > emaS
+bool trend_down = close < emaS and emaF < emaS
+float vwap_c = ta.vwap
+// rolling price-array direction read (user idea): slope of the 12-bar linear regression = "which way is price going NOW"
+// (a fast AWARENESS read — research: standalone it ≈ plain ORB, but it's the continuous direction the dashboard shows)
+float dir_slope = ta.linreg(close, 12, 0) - ta.linreg(close, 12, 1)
+// TRADE-DAY minutes: 18:00 ET (CME Globex reopen) = 0, so a session crossing midnight stays contiguous.
+int et_min = hour(time, sess_tz) * 60 + minute(time, sess_tz)
+int o_now  = (et_min - 1080 + 1440) % 1440
+bool is_auto = sess_preset == "Auto (Asia + London + RTH by clock)"
+bool phase_rth    = is_auto and o_now >= 930 and o_now < 1260   // 09:30-15:00 ET = RTH cycle
+bool phase_london = is_auto and o_now >= 540 and o_now < 930    // 03:00-09:30 ET = London cycle (open OR at 03:00)
+string or_start = is_auto ? (phase_rth ? "0930-1000" : phase_london ? "0300-0330" : "1900-2000") : sess_preset == "US RTH (0930-1000 ET)" ? "0930-1000" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "1900-2000" : or_custom
+int    cut_hhmm = is_auto ? (phase_rth ? 1500 : phase_london ? 800 : 300) : sess_preset == "US RTH (0930-1000 ET)" ? 1500 : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? 300 : cut_custom
+int cut_et = (cut_hhmm / 100) * 60 + (cut_hhmm % 100)
+int trade_end = (cut_et - 1080 + 1440) % 1440
+bool new_day = ta.change(time("D")) != 0                        // CME futures: rolls at 18:00 ET = trade-day start
+int td_dow = dayofweek(time + 6 * 60 * 60 * 1000, sess_tz)      // weekday of the TRADE-day (Sun-eve = Mon)
+// CRYPTO trades weekends (user screenshot 2026-07-05: BTCUSD sat/sun showed 'RANGE - weekend'
+// and could never ARM) — the weekend block only applies to non-crypto instruments.
+bool wkday = syminfo.type == "crypto" or (td_dow != dayofweek.saturday and td_dow != dayofweek.sunday)
+int tf_s = timeframe.in_seconds()
+float eff_brk = auto_tf ? (tf_s <= 300 ? 0.0 : 0.25) : brk_buf_atr
+
+// ───────────────────────── HH/HL STRUCTURE STATE (port of hs_harness.py; pivot_tie='tv' per F28) ─────────────────────────
+float ph = ta.pivothigh(high, eff_lb, eff_lb)
+float pl = ta.pivotlow(low,  eff_lb, eff_lb)
+var float ph_last = na
+var float ph_prev = na
+var float pl_last = na
+var float pl_prev = na
+var int   st_state = 0
+int st_prev = st_state
+if not na(ph)
+    if na(ph_last) or math.abs(ph - ph_last) / ph_last * 100.0 >= struct_tol
+        ph_prev := ph_last
+        ph_last := ph
+if not na(pl)
+    if na(pl_last) or math.abs(pl - pl_last) / pl_last * 100.0 >= struct_tol
+        pl_prev := pl_last
+        pl_last := pl
+bool s_hh = not na(ph_last) and not na(ph_prev) and ph_last > ph_prev
+bool s_lh = not na(ph_last) and not na(ph_prev) and ph_last < ph_prev
+bool s_hl = not na(pl_last) and not na(pl_prev) and pl_last > pl_prev
+bool s_ll = not na(pl_last) and not na(pl_prev) and pl_last < pl_prev
+// GAP-AWARE claim guard (STRUC fix 2026-07): UP only while close >= last swing low; DOWN only
+// while close <= last swing high — stale HH/HL pairs from the old leg can no longer re-claim a
+// trend the price has already broken (the 'Bullish Trend while price dumped' bug).
+if s_hh and s_hl and close >= pl_last
+    st_state := 1
+else if s_ll and s_lh and close <= ph_last
+    st_state := 2
+else if (s_hh and s_ll) or (s_hl and s_lh)
+    st_state := 3
+// GAP-AWARE CHoCH: no crossing bar required — in a fast move the swing reference steps toward
+// price via new pivots, so the crossing close[1] test could never fire and the state went stale.
+if st_prev == 2 and not na(ph_last) and close > ph_last
+    st_state := 0
+if st_prev == 1 and not na(pl_last) and close < pl_last
+    st_state := 0
+
+// ───────────────────────── ORDER BLOCKS (F41 confluence; port of hs_harness _zones_sweep_patterns) ─────────────────────────
+var array<float> obBullT = array.new<float>()   // bull OB tops (open[1]) / bottoms (low[1])
+var array<float> obBullB = array.new<float>()
+var array<float> obBearT = array.new<float>()   // bear OB tops (high[1]) / bottoms (open[1])
+var array<float> obBearB = array.new<float>()
+float ob_vMA = ta.sma(volume, 20)
+bool ob_strong = math.abs(close - open) >= atr14 * ob_body and volume >= ob_vMA * ob_vol
+if ob_on
+    if close > high[1] and close[1] < open[1] and ob_strong          // bullish OB forms on a strong displacement up
+        array.push(obBullT, open[1])
+        array.push(obBullB, low[1])
+        if array.size(obBullT) > ob_keep
+            array.shift(obBullT)
+            array.shift(obBullB)
+    if close < low[1] and close[1] > open[1] and ob_strong           // bearish OB forms
+        array.push(obBearT, high[1])
+        array.push(obBearB, open[1])
+        if array.size(obBearT) > ob_keep
+            array.shift(obBearT)
+            array.shift(obBearB)
+    if array.size(obBullT) > 0                                        // invalidate: close below the zone, or > ob_dist ATR away
+        for i = array.size(obBullT) - 1 to 0
+            if close < array.get(obBullB, i) or math.abs(close - array.get(obBullT, i)) > atr14 * ob_dist
+                array.remove(obBullT, i)
+                array.remove(obBullB, i)
+    if array.size(obBearT) > 0
+        for i = array.size(obBearT) - 1 to 0
+            if close > array.get(obBearT, i) or math.abs(close - array.get(obBearB, i)) > atr14 * ob_dist
+                array.remove(obBearT, i)
+                array.remove(obBearB, i)
+bool in_bull_ob = false
+if array.size(obBullT) > 0
+    for i = 0 to array.size(obBullT) - 1
+        if low <= array.get(obBullT, i) and high >= array.get(obBullB, i)
+            in_bull_ob := true
+bool in_bear_ob = false
+if array.size(obBearT) > 0
+    for i = 0 to array.size(obBearT) - 1
+        if low <= array.get(obBearT, i) and high >= array.get(obBearB, i)
+            in_bear_ob := true
+
+// ───────────────────────── 1-MINUTE DIRECTION FEED (fast_dir — structure + slope at 1m speed on any TF) ─────────────────────────
+// The SAME swing-structure machine as above, executed in the 1-MINUTE context via request.security:
+// pivots confirm in eff_lb MINUTES instead of eff_lb chart bars, so a 5m/15m chart flips direction as
+// fast as the 1m chart did in the user's screenshots. Keep the two machines in lockstep when editing.
+// COMBINED SLOPE ENGINE (user research 2026-07): S = 0.50*(closeSlope/ATR) + 0.30*(bodyMidSlope/ATR)
+// + 0.20*bodyPressure. Uses EVERY candle in the window (regression, not first/last), body midpoints
+// catch open/close progression, recency-weighted body pressure kills the one-big-candle illusion.
+// ATR-normalized => comparable across instruments/TFs (~ATRs advanced per bar). Bands: |S|>=0.10
+// directional, >=0.30 strong (starting thresholds — tune per TF via the gauntlet before gating).
+f_slope_comb(int N) =>
+    float _sc = ta.linreg(close, N, 0) - ta.linreg(close, N, 1)
+    float _mid0 = (open + close) / 2.0
+    float _sm = ta.linreg(_mid0, N, 0) - ta.linreg(_mid0, N, 1)
+    float _a = ta.atr(14)
+    float _num = 0.0
+    float _den = 0.0
+    for _i = 0 to N - 1
+        float _w = 1.0 + (N - 1 - _i) / float(math.max(N - 1, 1))
+        float _b = close[_i] - open[_i]
+        _num += _w * _b
+        _den += _w * math.abs(_b)
+    float _bp = _den > 0 ? _num / _den : 0.0
+    _a > 0 ? 0.50 * (_sc / _a) + 0.30 * (_sm / _a) + 0.20 * _bp : 0.0
+f_struct_1m() =>
+    float _ph = ta.pivothigh(high, eff_lb, eff_lb)
+    float _pl = ta.pivotlow(low,  eff_lb, eff_lb)
+    var float _phL = na
+    var float _phP = na
+    var float _plL = na
+    var float _plP = na
+    var int _st = 0
+    int _stp = _st
+    if not na(_ph)
+        if na(_phL) or math.abs(_ph - _phL) / _phL * 100.0 >= struct_tol
+            _phP := _phL
+            _phL := _ph
+    if not na(_pl)
+        if na(_plL) or math.abs(_pl - _plL) / _plL * 100.0 >= struct_tol
+            _plP := _plL
+            _plL := _pl
+    bool _hh = not na(_phL) and not na(_phP) and _phL > _phP
+    bool _lh = not na(_phL) and not na(_phP) and _phL < _phP
+    bool _hl = not na(_plL) and not na(_plP) and _plL > _plP
+    bool _ll = not na(_plL) and not na(_plP) and _plL < _plP
+    if _hh and _hl and close >= _plL
+        _st := 1
+    else if _ll and _lh and close <= _phL
+        _st := 2
+    else if (_hh and _ll) or (_hl and _lh)
+        _st := 3
+    if _stp == 2 and not na(_phL) and close > _phL
+        _st := 0
+    if _stp == 1 and not na(_plL) and close < _plL
+        _st := 0
+    [_st, f_slope_comb(12)]                                       // + the COMBINED slope S in 1m units (12-MINUTE window)
+[st_1m, slope_1m] = request.security(syminfo.tickerid, "1", f_struct_1m(), lookahead=barmerge.lookahead_off)
+bool use_fast_dir = fast_dir and tf_s > 60                        // a 1m chart already reads at 1m speed
+int   st_dir    = use_fast_dir ? st_1m : st_state                 // DIRECTION state (1m speed) — gates + DIR-fast
+float slope_dir = use_fast_dir ? slope_1m : f_slope_comb(12)      // combined slope S, 1m feed (12-min window) or chart TF
+// ENTRY STANDARD Layer 1 — arming gate (07.3, user: "OR_MID IS OBLIGATORY"):
+//   DIR-A (futures/crypto) = OR-mid side ONLY (the watch machine enforces it) — VWAP/STRUCT/
+//                            SLOPE grade the setup (C/B/A/A+), they never block or delay.
+//   fallback B (equities)  = Structure (1m-fed) + VWAP side — kept: the A/B shows it IS the
+//                            equity edge (QQQ +0.507 vs +0.314 mid-only).
+bool eff_ctx = ctx_source != "Off"
+bool is_auto_ctx = str.startswith(ctx_source, "Auto")
+bool use_abc  = ctx_source == "Any engine aligned (A∨B∨C, 07.4)" or
+     (is_auto_ctx and (syminfo.type == "futures" or syminfo.type == "crypto"))
+bool use_dirB = ctx_source == "Structure + VWAP (fallback B)" or
+     (is_auto_ctx and syminfo.type != "futures" and syminfo.type != "crypto")
+// DIR-FAST C (user 2026-07-05): the combined slope engine's STRONG read (|S| >= 0.30, 1m-fed).
+bool dirC_up = slope_dir >= 0.30
+bool dirC_dn = slope_dir <= -0.30
+bool ctx_up = use_abc ? (close > vwap_c or st_dir == 1 or dirC_up) :
+     use_dirB ? (st_dir == 1 and close > vwap_c) : true
+bool ctx_dn = use_abc ? (close < vwap_c or st_dir == 2 or dirC_dn) :
+     use_dirB ? (st_dir == 2 and close < vwap_c) : true
+
+// ───────────────────────── TF-ADAPTIVE TREND GATE ─────────────────────────
+bool gate_off   = trend_mode == "Off — plain ORB (F58 default)"                       // F58: plain breakout, no trend filter
+bool use_struct = trend_mode == "Structure (HH/HL)" or (trend_mode == "Auto (structure <=5m / EMA >=15m)" and tf_s <= 300)
+bool eff_up   = gate_off ? true : use_struct ? (st_dir == 1) : trend_up
+bool eff_down = gate_off ? true : use_struct ? (st_dir == 2) : trend_down
+
+// ───────────────────────── MACRO REGIME ─────────────────────────
+spy_b() =>
+    [_a,_b,sadx] = ta.dmi(14,14)
+    [close, ta.ema(close,20), ta.ema(close,50), sadx]
+vix_b() => ta.sma(close,5)
+[spc, se20, se50, sadx] = request.security(spy_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+vix5 = request.security(vix_sym, "D", vix_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+bool spy_up = not na(spc) and spc > se20 and se20 > se50
+bool spy_dn = not na(spc) and spc < se20 and se20 < se50
+bool spy_trend = (spy_up or spy_dn) and not na(sadx) and sadx >= spy_adx_min
+string reg_raw = "-"
+if not na(vix5)
+    reg_raw := vix5 >= vix_ext ? "D" : vix5 >= vix_vol ? "C" : (vix5 < vix_calm and spy_trend) ? "A" : (vix5 < vix_vol and not spy_trend) ? "B" : spy_trend ? "A" : "B"
+var int reg_cnt = 0
+var string reg_pend = "-"
+var string reg_conf = "-"
+int need = reg_raw == "D" ? 0 : persist_n
+if reg_raw == "D"
+    reg_conf := "D"
+    reg_pend := "D"
+    reg_cnt := need
+else if reg_raw == reg_pend
+    reg_cnt += 1
+    if reg_cnt >= need
+        reg_conf := reg_raw
+else
+    reg_pend := reg_raw
+    reg_cnt := 1
+string regime = reg_conf != "-" ? reg_conf : reg_raw
+// F31f: B-block can be session-scoped — London hours = 03:00-09:30 ET (o_now 540-930 on the trade-day clock)
+bool b_block_now = block_b_ses == "All sessions" or (block_b_ses == "London only" and o_now >= 540 and o_now < 930)
+bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and b_block_now))
+bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
+bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
+
+// ───────────────────────── LOCAL REGIME ─────────────────────────
+int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
+bool local_ok = not block_range or local_regime != 2
+
+// ───────────────────────── OPENING RANGE ─────────────────────────
+bool in_or = not na(time(timeframe.period, or_start, sess_tz))
+bool reset_now = is_auto ? (in_or and not in_or[1]) : new_day   // auto: reset at each session's OR start (2 cycles/day)
+var float or_high = na
+var float or_low  = na
+var bool  or_set  = false
+var int   or_close_o = na                                          // o_now at OR close (for the F38/F39 entry-delay gate)
+if reset_now
+    or_high := na
+    or_low  := na
+    or_set  := false
+    or_close_o := na
+if in_or
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low  := na(or_low)  ? low  : math.min(or_low,  low)
+var float or_mid  = na
+var bool  or_bull = false
+if not in_or and not na(or_high)
+    if not or_set
+        or_close_o := o_now                                        // first bar after the OR closes
+        or_mid  := (or_high + or_low) / 2.0                        // OR-mid bias: which half did the OR close in?
+        or_bull := close > or_mid                                  // upper half = day biased LONG, lower = SHORT
+    or_set := true
+float brk_buf = atr14 * eff_brk
+// vol-expansion conditioner (graduated): width of the opening range / ATR, frozen at the OR close. Narrow-OR = dead.
+float or_w_atr = (or_set and not na(or_high) and not na(or_low) and atr14 > 0) ? (or_high - or_low) / atr14 : na
+bool vol_exp = not na(or_w_atr) and or_w_atr >= min_or_width
+
+// ───────────────────────── ENTRY + STOP + TARGET LEVELS ─────────────────────────
+var float Le = na
+var float Se = na
+var bool  traded_l = false
+var bool  traded_s = false
+var int   n_l = 0
+var int   n_s = 0
+// ORB ZONE STATE MACHINE (staleness fix 2026-07): a PENDING side can be HARD-INVALIDATED (confirmed
+// close beyond the OPPOSITE OR edge, or price tags the side's own proposed stop before entry) or put
+// on WATCH (confirmed close on the wrong side of OR mid — setup alive, no new entry). INVALID clears
+// the entry/stop/TP display and blocks re-arm until price RECLAIMS the breakout edge on a confirmed
+// close (back to WAITING), after which a completely NEW confirmation sequence is required. Long and
+// short are exact mirrors. Confirmed bars only — intrabar spikes cannot flip the state.
+var bool l_invalid = false
+var bool s_invalid = false
+var bool l_below_mid = false        // confirmed-close zone latch: pending long below OR mid
+var bool s_above_mid = false        // pending short above OR mid
+// CANONICAL WATCH MACHINE (entry standard 2026-07-04): a LATCHED watch per side — activated by a
+// confirmed DIRECTIONAL-BODY close beyond the OR mid, cancelled (+ cooldown) by a confirmed close
+// back across it; tracks stale age (RANGE rule) and the pullback extension (don't chase).
+var bool l_watch = false            // WATCH active (Layer 3: the stage between ARMED and FILL)
+var bool s_watch = false
+var int  l_cd = 0                   // cooldown bars left after a watch cancel
+var int  s_cd = 0
+var int  l_wage = 0                 // bars spent in WATCH this cycle (stale/RANGE rule)
+var int  s_wage = 0
+var bool l_range = false            // stale watch -> RANGE (side stands down this cycle)
+var bool s_range = false
+var bool l_ext = false              // extended past the chase cap pre-fill -> PULLBACK (wait for retest)
+var bool s_ext = false
+var float l_ext_hi = na             // extension-impulse extreme (refinements: min-depth + impulse-mid target)
+var float s_ext_lo = na
+var int   l_pb_age = 0              // bars waiting for the retest (timeout rule)
+var int   s_pb_age = 0
+if reset_now
+    Le := na
+    Se := na
+    traded_l := false
+    traded_s := false
+    n_l := 0
+    n_s := 0
+    l_invalid := false
+    s_invalid := false
+    l_below_mid := false
+    s_above_mid := false
+    l_watch := false
+    s_watch := false
+    l_cd := 0
+    s_cd := 0
+    l_wage := 0
+    s_wage := 0
+    l_range := false
+    s_range := false
+    l_ext := false
+    s_ext := false
+    l_ext_hi := na
+    s_ext_lo := na
+    l_pb_age := 0
+    s_pb_age := 0
+if or_set and na(Le) and not na(or_high) and not na(or_low)
+    Le := or_high + brk_buf                                     // breakout entry levels (frozen at OR close)
+    Se := or_low  - brk_buf
+// stop anchor: last HH/HL swing (structure) or the OR edge. Recomputed while ARMED, frozen at fill.
+var bool in_long  = false
+var bool in_short = false
+float anchorL = (stop_mode == "Structure swing (HH/HL)" and not na(pl_last)) ? pl_last : or_low
+float anchorS = (stop_mode == "Structure swing (HH/HL)" and not na(ph_last)) ? ph_last : or_high
+var float Ls = na
+var float Ss = na
+if not na(Le) and not in_long
+    Ls := math.min(math.max(anchorL - atr14 * sl_buf_atr, Le - atr14 * eff_sl_max), Le - atr14 * eff_min_stop)
+if not na(Se) and not in_short
+    Ss := math.max(math.min(anchorS + atr14 * sl_buf_atr, Se + atr14 * eff_sl_max), Se + atr14 * eff_min_stop)
+float Lt1 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp1_rr
+float Lt2 = na(Le) or na(Ls) ? na : Le + (Le - Ls) * tp2_rr
+float St1 = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp1_rr
+float St2 = na(Se) or na(Ss) ? na : Se - (Ss - Se) * tp2_rr
+
+// ───────────────────────── VWAP-EXTENSION CAP ─────────────────────────
+float extL = na(Le) ? na : (Le - vwap_c) / atr14
+float extS = na(Se) ? na : (vwap_c - Se) / atr14
+bool cap_long_ok  = not cap_on or na(extL) or extL <= cap_k
+bool cap_short_ok = not cap_on or na(extS) or extS <= cap_k
+
+// ───────────────────────── EVAL STATE (signal-sim ledger; a tripped rule gates NEW signals from the next bar) ─────────────────────────
+var float ev_eq = 0.0       // cumulative signal PnL $ (R x eval_risk) — counts from eval_anchor only
+var float ev_day0 = 0.0
+var float ev_peak = 0.0
+var int   ev_day_n    = 0   // signals fired today (F31e day throttle)
+var int   ev_day_loss = 0   // losing signal-sim trades closed today
+bool ev_live = time >= eval_anchor
+if new_day
+    ev_day0 := ev_eq
+    ev_day_n := 0
+    ev_day_loss := 0
+bool ev_day_halt = eval_on and ev_live and (ev_eq - ev_day0) <= -math.max(daily_loss - eval_buf, 0)
+bool ev_dd_halt  = eval_on and ev_live and ev_eq <= ev_peak - math.max(trail_dd - eval_buf, 0)
+bool ev_passed   = eval_on and ev_live and eval_target > 0 and ev_eq >= eval_target
+bool ev_halt     = ev_day_halt or ev_dd_halt or ev_passed
+var int ev_tgt_t = na          // when the eval target was reached (dashboard + chart marker)
+if ev_passed and na(ev_tgt_t)
+    ev_tgt_t := time
+bool ev_throttle = eval_on and ((eval_cap > 0 and ev_day_n >= eval_cap) or (eval_lock > 0 and ev_day_loss >= eval_lock))
+
+// ───────────────────────── ORB ZONE STATE UPDATE (confirmed closes only — mirrored long/short) ─────────────────────────
+if or_set and barstate.isconfirmed and not na(or_high) and not na(or_low)
+    // zone latches: which side of OR mid did this bar CLOSE on? (display/why-strings)
+    l_below_mid := close < or_mid
+    s_above_mid := close > or_mid
+    // ── canonical WATCH machine (Layer 3, mirrored long/short — confirmed closes only) ──
+    if l_cd > 0
+        l_cd -= 1
+    if s_cd > 0
+        s_cd -= 1
+    if l_watch and close < or_mid                     // watch cancelled at the mid -> cooldown
+        l_watch := false
+        l_ext := false
+        l_range := false
+        l_cd := cooldown_n
+        l_ext_hi := na
+        l_pb_age := 0
+    else if not l_watch and l_cd == 0 and close > or_mid and close > open
+        l_watch := true                               // clean directional close beyond the mid
+        l_wage := 0
+    else if l_watch
+        l_wage += 1
+        if stale_n > 0 and l_wage > stale_n and not in_long
+            l_range := true                           // stale setup -> RANGE (no trade this cycle)
+        if l_ext                                      // refinements: track impulse + timeout
+            l_ext_hi := na(l_ext_hi) ? high : math.max(l_ext_hi, high)
+            l_pb_age += 1
+            if pb_timeout > 0 and l_pb_age > pb_timeout
+                l_range := true                       // retest never came — stale this cycle
+                l_ext := false
+                l_ext_hi := na
+                l_pb_age := 0
+        else if not in_long and not traded_l and chase_max > 0 and retest_atr > 0 and not na(Le) and high > Le + atr14 * chase_max
+            l_ext := true                             // over-extended pre-fill -> PULLBACK (don't chase)
+            l_ext_hi := high
+            l_pb_age := 0
+    // retest: mode-aware target (edge / impulse midpoint / VWAP) + min retrace from the extreme
+    float l_tgt = retest_target == "Impulse midpoint" and not na(l_ext_hi) and not na(Le) ? (Le + l_ext_hi) / 2.0 : retest_target == "VWAP" ? vwap_c : Le
+    bool  l_deep = min_pb_atr <= 0 or (not na(l_ext_hi) and (l_ext_hi - low) >= atr14 * min_pb_atr)
+    if l_ext and l_deep and not na(l_tgt) and low <= l_tgt + atr14 * retest_atr
+        l_ext := false                                // valid retest -> clean re-check
+        l_ext_hi := na
+        l_pb_age := 0
+    if s_watch and close > or_mid
+        s_watch := false
+        s_ext := false
+        s_range := false
+        s_cd := cooldown_n
+        s_ext_lo := na
+        s_pb_age := 0
+    else if not s_watch and s_cd == 0 and close < or_mid and close < open
+        s_watch := true
+        s_wage := 0
+    else if s_watch
+        s_wage += 1
+        if stale_n > 0 and s_wage > stale_n and not in_short
+            s_range := true
+        if s_ext
+            s_ext_lo := na(s_ext_lo) ? low : math.min(s_ext_lo, low)
+            s_pb_age += 1
+            if pb_timeout > 0 and s_pb_age > pb_timeout
+                s_range := true
+                s_ext := false
+                s_ext_lo := na
+                s_pb_age := 0
+        else if not in_short and not traded_s and chase_max > 0 and retest_atr > 0 and not na(Se) and low < Se - atr14 * chase_max
+            s_ext := true
+            s_ext_lo := low
+            s_pb_age := 0
+    float s_tgt = retest_target == "Impulse midpoint" and not na(s_ext_lo) and not na(Se) ? (Se + s_ext_lo) / 2.0 : retest_target == "VWAP" ? vwap_c : Se
+    bool  s_deep = min_pb_atr <= 0 or (not na(s_ext_lo) and (high - s_ext_lo) >= atr14 * min_pb_atr)
+    if s_ext and s_deep and not na(s_tgt) and high >= s_tgt - atr14 * retest_atr
+        s_ext := false
+        s_ext_lo := na
+        s_pb_age := 0
+    // LONG hard-invalidate: confirmed close below OR LOW, or price tagged the proposed long stop pre-entry
+    if not in_long and (close < or_low or (not na(Ls) and low <= Ls))
+        l_invalid := true
+    // LONG reclaim: confirmed close back ABOVE OR high -> WAITING (a fresh confirmation must then re-arm)
+    else if l_invalid and close > or_high
+        l_invalid := false
+    // SHORT mirror: confirmed close above OR HIGH, or price tagged the proposed short stop pre-entry
+    if not in_short and (close > or_high or (not na(Ss) and high >= Ss))
+        s_invalid := true
+    else if s_invalid and close < or_low
+        s_invalid := false
+
+// ───────────────────────── GATES + FIRING ─────────────────────────
+// auto guard: 18:00-19:00 ET (trade-day start, pre-Asia-OR) still carries yesterday's RTH levels — no signals there
+bool stale_gap = is_auto and o_now < 60
+bool past_delay = entry_delay == 0 or (not na(or_close_o) and o_now >= or_close_o + entry_delay)   // F38/F39 skip-opening-hour
+bool window = or_set and wkday and past_delay and o_now < trade_end and not na(Le) and not stale_gap and not ev_halt and not ev_throttle
+// FROZEN day bias applies only on the STRUCT+VWAP (B) pair — the LIVE mid (watch machine)
+// supersedes it when MID+VWAP arms (user screenshots: 'OR-mid: short day' blocked an aligned long)
+bool eff_bias = ormid_bias and use_dirB
+bool gate_long  = long_on  and eff_up   and (not eff_ctx or ctx_up) and macro_allow and macro_long_ok  and local_ok and (not ob_on or in_bull_ob[1]) and (not eff_bias or or_bull)          // +Layer-1 context (auto per instrument) +OR-mid bias (B only)
+bool gate_short = short_on and eff_down  and (not eff_ctx or ctx_dn) and macro_allow and macro_short_ok and local_ok and (not ob_on or in_bear_ob[1]) and (not eff_bias or or_bull == false)
+if allow_reentry and traded_l and not na(or_high) and close < or_high and n_l < max_entries
+    traded_l := false
+if allow_reentry and traded_s and not na(or_low) and close > or_low and n_s < max_entries
+    traded_s := false
+bool near_l = chase_max <= 0 or low  <= Le + atr14 * chase_max   // no-chase guard (default 1.0 ATR w/ arm-delay 0 — enter near the level or wait for the retest)
+bool near_s = chase_max <= 0 or high >= Se - atr14 * chase_max
+bool conf_close = brk_confirm == "Candle close beyond level (full body)"          // user: a FULL-BODY, STRONG candle that CLOSES beyond the level
+bool body_strong = (high - low) <= 0 or math.abs(close - open) >= strong_body * (high - low)   // decisive candle, not a doji / long-wick rejection
+bool qual_l = close >= Le and close > open and body_strong                        // a strong full-body BULLISH close above OR high (the breakout candle)
+bool qual_s = close <= Se and close < open and body_strong
+// INSTANT FILL WHEN ALIGNED (user 2026-07-05): the arming pair agrees AND price is beyond the
+// mid -> the breakout candle ITSELF fills; the F59c continuation wait applies only unaligned.
+bool alignedA_l = ctx_up and or_set and not na(or_mid) and close > or_mid
+bool alignedA_s = ctx_dn and or_set and not na(or_mid) and close < or_mid
+bool brk_l = conf_close ? ((wait_ft and not (instant_fill and alignedA_l)) ? (qual_l[1] and close > close[1]) : qual_l) : high >= Le
+bool brk_s = conf_close ? ((wait_ft and not (instant_fill and alignedA_s)) ? (qual_s[1] and close < close[1]) : qual_s) : low  <= Se
+// F61 direction sequence: only fire while price is pushing the trade way (101->102->103 up / mirror down)
+bool seq_l = not dir_seq or (close > close[1] and close[1] > close[2])
+bool seq_s = not dir_seq or (close < close[1] and close[1] < close[2])
+bool volexp_ok = not volexp_filter or vol_exp                                      // GRADUATED filter: skip the dead narrow-OR cohort
+// LIVE==BACKTEST FIX (review 2026-07): close-confirm conditions use `close` and therefore flicker
+// INTRABAR on the realtime bar (a mid-bar pop could latch traded_l / fire the alert on a candle
+// that never confirms). Close-confirm signals now latch only on the CONFIRMED bar — identical on
+// history, honest live. Wick/touch mode keeps its intended intrabar trigger.
+bool cc_bar_ok = not conf_close or barstate.isconfirmed
+// ENTRY STANDARD Layer 3 gate: fire only while the side's WATCH is live — active, not cooling down,
+// not stale (RANGE) and not extended (PULLBACK: wait for the retest near the level).
+bool watch_ok_l = not watch_gate or (l_watch and l_cd == 0 and not l_range and not l_ext)
+bool watch_ok_s = not watch_gate or (s_watch and s_cd == 0 and not s_range and not s_ext)
+// relative-volume confirmation on the trigger bar (deep-research refinement; default OFF)
+bool vcx_ok = vol_confirm <= 0 or (not na(ob_vMA) and ob_vMA > 0 and volume >= ob_vMA * vol_confirm)
+bool sig_l = window and not traded_l and not l_invalid and gate_long  and brk_l and near_l and seq_l and volexp_ok and watch_ok_l and vcx_ok and cc_bar_ok
+bool sig_s = window and not traded_s and not s_invalid and gate_short and brk_s and near_s and seq_s and volexp_ok and watch_ok_s and vcx_ok and cc_bar_ok
+bool long_fire  = sig_l and cap_long_ok
+bool short_fire = sig_s and cap_short_ok
+bool long_skip  = sig_l and not cap_long_ok
+bool short_skip = sig_s and not cap_short_ok
+if sig_l
+    traded_l := true
+    n_l += 1
+    ev_day_n += 1
+if sig_s
+    traded_s := true
+    n_s += 1
+    ev_day_n += 1
+
+// ───────────────────────── POSITION MANAGEMENT (working stop: trail OR scale-to-BE) ─────────────────────────
+bool is_trail = exit_mode == "Trail (ATR chandelier)"
+bool is_full  = exit_mode == "Full → cap @ TP2 (struct stop)"    // F34b: full position to the TP2 cap, struct stop, no scale/trail
+var float lstop = na          // long working stop (initial -> trails / -> BE)
+var float sstop = na
+var bool  l_tp1 = false
+var bool  s_tp1 = false
+var float l_ep = na           // eval sim: frozen entry + initial 1R risk
+var float l_rk = na
+var float s_ep = na
+var float s_rk = na
+var bool l_t1h = false        // TP1/TP2 touched + per-side state (dashboard, user color legend)
+var bool l_t2h = false
+var bool s_t1h = false
+var bool s_t2h = false
+var string stL = "WAIT"
+var string stS = "WAIT"
+var int l_fill_t = na         // event times (fill / TP1 / TP2 / stop) — dashboard "when it happened"
+var int l_t1_t   = na
+var int l_t2_t   = na
+var int l_stop_t = na
+var int s_fill_t = na
+var int s_t1_t   = na
+var int s_t2_t   = na
+var int s_stop_t = na
+var float l_stop_px = na      // price the stop actually filled at (for the at-price STOP marker)
+var float s_stop_px = na
+float ev_r = 0.0              // R closed THIS bar (eval signal-sim)
+// signal-sim R for a close at px (scale mode: 50% banked at TP1, runner from BE)
+f_lr(px) => is_trail ? (px - l_ep) / l_rk : l_tp1 ? 0.5 * tp1_rr + 0.5 * (px - l_ep) / l_rk : (px - l_ep) / l_rk
+f_sr(px) => is_trail ? (s_ep - px) / s_rk : s_tp1 ? 0.5 * tp1_rr + 0.5 * (s_ep - px) / s_rk : (s_ep - px) / s_rk
+if reset_now
+    if in_long
+        ev_r += f_lr(close)                                            // day-boundary close of a displayed trade
+    if in_short
+        ev_r += f_sr(close)
+    in_long := false
+    in_short := false
+    lstop := na
+    sstop := na
+    l_tp1 := false
+    s_tp1 := false
+    l_t1h := false
+    l_t2h := false
+    s_t1h := false
+    s_t2h := false
+    stL := "WAIT"
+    stS := "WAIT"
+    l_fill_t := na
+    l_t1_t   := na
+    l_t2_t   := na
+    l_stop_t := na
+    s_fill_t := na
+    s_t1_t   := na
+    s_t2_t   := na
+    s_stop_t := na
+    l_stop_px := na
+    s_stop_px := na
+if long_fire
+    in_long := true
+    lstop := Ls
+    l_tp1 := false
+    l_ep := conf_close ? close : math.max(Le, open)                   // close-confirm: fill at the confirming CLOSE; stop: gap-aware (no better than the open)
+    l_rk := l_ep - Ls                                                 // honest risk from the ACTUAL fill (higher close = bigger 1R, fewer R to a fixed target)
+    l_t1h := false
+    l_t2h := false
+    stL := "FILLED"
+    l_fill_t := time
+    l_t1_t   := na
+    l_t2_t   := na
+    l_stop_t := na
+if short_fire
+    in_short := true
+    sstop := Ss
+    s_tp1 := false
+    s_ep := conf_close ? close : math.min(Se, open)                   // close-confirm: fill at the confirming CLOSE; stop: gap-aware (no better than the open)
+    s_rk := Ss - s_ep                                                 // honest risk from the ACTUAL fill
+    s_t1h := false
+    s_t2h := false
+    stS := "FILLED"
+    s_fill_t := time
+    s_t1_t   := na
+    s_t2_t   := na
+    s_stop_t := na
+if in_long and not long_fire                                          // F-fix: management starts the bar AFTER the fill — no same-bar fill->TP/stop inflation (matches engine i+1)
+    if is_trail
+        lstop := math.max(lstop, close - trail_atr * atr14)            // chandelier ratchet
+    else if not is_full                                                // scale mode only (full rides the struct stop to the cap)
+        if not l_tp1 and high >= Lt1
+            l_tp1 := true
+            lstop := Le                                                // stop to break-even after TP1
+    if high >= Lt1 and not l_t1h
+        l_t1h := true
+        l_t1_t := time
+    if high >= Lt2 and not l_t2h
+        l_t2h := true
+        l_t2_t := time
+    stL := l_t2h ? "TP2 HIT" : l_t1h ? "TP1 HIT" : close >= Le + 0.75 * (Lt1 - Le) ? "NEAR TP1" : "FILLED"
+    if low <= lstop or (not is_trail and high >= Lt2)
+        float _xr = f_lr(low <= lstop ? lstop : Lt2)
+        ev_r += _xr
+        if _xr < 0
+            ev_day_loss += 1
+        in_long := false
+        if low <= lstop
+            l_stop_t := time
+            l_stop_px := lstop                                         // the price the stop filled at (at-price STOP marker)
+            if not l_t1h or is_full                                    // full mode banks nothing at TP1, so a stop is a full loss
+                stL := "STOP HIT"
+if in_short and not short_fire                                        // F-fix: management starts the bar AFTER the fill — no same-bar fill->TP/stop inflation (matches engine i+1)
+    if is_trail
+        sstop := math.min(sstop, close + trail_atr * atr14)
+    else if not is_full
+        if not s_tp1 and low <= St1
+            s_tp1 := true
+            sstop := Se
+    if low <= St1 and not s_t1h
+        s_t1h := true
+        s_t1_t := time
+    if low <= St2 and not s_t2h
+        s_t2h := true
+        s_t2_t := time
+    stS := s_t2h ? "TP2 HIT" : s_t1h ? "TP1 HIT" : close <= Se - 0.75 * (Se - St1) ? "NEAR TP1" : "FILLED"
+    if high >= sstop or (not is_trail and low <= St2)
+        float _xr = f_sr(high >= sstop ? sstop : St2)
+        ev_r += _xr
+        if _xr < 0
+            ev_day_loss += 1
+        in_short := false
+        if high >= sstop
+            s_stop_t := time
+            s_stop_px := sstop                                         // the price the stop filled at (at-price STOP marker)
+            if not s_t1h or is_full                                    // full mode banks nothing at TP1, so a stop is a full loss
+                stS := "STOP HIT"
+if is_auto and o_now >= trade_end                              // auto: flatten the displayed trade at the session cutoff
+    if in_long
+        float _xr = f_lr(close)
+        ev_r += _xr
+        if _xr < 0
+            ev_day_loss += 1
+    if in_short
+        float _xr = f_sr(close)
+        ev_r += _xr
+        if _xr < 0
+            ev_day_loss += 1
+    in_long := false
+    in_short := false
+// eval ledger update (halt flags evaluate pre-bar -> a trip gates signals from the NEXT bar)
+if ev_live
+    ev_eq += ev_r * eval_risk
+ev_peak := math.max(ev_peak, ev_eq)
+bool l_live = (window and not traded_l and not l_invalid and gate_long) or in_long
+bool s_live = (window and not traded_s and not s_invalid and gate_short) or in_short
+float l_stop_now = in_long ? lstop : Ls                                // the stop to SHOW (planned while armed, working once live)
+float s_stop_now = in_short ? sstop : Ss
+// flat-side state refresh — CANONICAL ordering (entry standard 2026-07-04):
+//   WAIT (context off) -> ARMED (Structure+VWAP aligned) -> WATCH (confirmed close beyond OR mid)
+//   -> FILL, with COOLDOWN (watch cancelled at the mid), PULLBACK (extended, wait for the retest),
+//   RANGE (stale watch) and LOCKED (max entries used). Final states persist once the side traded.
+bool armL = window and not traded_l and not l_invalid and gate_long and cap_long_ok
+bool armS = window and not traded_s and not s_invalid and gate_short and cap_short_ok
+if not in_long and not traded_l
+    stL := l_invalid ? "INVALID" : l_cd > 0 ? "COOLDOWN" : l_range ? "RANGE" : (armL and l_ext) ? "PULLBACK" : (armL and l_watch) ? "WATCH" : armL ? "ARMED" : "WAIT"
+if not in_short and not traded_s
+    stS := s_invalid ? "INVALID" : s_cd > 0 ? "COOLDOWN" : s_range ? "RANGE" : (armS and s_ext) ? "PULLBACK" : (armS and s_watch) ? "WATCH" : armS ? "ARMED" : "WAIT"
+if traded_l and not in_long and n_l >= max_entries
+    stL := stL == "STOP HIT" or stL == "TP1 HIT" or stL == "TP2 HIT" ? stL : "LOCKED"
+if traded_s and not in_short and n_s >= max_entries
+    stS := stS == "STOP HIT" or stS == "TP1 HIT" or stS == "TP2 HIT" ? stS : "LOCKED"
+// state colors (user legend): WAIT gray · ARMED yellow · WATCH orange · PULLBACK purple · COOLDOWN silver ·
+// RANGE dim gray · LOCKED dark gray · FILLED blue · NEAR TP1 light green · TP1 HIT green · TP2 HIT dark green ·
+// STOP HIT red · INVALID dark red (structure broke against the pending side)
+f_stc(s) => s == "WAIT" ? color.gray : s == "WATCH" ? color.orange : s == "INVALID" ? color.rgb(139, 0, 0) :
+     s == "ARMED" ? color.yellow : s == "FILLED" ? color.rgb(41, 121, 255) :
+     s == "PULLBACK" ? color.rgb(187, 134, 252) : s == "COOLDOWN" ? color.silver :
+     s == "RANGE" ? color.new(color.gray, 30) : s == "LOCKED" ? color.rgb(90, 90, 90) :
+     s == "NEAR TP1" ? color.rgb(144, 238, 144) : s == "TP1 HIT" ? color.green : s == "TP2 HIT" ? color.rgb(0, 102, 0) : color.red
+// GRADE LADDER (user 2026-07-05 v2): ORMID arms; the extras GRADE cumulatively —
+// +VWAP = B · +STRUCT = A · +SLOPE = A+ (all three aligned). No VWAP / cap-blocked = C.
+f_grade(capok, vwapok, structok, slopeok) => not capok ? "C" :
+     vwapok and structok and slopeok ? "A+" : vwapok and structok ? "A" : vwapok ? "B" : "C"
+
+// ───────────────────────── PLOTS ─────────────────────────
+plot(show_vwap ? vwap_c : na, "Session VWAP", color=close >= vwap_c ? color.new(color.lime, 35) : color.new(color.red, 35), style=plot.style_linebr, linewidth=1)
+plot(or_set ? or_high : na, "OR high", color=color.new(color.aqua, 55),   style=plot.style_linebr)
+plot(or_set ? or_low  : na, "OR low",  color=color.new(color.orange, 55), style=plot.style_linebr)
+// OR-mid (equilibrium / premium-discount line) — the OR-mid bias axis, colored by which half the OR closed in
+plot(or_set and not na(or_mid) ? or_mid : na, "OR mid (bias)", color=(ormid_bias ? (or_bull ? color.new(color.lime, 25) : color.new(color.red, 25)) : color.new(color.gray, 40)), style=plot.style_linebr, linewidth=1)
+plot(l_live ? Le : na, "Long entry",  color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+plot(s_live ? Se : na, "Short entry", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
+// dimmed entry levels while a gate BLOCKS the side (would NOT fire on a touch — see dashboard "Gated"/"Trend gate")
+plot(show_gated and window and not traded_l and not l_invalid and not l_live ? Le : na, "Long entry (gated)",  color=color.new(color.gray, 45), style=plot.style_linebr)
+plot(show_gated and window and not traded_s and not s_invalid and not s_live ? Se : na, "Short entry (gated)", color=color.new(color.gray, 45), style=plot.style_linebr)
+bool lp = show_plan and l_live
+bool sp = show_plan and s_live
+plot(lp ? l_stop_now : na, "Long stop",  color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(sp ? s_stop_now : na, "Short stop", color=color.new(color.red, 15), style=plot.style_linebr, linewidth=2)
+plot(lp and not is_trail and not is_full ? Lt1 : na, "Long TP1",  color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(lp and not is_trail ? Lt2 : na, "Long TP2",  color=color.new(color.green, 10), style=plot.style_linebr)
+plot(sp and not is_trail and not is_full ? St1 : na, "Short TP1", color=color.new(color.teal,  20), style=plot.style_linebr)
+plot(sp and not is_trail ? St2 : na, "Short TP2", color=color.new(color.green, 10), style=plot.style_linebr)
+// FILL markers anchored AT the actual fill price (gap-aware l_ep/s_ep), not below/above the bar — so a LONG fill
+// always sits at/above the OR high and a SHORT fill at/below the OR low (a buy-stop fills no better than
+// max(Le,open) ≥ OR high; a sell-stop no better than min(Se,open) ≤ OR low). Makes the break-confirmation visible.
+// SIMPLE CHART (user 2026-06-29): only the FILL marker (anchored at the fill price) with the
+// trigger TIME, plus the TP1/TP2 (and stop) LINES plotted above. No TP/STOP/EXT hit-markers —
+// they were the clutter that kept "showing the same issue". The dashboard still logs hit times.
+if long_fire
+    label.new(bar_index, l_ep, "FILL ▲ " + str.format_time(time, "HH:mm", sess_tz), yloc=yloc.price, style=label.style_label_up,   color=color.new(color.lime, 0), textcolor=color.white, size=size.small)
+if short_fire
+    label.new(bar_index, s_ep, "FILL ▼ " + str.format_time(time, "HH:mm", sess_tz), yloc=yloc.price, style=label.style_label_down, color=color.new(color.red, 0),  textcolor=color.white, size=size.small)
+plotshape(ev_passed and not ev_passed[1], "Eval target reached", shape.flag, location.abovebar, color.new(color.lime, 0), text="TGT ✓", textcolor=color.lime, size=size.small)
+bgcolor(macro_en and regime == "D" ? color.new(color.red, 90) : na)
+bgcolor(block_range and local_regime == 2 ? color.new(color.gray, 92) : na)
+bgcolor(ev_halt and not ev_passed ? color.new(color.red, 82) : na)
+bgcolor(ev_passed ? color.new(color.green, 88) : na)
+alertcondition(long_fire,  "STACK Long",  "HIGHSTRIKE STACK: LONG breakout (gated + near-VWAP)")
+alertcondition(short_fire, "STACK Short", "HIGHSTRIKE STACK: SHORT breakout (gated + near-VWAP)")
+alertcondition(ev_halt and not ev_halt[1], "STACK Eval halt/target", "HIGHSTRIKE STACK: EVAL rule tripped (daily / trailing / target) — signals suspended, check the dashboard")
+
+// ───────────────────────── FLOATING ENTRY / STOP / TP LABELS ─────────────────────────
+f_setlbl(lbl, cond, price, txt, col) =>
+    label out = lbl
+    if cond and not na(price)
+        if na(out)
+            out := label.new(bar_index + 2, price, txt, style=label.style_label_left, color=col, textcolor=color.white, size=size.small)
+        label.set_xy(out, bar_index + 2, price)
+        label.set_text(out, txt)
+        label.set_color(out, col)
+    else if not na(out)
+        label.delete(out)
+        out := na
+    out
+var label lbl_Le = na
+var label lbl_Ls = na
+var label lbl_Lt1 = na
+var label lbl_Lt2 = na
+var label lbl_Se = na
+var label lbl_Ss = na
+var label lbl_St1 = na
+var label lbl_St2 = na
+if barstate.islast and show_line_labels
+    string r1 = str.tostring(tp1_rr, "#.#")
+    string r2 = str.tostring(tp2_rr, "#.#")
+    string lstoptxt = in_long ? (is_trail ? "TRAIL STOP " : "STOP ") : "STOP "
+    string sstoptxt = in_short ? (is_trail ? "TRAIL STOP " : "STOP ") : "STOP "
+    lbl_Le  := f_setlbl(lbl_Le,  l_live, Le, "▲ ENTRY " + str.tostring(Le, format.mintick), color.new(color.yellow, 0))
+    lbl_Ls  := f_setlbl(lbl_Ls,  lp,     l_stop_now, lstoptxt + str.tostring(l_stop_now, format.mintick), color.new(color.red, 0))
+    lbl_Lt1 := f_setlbl(lbl_Lt1, lp and not is_trail and not is_full, Lt1, "TP1 " + str.tostring(Lt1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_Lt2 := f_setlbl(lbl_Lt2, lp and not is_trail, Lt2, "TP2 " + str.tostring(Lt2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
+    lbl_Se  := f_setlbl(lbl_Se,  s_live, Se, "▼ ENTRY " + str.tostring(Se, format.mintick), color.new(color.yellow, 0))
+    lbl_Ss  := f_setlbl(lbl_Ss,  sp,     s_stop_now, sstoptxt + str.tostring(s_stop_now, format.mintick), color.new(color.red, 0))
+    lbl_St1 := f_setlbl(lbl_St1, sp and not is_trail and not is_full, St1, "TP1 " + str.tostring(St1, format.mintick) + "  +" + r1 + "R", color.new(color.teal, 0))
+    lbl_St2 := f_setlbl(lbl_St2, sp and not is_trail, St2, "TP2 " + str.tostring(St2, format.mintick) + "  +" + r2 + "R", color.new(color.green, 0))
+
+// ───────────────────────── DASHBOARD (LONG | SHORT trade plan · state colors: WAIT gray / ARMED yellow / FILLED blue / NEAR TP1 lt-green / TP1 green / TP2 dk-green / STOP red) ─────────────────────────
+f_v(p) => na(p) ? "—" : str.tostring(p, format.mintick)
+f_t(tt) => na(tt) ? "" : "  " + str.format_time(tt, "HH:mm", sess_tz)
+// suggested contracts for THIS ticker = risk$ / (stop distance × point value); auto per-security
+f_sz(dist) => na(dist) or dist <= 0 or syminfo.pointvalue <= 0 ? "" : "  " + str.tostring(math.max(1.0, math.round(risk_dlr / (dist * syminfo.pointvalue)))) + "ct"
+f_q(x)  => na(x) ? "—" : (x <= cap_k ? "NEAR " : "EXT ⚠ ") + str.tostring(x, "#.#") + "x"
+f_qc(x) => na(x) ? color.gray : x <= cap_k ? color.lime : color.orange
+f_ar(x) => x > 0 ? "▲" : x < 0 ? "▼" : "—"
+var table dash = table.new(position.top_right, 3, 14, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_dash
+    string sess_lbl = is_auto ? ("Auto: " + (phase_rth ? "RTH" : phase_london ? "London" : "Asia")) : sess_preset == "US RTH (0930-1000 ET)" ? "RTH" : sess_preset == "Asia / Tokyo (1900-2000 ET)" ? "Asia" : "Custom"
+    bool   dispUp = gate_off ? (ormid_bias ? or_bull : st_dir == 1) : eff_up        // gate off: OR-mid bias is the directional driver (not the lagging structure)
+    bool   dispDn = gate_off ? (ormid_bias ? not or_bull : st_dir == 2) : eff_down
+    string regL = dispUp ? (local_regime == 3 ? "Bullish Expansion" : "Bullish Trend") : st_dir == 3 ? "Range" : dispDn ? "Bearish (no long)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
+    string regS = dispDn ? (local_regime == 3 ? "Bearish Expansion" : "Bearish Trend") : st_dir == 3 ? "Range" : dispUp ? "Bullish (no short)" : (gate_off ? "Plain ORB (no gate)" : "No Structure")
+    // STRUCTURE-AS-GRADE (user 2026-07-03): the entry no longer requires structure; st_dir alignment now drives
+    // the GRADE (A+ = aligned + wide OR) — the structure upgrade, not a veto. Uses st_dir (1m-fed when fast).
+    string grL = (gate_long or in_long) ? f_grade(cap_long_ok, close > vwap_c, st_dir == 1, slope_dir >= 0.10) : "—"
+    string grS = (gate_short or in_short) ? f_grade(cap_short_ok, close < vwap_c, st_dir == 2, slope_dir <= -0.10) : "—"
+    string etagL = in_long ? "FILLED" : traded_l ? "DONE" : armL ? "ARMED" : "WAIT"
+    string etagS = in_short ? "FILLED" : traded_s ? "DONE" : armS ? "ARMED" : "WAIT"
+    color etcL = etagL == "FILLED" ? color.rgb(41, 121, 255) : etagL == "ARMED" ? color.yellow : color.gray
+    color etcS = etagS == "FILLED" ? color.rgb(41, 121, 255) : etagS == "ARMED" ? color.yellow : color.gray
+    string stop_tag = stop_mode == "Structure swing (HH/HL)" ? " [STRUCT]" : " [OR]"
+    string rr_txt = is_trail ? "1R stop · trail " + str.tostring(trail_atr, "#.#") + "ATR" : is_full ? "FULL → 1:" + str.tostring(tp2_rr, "#.#") + " cap" : "1 : " + str.tostring(tp2_rr, "#.#")
+    string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE block" : "clear ✓"
+    // per-side "why not firing" (first failing gate) — makes a WAIT explainable (esp. the OR-mid / narrow-OR blocks)
+    string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : (eff_ctx and not ctx_up) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (eff_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_cd > 0 ? "cooldown " + str.tostring(l_cd) + " bars (mid lost)" : l_range ? "range — stale watch, no trade" : l_ext ? "pullback — retest " + str.tostring(Le, format.mintick) + " first" : (watch_gate and not l_watch) ? "no watch — needs close above OR mid" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
+    string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : (eff_ctx and not ctx_dn) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (eff_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_cd > 0 ? "cooldown " + str.tostring(s_cd) + " bars (mid lost)" : s_range ? "range — stale watch, no trade" : s_ext ? "pullback — retest " + str.tostring(Se, format.mintick) + " first" : (watch_gate and not s_watch) ? "no watch — needs close below OR mid" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
+    // FAST DIRECTION read (the user's core ask: how fast does the system know which way?) — 0-2 bar lag reads vs the slow structure
+    // STALENESS FIX (user 2026-07): OR arrow = where price is NOW vs the OR (live zone), not the
+    // frozen 10:00 day bias (which kept showing ▲ with price under the OR low). Slope + Struct come
+    // from the 1-MINUTE feed when fast_dir is on, so every TF reads like the 1m chart.
+    int dir_or  = not or_set ? 0 : close > or_high ? 1 : close < or_low ? -1 : close > or_mid ? 1 : -1
+    int dir_vw  = close > vwap_c ? 1 : close < vwap_c ? -1 : 0
+    int dir_slp = slope_dir >= 0.10 ? 1 : slope_dir <= -0.10 ? -1 : 0   // combined S w/ the ±0.10 neutral band
+    int dir_st  = st_dir == 1 ? 1 : st_dir == 2 ? -1 : 0
+    int dir_fast = dir_or + dir_vw + dir_slp
+    string dirV = dir_fast >= 2 ? "▲ UP" : dir_fast <= -2 ? "▼ DOWN" : "◆ mixed"
+    // DIR-FAST A (07.3): OR-MID side ALONE arms — VWAP only grades (agree = B+, disagree = C).
+    int dir_mid = not or_set ? 0 : close > or_mid ? 1 : -1
+    int dirA = dir_mid
+    string dirAtxt = dirA >= 1 ? "▲ UP" : dirA <= -1 ? "▼ DOWN" : "◆ n/a"
+    table.cell(dash,0,0,"STACK " + syminfo.ticker + " " + timeframe.period, text_color=color.yellow, text_size=size.small)
+    table.cell(dash,1,0,"LONG",  text_color=color.lime, text_size=size.small)
+    table.cell(dash,2,0,"SHORT", text_color=color.red,  text_size=size.small)
+    table.cell(dash,0,1,"REGIME", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,1, regL, text_color=dispUp ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(dash,2,1, regS, text_color=dispDn ? color.red : color.gray, text_size=size.tiny)
+    table.cell(dash,0,2,"GRADE", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,2, grL, text_color=grL == "A+" or grL == "A" ? color.lime : grL == "B" ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(dash,2,2, grS, text_color=grS == "A+" or grS == "A" ? color.lime : grS == "B" ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(dash,0,3,"ENTRY", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,3, f_v(in_long ? l_ep : Le) + " [" + etagL + "]" + f_t(l_fill_t) + f_sz(na(Ls) ? na : (in_long ? l_ep : Le) - Ls), text_color=etcL, text_size=size.tiny)
+    table.cell(dash,2,3, f_v(in_short ? s_ep : Se) + " [" + etagS + "]" + f_t(s_fill_t) + f_sz(na(Ss) ? na : Ss - (in_short ? s_ep : Se)), text_color=etcS, text_size=size.tiny)
+    table.cell(dash,0,4,"STOP", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,4, f_v(l_stop_now) + stop_tag + (in_long and is_trail ? " trail" : "") + (na(l_stop_t) ? "" : " [HIT]" + f_t(l_stop_t)), text_color=stL == "STOP HIT" ? color.red : color.new(color.red, 25), text_size=size.tiny)
+    table.cell(dash,2,4, f_v(s_stop_now) + stop_tag + (in_short and is_trail ? " trail" : "") + (na(s_stop_t) ? "" : " [HIT]" + f_t(s_stop_t)), text_color=stS == "STOP HIT" ? color.red : color.new(color.red, 25), text_size=size.tiny)
+    table.cell(dash,0,5,"TP1", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,5, f_v(Lt1) + (l_t1h ? " [HIT]" + f_t(l_t1_t) : " [PENDING]"), text_color=l_t1h ? color.green : color.gray, text_size=size.tiny)
+    table.cell(dash,2,5, f_v(St1) + (s_t1h ? " [HIT]" + f_t(s_t1_t) : " [PENDING]"), text_color=s_t1h ? color.green : color.gray, text_size=size.tiny)
+    table.cell(dash,0,6,"TP2", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,6, f_v(Lt2) + (l_t2h ? " [HIT]" + f_t(l_t2_t) : " [PENDING]"), text_color=l_t2h ? color.rgb(0, 102, 0) : color.gray, text_size=size.tiny)
+    table.cell(dash,2,6, f_v(St2) + (s_t2h ? " [HIT]" + f_t(s_t2_t) : " [PENDING]"), text_color=s_t2h ? color.rgb(0, 102, 0) : color.gray, text_size=size.tiny)
+    table.cell(dash,0,7,"R:R", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,7, rr_txt, text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,2,7, rr_txt, text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,0,8,"STATE", text_color=color.silver, text_size=size.tiny)
+    bool whyLon = stL == "WAIT" or stL == "ARMED" or stL == "WATCH" or stL == "PULLBACK" or stL == "COOLDOWN" or stL == "RANGE" or stL == "INVALID"
+    bool whySon = stS == "WAIT" or stS == "ARMED" or stS == "WATCH" or stS == "PULLBACK" or stS == "COOLDOWN" or stS == "RANGE" or stS == "INVALID"
+    table.cell(dash,1,8, stL + (whyLon and whyL != "" ? " · " + whyL : ""), text_color=f_stc(stL), text_size=size.tiny)
+    table.cell(dash,2,8, stS + (whySon and whyS != "" ? " · " + whyS : ""), text_color=f_stc(stS), text_size=size.tiny)
+    table.cell(dash,0,9,"Session", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,9, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
+    table.cell(dash,2,9, or_set ? "OR " + str.tostring(or_low, "#.#") + "/" + str.tostring(or_high, "#.#") + (ormid_bias ? (or_bull ? " · long½" : " · short½") : "") : "OR forming…", text_color=or_set and ormid_bias ? (or_bull ? color.lime : color.red) : color.aqua, text_size=size.tiny)
+    table.cell(dash,0,10,"Macro", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,10, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=regime == "A" ? color.lime : regime == "D" ? color.red : color.aqua, text_size=size.tiny)
+    table.cell(dash,2,10, greason, text_color=greason == "clear ✓" ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(dash,0,11,"VWAP cap", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,11, f_q(extL), text_color=f_qc(extL), text_size=size.tiny)
+    table.cell(dash,2,11, f_q(extS), text_color=f_qc(extS), text_size=size.tiny)
+    table.cell(dash,0,12,"Eval", text_color=color.silver, text_size=size.tiny)
+    string evtxt = not eval_on ? "off" : ev_passed ? "TARGET ✓  +" + str.tostring(ev_eq, "#") + (na(ev_tgt_t) ? "" : "  " + str.format_time(ev_tgt_t, "MM/dd HH:mm", sess_tz)) :
+         (ev_day_halt ? "DAY HALT " : ev_dd_halt ? "DD HALT " : ev_throttle ? "DAY LOCK " + str.tostring(ev_day_n) + "sig/" + str.tostring(ev_day_loss) + "L " : "ok ") +
+         " day " + str.tostring(ev_eq - ev_day0, "#") + "/" + str.tostring(-daily_loss, "#") +
+         " · dd " + str.tostring(ev_eq - ev_peak, "#") + "/" + str.tostring(-trail_dd, "#") +
+         (eval_target > 0 ? " · tgt " + str.tostring(ev_eq, "#") + "/" + str.tostring(eval_target, "#") : "")
+    table.cell(dash,1,12, evtxt, text_color=not eval_on ? color.gray : ev_passed ? color.lime : ev_halt ? color.red : ev_throttle ? color.orange : color.silver, text_size=size.tiny)
+    table.cell(dash,2,12, eval_on ? "1R $" + str.tostring(eval_risk, "#") : "", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash,0,13,"DIR·fast", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash,1,13, "A: " + dirAtxt + " MID" + f_ar(dir_mid) + (use_dirB ? "" : use_abc ? " ∨B∨C ← ARMS (any engine)" : " ← ARMS (obligatory)") + " · VWAP" + f_ar(dir_vw) + (dir_vw != 0 and dir_vw == dir_mid ? " grade B+" : " grade C"), text_color=dirA >= 1 ? color.lime : dirA <= -1 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(dash,2,13, "B: " + dirV + " (" + str.tostring(dir_fast) + ") · OR" + f_ar(dir_or) + " VWAP" + f_ar(dir_vw) + " Slope" + f_ar(dir_slp) + " S=" + str.tostring(slope_dir, "#.##") + " · Struct" + f_ar(dir_st) + (use_fast_dir ? " (1m)" : "") + (use_dirB ? " ← ARMS" : use_abc ? " (B/C arm too)" : " (grade)") + " · C" + (dirC_up ? "▲" : dirC_dn ? "▼" : "—") + (dirC_up or dirC_dn ? " STRONG" : "") + (dir_or != 0 and dir_or == dir_slp and dir_or == dir_st ? " ALIGNED" : ""), text_color=(dir_or != 0 and dir_or == dir_slp and dir_or == dir_st) ? color.lime : color.aqua, text_size=size.tiny)
+
+// ───────────────────────── OPTIONS — SELECTED CONTRACT (BS estimate, the /api/contract twin) ─────────────────────────
+// The dashboard's Selected-Contract panel ON CHART (user 2026-07-07: "implement it on the stack").
+// Same machinery as the BOT endpoint: ATM strike, Black-Scholes premium at an ESTIMATED IV
+// (realized vol of chart-TF log returns annualized, clamped 0.10-0.80 — live.py's iv_est twin),
+// repriced at TP1/TP2/stop for the value-if-hit rows, ~4% synthetic spread, delta/theta-day,
+// implied move = IV*sqrt(T). 0DTE T = LIVE minutes to the 16:00 ET close (the BOT panel uses a
+// fixed half-session, so intraday numbers differ slightly). ESTIMATE ONLY — no live chain.
+show_opts = input.bool(true, "OPTIONS panel — Selected Contract (BS estimate)", group="Options",
+     tooltip="Equities only. Prices the ACTIVE side's 0DTE ATM contract: est. premium (bid/mid/ask), value if the underlying hits TP1/TP2/stop, delta + theta/day, IV estimate + implied move. Black-Scholes estimate with NO live chain — paper fills must verify pricing before sizing (same caveat as the BOT's Selected Contract panel).")
+
+f_cnd(float x) =>
+    k = 1.0 / (1.0 + 0.2316419 * math.abs(x))
+    p = k * (0.319381530 + k * (-0.356563782 + k * (1.781477937 + k * (-1.821255978 + k * 1.330274429))))
+    w = 1.0 - math.exp(-x * x / 2.0) / math.sqrt(2.0 * math.pi) * p
+    x < 0 ? 1.0 - w : w
+
+f_bs(float S, float K, float T, float r, float v, bool isCall) =>
+    d1 = (math.log(S / K) + (r + v * v / 2.0) * T) / (v * math.sqrt(T))
+    d2 = d1 - v * math.sqrt(T)
+    isCall ? S * f_cnd(d1) - K * math.exp(-r * T) * f_cnd(d2) : K * math.exp(-r * T) * f_cnd(-d2) - S * f_cnd(-d1)
+
+// IV estimate — computed every bar at global scope (Pine consistency); live.py iv_est twin
+float opt_lr  = math.log(close / nz(close[1], close))
+float opt_ivr = ta.stdev(opt_lr, 78) * math.sqrt(252.0 * 390.0 / math.max(timeframe.in_seconds() / 60.0, 1.0))
+float opt_iv  = math.min(0.80, math.max(0.10, nz(opt_ivr, 0.20)))
+
+f_ov(float v, float m) =>          // value-if-hit cell: "$3.67 (+119%)" — global scope (Pine rule)
+    na(v) or m <= 0 ? "—" : "$" + str.tostring(v, "#.##") + " (" + (v >= m ? "+" : "") + str.tostring(100.0 * (v - m) / m, "#") + "%)"
+
+var table optT = table.new(position.bottom_right, 2, 8, bgcolor=color.new(color.black, 70), frame_color=color.gray, frame_width=1)
+if barstate.islast and show_opts and syminfo.type != "futures"
+    // ACTIVE side: an open position wins; else the pending side whose entry level is nearer
+    bool  useL = in_long or (not in_short and (na(Se) or (not na(Le) and math.abs(close - Le) <= math.abs(close - Se))))
+    float oT1  = useL ? Lt1 : St1
+    float oT2  = useL ? Lt2 : St2
+    float oStp = useL ? (in_long ? lstop : Ls) : (in_short ? sstop : Ss)
+    bool  isC  = useL
+    float oS   = close
+    float K    = math.round(oS)
+    float mins = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+    float T    = math.max(30.0, math.min(390.0, 960.0 - mins)) / 390.0 / 252.0
+    float mid  = f_bs(oS, K, T, 0.045, opt_iv, isC)
+    float spr  = math.max(0.02, mid * 0.04)
+    float d1o  = (math.log(oS / K) + (0.045 + opt_iv * opt_iv / 2.0) * T) / (opt_iv * math.sqrt(T))
+    float dlt  = isC ? f_cnd(d1o) : f_cnd(d1o) - 1.0
+    float thd  = -(oS * math.exp(-d1o * d1o / 2.0) / math.sqrt(2.0 * math.pi) * opt_iv) / (2.0 * math.sqrt(T)) / 365.0
+    float vT1  = na(oT1) or mid <= 0 ? na : f_bs(oT1, K, T, 0.045, opt_iv, isC)
+    float vT2  = na(oT2) or mid <= 0 ? na : f_bs(oT2, K, T, 0.045, opt_iv, isC)
+    float vStp = na(oStp) or mid <= 0 ? na : f_bs(oStp, K, T, 0.045, opt_iv, isC)
+    table.cell(optT, 0, 0, "OPTIONS 0DTE (BS est.)", text_color=color.yellow, text_size=size.tiny)
+    table.cell(optT, 1, 0, str.tostring(K, "#") + (isC ? "C" : "P") + (in_long or in_short ? " · IN TRADE" : " · " + (isC ? "long" : "short") + " side"), text_color=isC ? color.lime : color.red, text_size=size.tiny)
+    table.cell(optT, 0, 1, "mid (bid/ask)", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 1, "$" + str.tostring(mid, "#.##") + " (" + str.tostring(mid - spr / 2, "#.##") + "/" + str.tostring(mid + spr / 2, "#.##") + ")", text_color=color.white, text_size=size.tiny)
+    table.cell(optT, 0, 2, "at TP1", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 2, f_ov(vT1, mid), text_color=color.green, text_size=size.tiny)
+    table.cell(optT, 0, 3, "at TP2", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 3, f_ov(vT2, mid), text_color=color.lime, text_size=size.tiny)
+    table.cell(optT, 0, 4, "at stop", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 4, f_ov(vStp, mid), text_color=color.red, text_size=size.tiny)
+    table.cell(optT, 0, 5, "Δ / θ day", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 5, str.tostring(dlt, "#.###") + " / " + str.tostring(thd, "#.###"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(optT, 0, 6, "IV / implied move", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 1, 6, str.tostring(opt_iv * 100, "#") + "% / ±" + str.tostring(opt_iv * math.sqrt(T) * 100, "#.##") + "%", text_color=color.silver, text_size=size.tiny)
+    table.cell(optT, 0, 7, "no live chain — estimate", text_color=color.gray, text_size=size.tiny)
+    table.cell(optT, 1, 7, "gate: NAKED only (payoff replay)", text_color=color.gray, text_size=size.tiny)

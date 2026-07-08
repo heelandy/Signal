@@ -1,0 +1,148 @@
+##### orb_dir_state #####
+
+====================================================================================================
+NQ RTH — DIRECTIONAL-STATE signals (window N=6 intraday)
+====================================================================================================
+  -- baselines --
+  none(ORmid+seq)  n= 549 exp +0.164 PF 1.29 win 43% CIlo +0.055 L+0.12 S+0.26 yr+12/17 OOS+0.20/+0.08 PASS
+  struct3 (base)   n= 318 exp +0.285 PF 1.53 win 46% CIlo +0.136 L+0.27 S+0.32 yr+12/17 OOS+0.29/+0.27 PASS
+  struct5 (tighter) n= 288 exp +0.290 PF 1.53 win 45% CIlo +0.126 L+0.30 S+0.26 yr+13/17 OOS+0.28/+0.32 PASS
+  -- A) STANDALONE gate (signal replaces the structure) --
+  sign1            n= 549 exp +0.164 PF 1.29 win 43% CIlo +0.055 L+0.12 S+0.26 yr+12/17 OOS+0.20/+0.08 PASS
+  state-machine    n= 514 exp +0.142 PF 1.25 win 42% CIlo +0.033 L+0.11 S+0.21 yr+12/17 OOS+0.19/+0.04 PASS
+  persist>=.5      n= 341 exp +0.221 PF 1.40 win 44% CIlo +0.077 L+0.19 S+0.30 yr+10/17 OOS+0.29/+0.06 ----
+  persist>=.67     n=  70 exp +0.358 PF 1.69 win 47% CIlo +0.054 L+0.22 S+0.73 yr+9/16 OOS+0.43/+0.19 ----
+  eff>=.3          n= 510 exp +0.192 PF 1.34 win 43% CIlo +0.083 L+0.13 S+0.31 yr+12/17 OOS+0.23/+0.10 PASS
+  eff>=.5          n= 448 exp +0.235 PF 1.43 win 44% CIlo +0.119 L+0.16 S+0.39 yr+13/17 OOS+0.29/+0.11 PASS
+  -- B) ADDITIVE on struct3 (structure=direction; signal magnitude=quality gate) --
+  str3 & eff>=0.3  n= 271 exp +0.311 PF 1.58 win 46% CIlo +0.145 L+0.29 S+0.37 yr+13/17 OOS+0.34/+0.24 PASS
+    DROPPED(eff0.3) n=  71 exp +0.073 PF 1.12 win 39% CIlo -0.230 L+0.14 S-0.10 yr+8/17 OOS+0.08/+0.05 ----
+  str3 & eff>=0.5  n= 228 exp +0.315 PF 1.58 win 46% CIlo +0.148 L+0.28 S+0.41 yr+12/17 OOS+0.36/+0.22 PASS
+    DROPPED(eff0.5) n= 130 exp +0.197 PF 1.36 win 43% CIlo -0.015 L+0.24 S+0.09 yr+9/17 OOS+0.20/+0.19 ----
+  str3 & persist>=0.5 n= 170 exp +0.266 PF 1.48 win 45% CIlo +0.066 L+0.28 S+0.21 yr+10/17 OOS+0.38/+0.01 ----
+    DROPPED(prs0.5) n= 191 exp +0.298 PF 1.57 win 46% CIlo +0.104 L+0.26 S+0.38 yr+13/17 OOS+0.32/+0.25 PASS
+  str3 & persist>=0.67 n=  30 exp +0.617 PF 2.53 win 60% CIlo +0.146 L+0.43 S+1.82 yr+10/14 OOS+0.71/+0.41 ----
+    DROPPED(prs0.67) n= 299 exp +0.250 PF 1.46 win 45% CIlo +0.097 L+0.23 S+0.31 yr+12/17 OOS+0.25/+0.25 PASS
+
+====================================================================================================
+QQQ RTH — DIRECTIONAL-STATE signals (window N=6 intraday)
+====================================================================================================
+  -- baselines --
+  none(ORmid+seq)  n= 344 exp +0.259 PF 1.38 win 31% CIlo +0.089 L+0.19 S+0.41 yr+8/9 OOS+0.27/+0.23 PASS
+  struct3 (base)   n= 187 exp +0.254 PF 1.37 win 30% CIlo +0.019 L+0.32 S+0.09 yr+6/9 OOS+0.30/+0.15 ----
+  struct5 (tighter) n= 170 exp +0.458 PF 1.70 win 35% CIlo +0.202 L+0.51 S+0.34 yr+7/9 OOS+0.44/+0.51 PASS
+  -- A) STANDALONE gate (signal replaces the structure) --
+  sign1            n= 344 exp +0.259 PF 1.38 win 31% CIlo +0.093 L+0.19 S+0.41 yr+8/9 OOS+0.27/+0.23 PASS
+  state-machine    n= 315 exp +0.228 PF 1.33 win 30% CIlo +0.049 L+0.19 S+0.31 yr+7/9 OOS+0.28/+0.12 PASS
+  persist>=.5      n= 210 exp +0.283 PF 1.42 win 32% CIlo +0.051 L+0.19 S+0.46 yr+8/9 OOS+0.33/+0.17 PASS
+  persist>=.67     n=  51 exp +0.519 PF 1.83 win 37% CIlo +0.066 L+0.15 S+1.33 yr+7/9 OOS+0.70/+0.12 PASS
+  eff>=.3          n= 315 exp +0.301 PF 1.45 win 32% CIlo +0.114 L+0.25 S+0.41 yr+8/9 OOS+0.31/+0.29 PASS
+  eff>=.5          n= 269 exp +0.289 PF 1.42 win 32% CIlo +0.096 L+0.27 S+0.33 yr+9/9 OOS+0.33/+0.20 PASS
+  -- B) ADDITIVE on struct3 (structure=direction; signal magnitude=quality gate) --
+  str3 & eff>=0.3  n= 147 exp +0.356 PF 1.53 win 32% CIlo +0.093 L+0.45 S+0.11 yr+7/9 OOS+0.40/+0.25 PASS
+    DROPPED(eff0.3) n=  51 exp -0.120 PF 0.85 win 24% CIlo -0.510 L-0.12 S-0.12 yr+3/8 OOS+0.02/-0.43 ----
+  str3 & eff>=0.5  n= 120 exp +0.393 PF 1.59 win 32% CIlo +0.089 L+0.50 S+0.07 yr+7/9 OOS+0.50/+0.14 PASS
+    DROPPED(eff0.5) n=  92 exp +0.085 PF 1.12 win 28% CIlo -0.217 L+0.01 S+0.22 yr+3/8 OOS+0.17/-0.11 ----
+  str3 & persist>=0.5 n=  86 exp +0.471 PF 1.72 win 36% CIlo +0.096 L+0.63 S+0.01 yr+6/9 OOS+0.68/-0.02 ----
+    DROPPED(prs0.5) n= 118 exp +0.148 PF 1.21 win 28% CIlo -0.145 L+0.11 S+0.23 yr+5/9 OOS+0.08/+0.31 ----
+  str3 & persist>=0.67 n=  21 exp +0.690 PF 2.16 win 43% CIlo -0.083 L+0.57 S+1.41 yr+4/7 OOS+1.25/-0.43 ----
+    DROPPED(prs0.67) n= 177 exp +0.174 PF 1.25 win 29% CIlo -0.059 L+0.21 S+0.09 yr+5/9 OOS+0.17/+0.18 ----
+Traceback (most recent call last):
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\research\orb_dir_state.py", line 117, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\research\orb_dir_state.py", line 72, in main
+    st3 = H.compute_state(ext, H.P(struct_lb_fix=3))["st_state"].to_numpy()
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\engine\hs_harness.py", line 228, in compute_state
+    _scoring(d, p)
+    ~~~~~~~~^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\engine\hs_harness.py", line 377, in _scoring
+    sf = np.where(sso & (short_score >= short_floor), gS, "")
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 1.21 MiB for an array with shape (158784,) and data type <U2
+##### orb_efficiency #####
+
+====================================================================================================
+NQ RTH — EFFICIENCY (chop filter) additive to FULL STACK (struct3 + vol-exp 2.4)
+====================================================================================================
+  STACK base         n= 227 exp +0.334 PF 1.64 win 47% CIlo +0.159 L+0.36 S+0.27 yr+12/17 OOS+0.39/+0.21 PASS
+  gate-harder str5   n= 217 exp +0.313 PF 1.58 win 46% CIlo +0.123 L+0.31 S+0.33 yr+13/17 OOS+0.35/+0.23 PASS
+  -- ER window N=6 --
+  str3 & ER6>=0.3    n= 194 exp +0.334 PF 1.62 win 46% CIlo +0.132 L+0.33 S+0.33 yr+13/17 OOS+0.42/+0.14 PASS
+  str3 & ER6>=0.4    n= 178 exp +0.293 PF 1.53 win 46% CIlo +0.101 L+0.27 S+0.36 yr+13/17 OOS+0.36/+0.15 PASS
+  str3 & ER6>=0.5    n= 162 exp +0.341 PF 1.62 win 46% CIlo +0.125 L+0.32 S+0.41 yr+13/17 OOS+0.41/+0.19 PASS
+  str3 & ER6>=0.6    n= 134 exp +0.329 PF 1.59 win 45% CIlo +0.097 L+0.28 S+0.46 yr+11/17 OOS+0.40/+0.17 ----
+    DROPPED(ER6<.5)  n=  94 exp +0.279 PF 1.57 win 48% CIlo +0.025 L+0.44 S-0.13 yr+9/17 OOS+0.42/-0.05 ----
+  -- ER window N=10 --
+  str3 & ER10>=0.3   n= 155 exp +0.222 PF 1.40 win 43% CIlo +0.013 L+0.30 S+0.01 yr+12/17 OOS+0.32/+0.00 PASS
+  str3 & ER10>=0.4   n= 120 exp +0.168 PF 1.30 win 42% CIlo -0.071 L+0.13 S+0.27 yr+11/17 OOS+0.20/+0.10 ----
+  str3 & ER10>=0.5   n=  85 exp +0.198 PF 1.37 win 47% CIlo -0.054 L+0.10 S+0.55 yr+9/17 OOS+0.18/+0.24 ----
+  str3 & ER10>=0.6   n=  52 exp +0.169 PF 1.31 win 48% CIlo -0.146 L+0.15 S+0.26 yr+8/17 OOS+0.09/+0.34 ----
+    DROPPED(ER10<.5) n= 169 exp +0.403 PF 1.81 win 48% CIlo +0.192 L+0.46 S+0.27 yr+12/17 OOS+0.53/+0.11 PASS
+
+====================================================================================================
+QQQ RTH — EFFICIENCY (chop filter) additive to FULL STACK (struct3 + vol-exp 2.4)
+====================================================================================================
+  STACK base         n= 138 exp +0.214 PF 1.31 win 30% CIlo -0.057 L+0.37 S-0.20 yr+6/9 OOS+0.28/+0.06 ----
+  gate-harder str5   n= 131 exp +0.465 PF 1.71 win 35% CIlo +0.167 L+0.57 S+0.22 yr+8/9 OOS+0.51/+0.37 PASS
+  -- ER window N=6 --
+  str3 & ER6>=0.3    n= 107 exp +0.249 PF 1.36 win 30% CIlo -0.058 L+0.47 S-0.36 yr+6/9 OOS+0.31/+0.11 ----
+  str3 & ER6>=0.4    n= 101 exp +0.263 PF 1.38 win 31% CIlo -0.053 L+0.46 S-0.31 yr+7/9 OOS+0.37/+0.02 ----
+  str3 & ER6>=0.5    n=  88 exp +0.317 PF 1.46 win 31% CIlo -0.035 L+0.55 S-0.47 yr+7/9 OOS+0.46/+0.00 ----
+  str3 & ER6>=0.6    n=  74 exp +0.361 PF 1.52 win 32% CIlo -0.019 L+0.60 S-0.43 yr+6/9 OOS+0.52/+0.02 ----
+    DROPPED(ER6<.5)  n=  70 exp +0.101 PF 1.14 win 29% CIlo -0.282 L+0.03 S+0.24 yr+3/8 OOS+0.15/-0.01 ----
+  -- ER window N=10 --
+  str3 & ER10>=0.3   n=  88 exp +0.221 PF 1.31 win 30% CIlo -0.112 L+0.40 S-0.17 yr+5/9 OOS+0.36/-0.08 ----
+  str3 & ER10>=0.4   n=  68 exp +0.388 PF 1.60 win 34% CIlo -0.001 L+0.53 S+0.07 yr+5/9 OOS+0.57/-0.02 ----
+  str3 & ER10>=0.5   n=  43 exp +0.602 PF 2.00 win 40% CIlo +0.076 L+0.76 S+0.06 yr+6/9 OOS+0.79/+0.17 ----
+  str3 & ER10>=0.6   n=  26 exp +0.833 PF 2.50 win 46% CIlo +0.143 L+1.04 S-0.02 yr+5/7 OOS+1.12/+0.18 ----
+    DROPPED(ER10<.5) n= 113 exp +0.077 PF 1.10 win 27% CIlo -0.215 L+0.18 S-0.20 yr+3/8 OOS+0.04/+0.15 ----
+
+====================================================================================================
+SPY RTH — EFFICIENCY (chop filter) additive to FULL STACK (struct3 + vol-exp 2.4)
+====================================================================================================
+  STACK base         n= 129 exp +0.553 PF 1.92 win 40% CIlo +0.258 L+0.61 S+0.45 yr+9/9 OOS+0.49/+0.70 PASS
+  gate-harder str5   n= 104 exp +0.379 PF 1.60 win 38% CIlo +0.064 L+0.39 S+0.37 yr+8/9 OOS+0.27/+0.63 PASS
+  -- ER window N=6 --
+  str3 & ER6>=0.3    n= 101 exp +0.440 PF 1.68 win 37% CIlo +0.119 L+0.47 S+0.38 yr+9/9 OOS+0.29/+0.79 PASS
+  str3 & ER6>=0.4    n=  87 exp +0.524 PF 1.83 win 38% CIlo +0.156 L+0.63 S+0.30 yr+8/9 OOS+0.28/+1.06 PASS
+  str3 & ER6>=0.5    n=  77 exp +0.514 PF 1.81 win 38% CIlo +0.137 L+0.71 S+0.12 yr+8/9 OOS+0.33/+0.92 PASS
+  str3 & ER6>=0.6    n=  67 exp +0.575 PF 1.90 win 37% CIlo +0.154 L+0.69 S+0.37 yr+8/9 OOS+0.50/+0.74 PASS
+    DROPPED(ER6<.5)  n=  66 exp +0.674 PF 2.21 win 42% CIlo +0.248 L+0.37 S+1.09 yr+6/9 OOS+0.82/+0.35 ----
+  -- ER window N=10 --
+  str3 & ER10>=0.3   n=  91 exp +0.670 PF 2.16 win 44% CIlo +0.312 L+0.70 S+0.62 yr+9/9 OOS+0.59/+0.84 PASS
+  str3 & ER10>=0.4   n=  71 exp +0.729 PF 2.30 win 45% CIlo +0.311 L+0.93 S+0.41 yr+9/9 OOS+0.57/+1.08 PASS
+  str3 & ER10>=0.5   n=  50 exp +0.164 PF 1.23 win 30% CIlo -0.236 L+0.38 S-0.29 yr+6/8 OOS+0.12/+0.27 ----
+  str3 & ER10>=0.6   n=  29 exp +0.247 PF 1.33 win 28% CIlo -0.352 L+0.81 S-1.02 yr+4/8 OOS+0.07/+0.64 ----
+    DROPPED(ER10<.5) n=  96 exp +0.688 PF 2.24 win 44% CIlo +0.338 L+0.73 S+0.62 yr+9/9 OOS+0.74/+0.58 PASS
+
+KEY: graduates if str3&ER lifts exp+CIlo over STACK base ACROSS the threshold grid (robust), the DROPPED choppy cohort is the losers, and it beats gate-harder(str5) at matched n. This is the chop/awareness lever.
+##### orb_dirstate2 #####
+Traceback (most recent call last):
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\research\orb_dirstate2.py", line 140, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\research\orb_dirstate2.py", line 123, in main
+    st3 = H.compute_state(ext, H.P(struct_lb_fix=3))["st_state"].to_numpy()
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\engine\hs_harness.py", line 209, in compute_state
+    _macro_regime(d, p)
+    ~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\engine\hs_harness.py", line 293, in _macro_regime
+    d["macro_regime"] = out
+    ~^^^^^^^^^^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\.venv\Lib\site-packages\pandas\core\frame.py", line 4672, in __setitem__
+    self._set_item(key, value)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\.venv\Lib\site-packages\pandas\core\frame.py", line 4872, in _set_item
+    value, refs = self._sanitize_column(value)
+                  ~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\.venv\Lib\site-packages\pandas\core\frame.py", line 5755, in _sanitize_column
+    return sanitize_array(value, self.index, copy=True, allow_2d=True), None
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\.venv\Lib\site-packages\pandas\core\construction.py", line 668, in sanitize_array
+    subarr = maybe_convert_platform(data)
+  File "C:\Users\heela\OneDrive\Área de Trabalho\prediction\.venv\Lib\site-packages\pandas\core\dtypes\cast.py", line 142, in maybe_convert_platform
+    arr = lib.maybe_convert_objects(arr)
+  File "pandas/_libs/lib.pyx", line 2631, in pandas._libs.lib.maybe_convert_objects
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 2.41 MiB for an array with shape (315484,) and data type int64
