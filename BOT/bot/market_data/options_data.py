@@ -94,7 +94,6 @@ def alpaca_chain_0dte(underlying: str = "QQQ", spot: float | None = None,
     (F86) needs. 0DTE = the nearest expiry present; strikes within +-spot_pct of `spot` (the REAL
     underlying price; falls back to the chain center only if spot is None)."""
     import re
-    from datetime import date
     try:
         key, secret = settings.require_alpaca()
         from alpaca.data.historical.option import OptionHistoricalDataClient
@@ -116,13 +115,24 @@ def alpaca_chain_0dte(underlying: str = "QQQ", spot: float | None = None,
                      "strike": int(m.group(3)) / 1000.0,
                      "bid": float(q.bid_price), "ask": float(q.ask_price),
                      "mid": (float(q.bid_price) + float(q.ask_price)) / 2.0})
+    return _chain_book(rows, spot=spot, spot_pct=spot_pct, require_0dte=require_0dte)
+
+
+def _chain_book(rows: list[dict], spot: float | None = None, spot_pct: float = 0.08,
+                require_0dte: bool = True, today: str | None = None) -> dict:
+    """Gate parsed chain `rows` to the nearest expiry and build the {ok, expiry, is_0dte, book,
+    strikes, n} shape bot.options.native.build expects. Split out of alpaca_chain_0dte so the
+    0-DAY gate is unit-testable without a live feed. `rows`: [{expiry 'YYYY-MM-DD', cp, strike,
+    bid, ask, mid}, ...]. `today` defaults to date.today() (override only in tests)."""
+    from datetime import date
+    today = today or str(date.today())
     if not rows:
         return {"ok": False, "error": "no two-sided quotes in chain"}
     exp0 = min(r["expiry"] for r in rows)                     # nearest expiry
     # 0-DAY ERROR FIX (audit 2026-07-08): the strategy settles at TODAY's close, so it must only
     # trade a TRUE 0DTE (expiry == today). On a day with no same-day expiry the nearest is 1-2 DTE
     # and force-settling it at today's intrinsic is wrong — refuse rather than misprice.
-    if require_0dte and exp0 != str(date.today()):
+    if require_0dte and exp0 != today:
         return {"ok": False, "error": f"no 0DTE expiry today (nearest {exp0})", "is_0dte": False}
     day = [r for r in rows if r["expiry"] == exp0]
     if spot is None:                                          # real spot preferred; center is a fallback
@@ -133,7 +143,7 @@ def alpaca_chain_0dte(underlying: str = "QQQ", spot: float | None = None,
     book = {(r["cp"], r["strike"]): (r["bid"], r["ask"], r["mid"]) for r in day}
     import numpy as np
     strikes = {cp: np.array(sorted({r["strike"] for r in day if r["cp"] == cp})) for cp in ("C", "P")}
-    return {"ok": True, "expiry": exp0, "is_0dte": exp0 == str(date.today()),
+    return {"ok": True, "expiry": exp0, "is_0dte": exp0 == today,
             "book": book, "strikes": strikes, "n": len(day)}
 
 
