@@ -72,9 +72,15 @@ def bars_from_mbo(path: str, sym: str) -> pd.DataFrame:
     con = duckdb.connect()
     try:
         con.execute("SET memory_limit='1GB'; SET threads=1; SET preserve_insertion_order=false")
-        ts = _ts_expr(_columns(path), con, path)
+        cols = _columns(path)
+        ts = _ts_expr(cols, con, path)
         if ts is None:
             raise ValueError(f"no timestamp column found in {path}")
+        # schema-aware trade filter: MBO files need action='T' (fills only); TRADES-schema files
+        # (the CVD purchase) are all executions and may carry no action column at all
+        conds = ["price > 0", f"upper(symbol) = '{sym.upper()}'"]
+        if "action" in cols:
+            conds.insert(0, "action = 'T'")
         q = f"""
         SELECT date_trunc('minute', {ts}) AS minute,
                first(price ORDER BY ts_event)  AS open,
@@ -83,7 +89,7 @@ def bars_from_mbo(path: str, sym: str) -> pd.DataFrame:
                last(price ORDER BY ts_event)   AS close,
                sum(size)::BIGINT               AS volume
         FROM read_csv_auto('{path}')
-        WHERE action = 'T' AND price > 0 AND upper(symbol) = '{sym.upper()}'
+        WHERE {' AND '.join(conds)}
         GROUP BY 1 ORDER BY 1"""
         return con.execute(q).df()
     finally:

@@ -153,14 +153,55 @@ def _walk(bars: pd.DataFrame, signal_at: str, side: str, entry, stop, tp1, tp2, 
     return "open", 0.0, round(mfe, 2), round(mae, 2)
 
 
+def _walk_trail(bars: pd.DataFrame, signal_at: str, side: str, entry, stop0, trail_mult: float,
+                close_hm=None) -> tuple[str, float, float, float]:
+    """CHANDELIER-TRAIL walk (trail-eq lineage, F84): the stop ratchets to close ∓ mult×ATR14
+    and never loosens; exit on the trailed-stop touch or force-flat. R is measured against the
+    INITIAL risk (entry↔stop0). Fixed-level _walk can't resolve a moving stop — this twin can."""
+    ts = pd.to_datetime(bars["ts_et"], utc=True)
+    start = pd.Timestamp(signal_at)
+    start = start.tz_localize("UTC") if start.tz is None else start.tz_convert("UTC")
+    fwd = bars[ts > start]
+    if fwd.empty or len(bars) < 15:
+        return "open", 0.0, 0.0, 0.0
+    sign = 1 if side == "long" else -1
+    risk = abs(entry - stop0) or 1e-9
+    # ATR14 over the WHOLE fetched frame (so the walk's first bars have a warm ATR), then slice
+    tr = np.maximum(bars["high"].to_numpy(float) - bars["low"].to_numpy(float),
+                    np.maximum(abs(bars["high"].to_numpy(float) - bars["close"].shift(1).to_numpy(float)),
+                               abs(bars["low"].to_numpy(float) - bars["close"].shift(1).to_numpy(float))))
+    atr = pd.Series(tr).rolling(14, min_periods=5).mean().to_numpy()
+    idx = fwd.index.to_numpy()
+    hi, lo, cl = fwd["high"].to_numpy(float), fwd["low"].to_numpy(float), fwd["close"].to_numpy(float)
+    fet = pd.to_datetime(fwd["ts_et"]); fmin = (fet.dt.hour * 60 + fet.dt.minute).to_numpy()
+    stop = float(stop0); mfe = mae = 0.0
+    pos = {v: k for k, v in enumerate(bars.index)}          # bar index -> position for atr lookup
+    for j in range(len(fwd)):
+        fav = (hi[j] - entry) if sign == 1 else (entry - lo[j])
+        adv = (entry - lo[j]) if sign == 1 else (hi[j] - entry)
+        mfe = max(mfe, fav / risk); mae = max(mae, adv / risk)
+        hit = lo[j] <= stop if sign == 1 else hi[j] >= stop
+        if hit:
+            return "trail_exit", round(sign * (stop - entry) / risk, 2), round(mfe, 2), round(mae, 2)
+        if close_hm is not None and fmin[j] >= close_hm:
+            return "trail_eod", round(sign * (cl[j] - entry) / risk, 2), round(mfe, 2), round(mae, 2)
+        a = atr[pos.get(idx[j], 0)]
+        if a == a and a > 0:                                # ratchet AFTER the touch check (causal)
+            stop = max(stop, cl[j] - trail_mult * a) if sign == 1 else min(stop, cl[j] + trail_mult * a)
+    return "open", 0.0, round(mfe, 2), round(mae, 2)
+
+
 def track_outcomes(provider=None) -> list[dict]:
     """Update every OPEN decision with its first-touch outcome (pulls recent bars per symbol)."""
     from bot.market_data.providers import get_bars
     con = _con()
-    rows = con.execute("SELECT id,symbol,side,entry,stop,tp1,tp2,signal_at FROM decisions "
+    rows = con.execute("SELECT id,symbol,side,entry,stop,tp1,tp2,signal_at,"
+                       "COALESCE(json_extract(json,'$.tf'),'5m'),"
+                       "json_extract(json,'$.exit_mode'),"
+                       "COALESCE(json_extract(json,'$.trail_atr'),2.0) FROM decisions "
                        "WHERE outcome IN ('open','tp1_open')").fetchall()
     bars_cache, updated = {}, []
-    for rid, sym, side, entry, stop, tp1, tp2, sig_at in rows:
+    for rid, sym, side, entry, stop, tp1, tp2, sig_at, tf, exit_mode, trail_mult in rows:
         if sym not in bars_cache:
             try:
                 bars_cache[sym] = get_bars(sym, "5m", period="5d", provider=provider)
@@ -170,7 +211,18 @@ def track_outcomes(provider=None) -> list[dict]:
         if not len(bars) or not sig_at:
             continue
         close_hm = 870 if sym.upper() in _EQUITY_RTH else None       # equities force-flat 2:30pm ET (user rule)
-        outcome, r, mfe, mae = _walk(bars, sig_at, side, entry, stop, tp1 or entry, tp2 or entry, close_hm=close_hm)
+        # SAME-BAR FIX (user catch 2026-07-07: "entry hit tp on same bar"): signal_at is the
+        # signal bar's OPEN. The walk runs on 5m bars, so for a 15m-lineage row the 5m bars
+        # INSIDE the signal candle (before the entry, which is the 15m CLOSE) must be excluded —
+        # otherwise pre-entry price action fakes TP/stop hits. Shift the walk start to the
+        # signal candle's close (tf−5 minutes past the open); 5m rows are unchanged (offset 0).
+        _tfm = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(str(tf), 5)
+        walk_from = str(pd.Timestamp(sig_at) + pd.Timedelta(minutes=max(_tfm - 5, 0)))
+        if str(exit_mode or "") == "trail":       # trail-eq lineage: moving stop needs its own walk
+            outcome, r, mfe, mae = _walk_trail(bars, walk_from, side, entry, stop,
+                                               float(trail_mult or 2.0), close_hm=close_hm)
+        else:
+            outcome, r, mfe, mae = _walk(bars, walk_from, side, entry, stop, tp1 or entry, tp2 or entry, close_hm=close_hm)
         if outcome not in ("open",):
             con.execute("UPDATE decisions SET outcome=?, result_r=?, outcome_at=?, mfe_r=?, mae_r=? WHERE id=?",
                         [outcome, r, utcnow_iso(), mfe, mae, rid])
@@ -182,19 +234,15 @@ def track_outcomes(provider=None) -> list[dict]:
 def list_decisions(limit: int = 100) -> list[dict]:
     con = _con()
     cols = ["id", "symbol", "side", "family", "session", "entry", "stop", "tp1", "tp2", "taken",
-            "decided_at", "outcome", "result_r", "signal_at", "json"]
-    rows = con.execute(f"SELECT {','.join(cols)} FROM decisions ORDER BY decided_at DESC LIMIT ?", (limit,)).fetchall()
+            "decided_at", "outcome", "result_r", "signal_at", "tf"]
+    # tf via SQLite's json_extract — pulling the WHOLE json blob (PIT snapshots + options plans)
+    # for 1000 rows per poll was a review-flagged waste; the DB extracts one key instead.
+    rows = con.execute(
+        "SELECT id,symbol,side,family,session,entry,stop,tp1,tp2,taken,decided_at,outcome,"
+        "result_r,signal_at,COALESCE(json_extract(json,'$.tf'),'5m') "
+        "FROM decisions ORDER BY decided_at DESC LIMIT ?", (limit,)).fetchall()
     con.close()
-    out = []
-    for r in rows:
-        d = dict(zip(cols, r))
-        d["taken"] = bool(d["taken"])
-        try:                                       # capture timeframe rides in the signal json
-            d["tf"] = (json.loads(d.pop("json") or "{}") or {}).get("tf") or "5m"
-        except Exception:
-            d.pop("json", None); d["tf"] = "5m"
-        out.append(d)
-    return out
+    return [dict(zip(cols, r)) | {"taken": bool(r[cols.index("taken")])} for r in rows]
 
 
 def summary() -> dict:
@@ -318,12 +366,12 @@ MIN_SAMPLE = 12
 # live-vs-backtest scorecard, summary and phase-7/8 paper study judge CORE families only. Workers
 # are judged by the Boss on their own family-filtered windows.
 CORE_ONLY_SQL = ("(family IS NULL OR (family NOT LIKE 'worker-%' "
-                 "AND family NOT LIKE 'emergent-%'))")
+                 "AND family NOT LIKE 'emergent-%' AND family NOT LIKE 'trail-%'))")
 
 
 def is_core_family(fam) -> bool:
     f = str(fam or "")
-    return not (f.startswith("worker-") or f.startswith("emergent-"))
+    return not (f.startswith("worker-") or f.startswith("emergent-") or f.startswith("trail-"))
 
 
 def _stats(rs: list[float]) -> dict:

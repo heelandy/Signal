@@ -225,6 +225,41 @@ def _capture_15m_journal():
         _latest["journal15m_err"] = str(e)[:120]
 
 
+def _trail_shadow_study():
+    """TRAIL-EQ paper shadow (user 2026-07-07: the graduated trail must paper-trade like the
+    workers). When trail-eq-0.1 carries a paper approval, every acceptable QQQ/SPY core 5m
+    signal ALSO journals a trail twin: same canonical entry/stop, NO fixed TP — exit_mode=trail
+    resolves via the chandelier walk (tracker._walk_trail). family='trail-eq' keeps it SEALED
+    out of core analytics/datasets; it is judged on its own stream like every lineage."""
+    try:
+        from bot.approval import paper_approved
+        if not paper_approved("trail-eq-0.1"):
+            return
+        from bot.tracker import record_decision
+        for s in (_latest.get("signals") or []):
+            if s.get("symbol") not in ("QQQ", "SPY") or not s.get("tradeable"):
+                continue
+            if s.get("grade") not in ("A+", "A", "B") or s.get("signal_state") == "invalid":
+                continue
+            if (s.get("bars_ago") or 0) < 1 or (s.get("timeframe") or "5m") != "5m":
+                continue
+            c = s.get("candidate") or {}
+            if not c.get("generated_at"):
+                continue
+            key = f"trail-eq:{s.get('session')}:{s['side']}:{c.get('generated_at')}"
+            try:
+                record_decision({"candidate_id": key, "symbol": s["symbol"], "side": s["side"],
+                                 "family": "trail-eq", "session": s.get("session"),
+                                 "entry": s["entry"], "stop": s["stop"], "tp1": None, "tp2": None,
+                                 "grade": s.get("grade"), "generated_at": c.get("generated_at"),
+                                 "tf": "5m", "exit_mode": "trail", "trail_atr": 2.0,
+                                 "pit_features": s.get("pit_features")}, taken=True, auto=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _autotrack_acceptable(signals=None):
     """Shadow-track every ACCEPTABLE live signal (tradeable + grade A+/A/B) as a what-if decision, so the
     Recent-Candidates / Performance / Live-vs-Backtest panels update from the engine's own signal flow —
@@ -275,17 +310,19 @@ def _scan_loop():
                 # bars_back=12 (1 hour): the autotracker dedups per bar, so a wider window costs
                 # nothing but makes signal capture survive server restarts — with 4 (20 min) the
                 # NQ B-long on 2026-07-06 fired during a reload storm and was never recorded
-                _latest["signals"] = scan_watchlist(_WATCH, bars_back=12, persist=False)
+                _sigs = scan_watchlist(_WATCH, bars_back=12, persist=False)
                 try:                             # BOSS correlation buckets (BOSS_WORKERS_PLAN §4):
                     from bot.boss import allocate  # same-direction fires on correlated symbols
-                    allocate(_latest["signals"])   # are ONE macro bet — annotates lead/stand_down
+                    allocate(_sigs)                # are ONE macro bet — annotates lead/stand_down
                 except Exception:
                     pass
-                _latest["ts"] = _now(); _latest["error"] = None
+                _latest["signals"] = _sigs       # publish AFTER allocate's in-place sort (review
+                _latest["ts"] = _now(); _latest["error"] = None   # fix: no mid-sort reads)
                 _autotrack_acceptable()          # shadow-track ACCEPTABLE 5m signals -> journal (training-lab feed)
                 if _mkt_tick["n"] % 3 == 0:       # 15m LINEAGE live journal (every ~3 min — 15m bars are slower)
                     _capture_15m_journal()
                 _worker_shadow_study()           # BOSS WORKERS: per-worker tight-target what-if study (approved workers)
+                _trail_shadow_study()            # TRAIL-EQ (F84 graduate): chandelier-exit twin on core signals
                 _paper_autotrade()               # STUDY: place paper orders when the toggle is on
                 track_outcomes()                 # resolve first-touch outcomes of tracked signals each cycle
                 _persist_runtime()               # heartbeat (last_scan_at) for the phase-7 health check
@@ -327,17 +364,35 @@ def _scan_loop():
                         from bot.tracker import integrity as _integ   # never sits unnoticed
                         _latest["journal_integrity"] = _integ()
                         if not _latest["journal_integrity"]["ok"]:
-                            from bot.audit import log as _audit
-                            _audit("journal_integrity_alert",
-                                   dupes=len(_latest["journal_integrity"]["dupes"]),
-                                   bad=len(_latest["journal_integrity"]["bad_levels"]),
-                                   no_id=len(_latest["journal_integrity"]["missing_bar_identity"]))
+                            from bot.alerts import alert as _alert
+                            ji = _latest["journal_integrity"]
+                            _alert(f"journal integrity: {len(ji['dupes'])} dupes, "
+                                   f"{len(ji['bad_levels'])} bad levels, "
+                                   f"{len(ji['missing_bar_identity'])} without bar id",
+                                   level="critical", source="journal")
                     except Exception as e:
                         _latest["journal_integrity"] = {"error": str(e)[:120]}
-                if _mkt_tick["n"] % 1440 == 0 and _mkt_tick["n"] > 0:   # EVOLUTION nightly
-                    try:                          # SUBPROCESS (review fix 2026-07-07): the deep
-                        _spawn_evolve_deep()      # miner imports research modules that chdir and
-                    except Exception as e:        # runs backtests — never inside the live server
+                    try:                          # HEALTH pushes (phase-7 alerting channel):
+                        from bot.alerts import alert as _alert       # scan errors + worker
+                        if _latest.get("error"):                     # band-passes leave the app
+                            _alert(f"scan error: {_latest['error']}", "warn", "scan")
+                        for _wid, _w in (_latest.get("boss", {}).get("workers") or {}).items():
+                            if (_w.get("conformance") or {}).get("band_pass") and not _w.get("paper_approved"):
+                                _alert(f"{_wid} PASSES ITS BAND — approve for paper on the dashboard",
+                                       "info", "boss")
+                        p78 = _latest.get("phase78") or {}
+                        if p78.get("auto_advanced"):
+                            _alert("PHASE 8: 'live' stage AUTO-ADVANCED (lock file still manual)",
+                                   "critical", "phase78")
+                    except Exception:
+                        pass
+                    try:                          # EVOLUTION nightly — TIME-based (review fix:
+                        from bot.evolve import REPORT as _erep   # the old %1440 cycle counter
+                        import os as _os          # reset on every reload, so the nightly could
+                        _age = _time.time() - (_os.path.getmtime(_erep) if _erep.exists() else 0)
+                        if _age > 24 * 3600:      # never fire; report mtime is restart-proof
+                            _spawn_evolve_deep()  # subprocess — never inside the live server
+                    except Exception as e:
                         _latest["evolve"] = {"error": str(e)[:120]}
                 _mkt_tick["n"] += 1
             except Exception as e:
@@ -589,6 +644,16 @@ def performance():
     return p if p.get("trades") else perf.summary(_journal)
 
 
+@app.get("/api/alerts")
+def alerts_feed(n: int = 30):
+    """The health-alert feed (phase-7 channel): file-backed, webhook-pushed when
+    ALERT_WEBHOOK_URL is set in .env (Discord/Slack/ntfy auto-detected — env-ready)."""
+    from bot.alerts import recent
+    from bot.config import _get
+    return {"alerts": recent(n),
+            "webhook_configured": bool((_get("ALERT_WEBHOOK_URL") or "").strip())}
+
+
 @app.get("/api/journal/integrity")
 def journal_integrity():
     """Journal integrity audit (user 2026-07-07: same-bar entry/TP/stop corruption watch):
@@ -735,9 +800,13 @@ def training_journal_feed():
         lj = lj.copy()
         lj["tf"] = lj.get("tf", "5m")
         lj["family"] = lj.get("family", "?").fillna("?")
+        from bot.tracker import is_core_family
+        _core = lj["family"].map(is_core_family)
         for (sym, tf), g in lj.groupby(["symbol", "tf"]):
             taken = g[g["taken"] == 1]
-            trainable = taken[taken[feat0].notna()]
+            # trainable = what actually feeds THIS lineage's dataset = CORE rows only (review fix:
+            # worker rows inflated the count while attach_live_journal excludes them)
+            trainable = taken[taken[feat0].notna() & _core.loc[taken.index]]
             out["by_symbol_tf"][f"{sym}@{tf}"] = {
                 "rows": int(len(g)), "taken": int(len(taken)),
                 "trainable_with_features": int(len(trainable)),
@@ -1430,6 +1499,19 @@ def _approval_versions() -> dict:
                                    if is_worker else
                                    "swing_gauntlet.json / strat_daily run (research reports)"),
                       "status": st}
+    # EMERGENT LINEAGES (review gap 2026-07-07): a draft the evolution engine produced becomes
+    # approvable the moment its gauntlet passes — set the draft's status to "gauntlet_pass" in
+    # data/evolve_drafts.json (the gauntlet runner's job) and it appears here with its own
+    # ladder. Plain drafts stay OUT of the dropdown (the engine proposes, the gauntlet judges).
+    try:
+        from bot.evolve import _load_drafts
+        for dft in _load_drafts():
+            if dft.get("status") == "gauntlet_pass" and dft.get("id"):
+                out[dft["id"]] = {"what_it_is": f"[EMERGENT — gauntlet PASSED] {dft.get('spec', '')[:200]}",
+                                  "evidence": "evolve_drafts.json + its gauntlet report",
+                                  "status": "gauntlet_pass"}
+    except Exception:
+        pass
     return out
 
 
@@ -1714,10 +1796,13 @@ def data_sync_status():
 
 
 @app.post("/api/data/synthesize_upload")
-async def data_synthesize_upload(request: Request, symbol: str = "NQ", _=Depends(auth)):
+async def data_synthesize_upload(request: Request, symbol: str | None = None, _=Depends(auth)):
     """Drag-and-drop path: the dragged file streams here, features are synthesized IN MEMORY and
     only the per-minute l2_* parquet persists — the raw upload is never written to disk.
-    Accepts csv or parquet bodies (browser drop zone posts the raw file)."""
+    AUTO-DETECT (user 2026-07-07: "remove user selection — the system detects the symbol so the
+    wrong name never mixes with the data"): the file's own `symbol` column decides; multi-symbol
+    files synthesize once PER symbol found. A file WITHOUT a symbol column is refused unless the
+    optional fallback `symbol` is given explicitly."""
     import io
     import pandas as pd
     from bot.ml.l2_features import synthesize_frame
@@ -1732,12 +1817,24 @@ async def data_synthesize_upload(request: Request, symbol: str = "NQ", _=Depends
             df = pd.read_csv(io.BytesIO(body))
     except Exception as e:
         return {"error": f"could not parse upload: {str(e)[:120]}"}
-    res = synthesize_frame(df, symbol)
-    if "error" not in res:
-        from bot.audit import log as _audit
-        _audit("l2_upload_synthesized", symbol=symbol.upper(), rows=res.get("feature_rows"),
-               filename=name)
-    return res
+    df.columns = [str(c).lower() for c in df.columns]
+    if "symbol" in df.columns:
+        syms = sorted(str(s).upper() for s in df["symbol"].dropna().unique()[:20])
+    elif symbol:
+        syms = [symbol.upper()]                     # explicit fallback for column-less files
+    else:
+        return {"error": "no `symbol` column in the file — cannot auto-detect. Re-export with "
+                         "the symbol column, or register the PATH with an explicit fallback."}
+    out = []
+    for s in syms:
+        res = synthesize_frame(df, s)               # synthesize_frame filters rows to `s` itself
+        res["symbol"] = s
+        out.append(res)
+        if "error" not in res:
+            from bot.audit import log as _audit
+            _audit("l2_upload_synthesized", symbol=s, rows=res.get("feature_rows"),
+                   filename=name, label_source="auto")
+    return out[0] if len(out) == 1 else {"detected_symbols": syms, "results": out}
 
 
 @app.get("/api/training/reports")

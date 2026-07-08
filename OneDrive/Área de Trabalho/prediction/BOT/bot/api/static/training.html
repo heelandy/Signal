@@ -130,11 +130,11 @@
     <div class="card col6"><h2>Register a path (recommended for big files)</h2>
       <div class="runrow">
         <input id="l2path" placeholder="E:\data\nq_mbp10.csv.zst  (external drive fine — nothing is copied)" style="flex:1;min-width:280px">
-        <select id="l2sym"><option>NQ</option><option>MNQ</option><option>ES</option><option>QQQ</option><option>SPY</option><option>GC</option></select>
+        <span class="mut" style="font-size:10px;align-self:center" title="the file's own symbol column decides the label — a wrong manual pick can never mix the data (multi-symbol files split automatically; files WITHOUT a symbol column are refused with instructions)">symbol: AUTO</span>
         <button onclick="l2register()">Register</button>
       </div>
       <div id="dropzone" style="margin-top:10px;border:2px dashed var(--line);border-radius:10px;padding:22px;text-align:center;color:var(--mut)">
-        …or DRAG a depth file here (csv/parquet) — streamed &amp; synthesized in memory, raw never saved</div>
+        …or DRAG a depth file here (csv/parquet) — streamed &amp; synthesized in memory, raw never saved · symbol auto-detected from the file</div>
       <div class="note" id="l2msg"></div></div>
     <div class="card col6"><h2>Registered sources</h2><div class="scroll" id="l2sources">—</div>
       <div class="note">formats auto-detected: Databento MBP-1/10 (L2), MBO (L3), trades, ohlcv ·
@@ -689,14 +689,16 @@ async function loadRegistry(){
 /* ---- L2/L3 data sources ---- */
 async function l2register(){
   const path = document.getElementById('l2path').value.trim();
-  const sym = document.getElementById('l2sym').value;
   if (!path){ document.getElementById('l2msg').textContent = 'paste a full path first'; return; }
-  const r = await (await fetch(`/api/data/register?path=${encodeURIComponent(path)}&symbol=${sym}`, {method:'POST'})).json();
-  // folder registrations return {folder, registered, sources[]}; single files return {kind, size_mb, id}
+  // SYMBOL IS AUTO-DETECTED from the file's own symbol column (user 2026-07-07: no manual pick,
+  // so a wrong name can never mix with the data) — no symbol param sent.
+  const r = await (await fetch(`/api/data/register?path=${encodeURIComponent(path)}`, {method:'POST'})).json();
+  // folder registrations return {folder, registered, sources[]}; single files return {kind, size_mb, id};
+  // multi-symbol files return {path, registered, sources[]}
   document.getElementById('l2msg').innerHTML = r.error ? `<span class="no">${r.error}</span>`
     : r.registered !== undefined
-      ? `<span class="ok">folder scanned: ${r.registered} data file(s) registered — click SYNC ALL to synthesize</span>`
-      : `<span class="ok">registered ${r.kind} (${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
+      ? `<span class="ok">${r.registered} source(s) registered (symbols auto-detected${r.sources?': '+[...new Set(r.sources.map(s=>s.symbol))].join(', '):''}) — click SYNC ALL to synthesize</span>`
+      : `<span class="ok">registered ${r.kind} as <b>${r.symbol}</b> (auto, ${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
   loadL2();
 }
 window.l2register = l2register;
@@ -769,12 +771,15 @@ dz.addEventListener('drop', async e => {
   e.preventDefault(); dz.style.borderColor = '';
   const f = e.dataTransfer.files[0];
   if (!f) return;
-  const sym = document.getElementById('l2sym').value;
-  dz.textContent = `synthesizing ${f.name} (${(f.size/1e6).toFixed(1)} MB) in memory…`;
-  const r = await (await fetch(`/api/data/synthesize_upload?symbol=${sym}`,
+  // symbol AUTO-DETECTED server-side from the file's own symbol column (no manual pick — a
+  // wrong name can never mix with the data; multi-symbol files synthesize per symbol found)
+  dz.textContent = `synthesizing ${f.name} (${(f.size/1e6).toFixed(1)} MB) in memory — symbol auto-detect…`;
+  const r = await (await fetch(`/api/data/synthesize_upload`,
       {method: 'POST', body: f, headers: {'x-filename': f.name}})).json();
   dz.textContent = r.error ? `error: ${r.error}`
-    : `done: ${r.feature_rows} feature minutes for ${r.symbol} (${r.span[0]} → ${r.span[1]}) — raw not saved`;
+    : r.detected_symbols
+      ? `done: ${r.detected_symbols.join(', ')} — ${r.results.map(x=>`${x.symbol} ${x.feature_rows||0} min`).join(' · ')} — raw not saved`
+      : `done: ${r.feature_rows} feature minutes for ${r.symbol} (auto) (${r.span[0]} → ${r.span[1]}) — raw not saved`;
   loadL2();
 });
 

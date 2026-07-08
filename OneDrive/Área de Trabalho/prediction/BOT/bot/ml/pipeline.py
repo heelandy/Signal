@@ -135,6 +135,21 @@ def _train_impl(sym: str, n_splits: int, embargo: int, auto_promote: bool, tf: s
     cm_auc = auc(y[k:], champ.predict_proba(X[k:])) if champ is not None else float("-inf")
     # the DEPLOYED challenger still trains on all data (best live model) + the OOS calibrator
     challenger = CalibratedModel(zoo[best]().fit(X, y), calib)
+    # PER-GROUP CALIBRATION WIRED (user 2026-07-07: "GroupCalibrator + per-slice champion
+    # wiring"): sym|side calibrators fit on the SAME OOS predictions ride with the challenger —
+    # predict_candidate applies them automatically the moment this model becomes champion.
+    # Thin/unseen groups fall back to GroupCalibrator's global isotonic (min_n=150).
+    try:
+        from bot.ml.models import GroupCalibrator
+        _gs = (df["symbol"].to_numpy()[oidx].astype(str)
+               if ("symbol" in df.columns and df["symbol"].nunique() > 1)
+               else np.array([sym] * len(oidx), dtype=str))
+        _gd = (np.where(df["side_long"].to_numpy(float)[oidx] > 0, "long", "short")
+               if "side_long" in df.columns else df["side"].to_numpy()[oidx].astype(str))
+        challenger.group_cal = GroupCalibrator().fit(
+            wf["oos_p"], wf["oos_y"], np.char.add(np.char.add(_gs, "|"), _gd.astype(str)))
+    except Exception:
+        pass                                   # group calibration is an enhancement, never a blocker
     promote = champ is None or (ch_auc == ch_auc and ch_auc >= cm_auc)
     report.update({"challenger_auc": round(float(ch_auc), 3),
                    "champion_auc": (round(float(cm_auc), 3) if cm_auc == cm_auc and cm_auc != float("-inf") else None),
@@ -167,6 +182,13 @@ def predict_candidate(c, feats: dict | None = None) -> float:
     try:
         x = to_vector(feats) if feats else np.array(feat(c), float)
         p = float(np.atleast_1d(model.predict_proba(x.reshape(1, -1)))[0])
+        gc = getattr(model, "group_cal", None)     # per-sym|side calibration when the champion
+        if gc is not None:                         # carries it (wired 2026-07-07); global fallback
+            try:                                   # for thin/unseen groups lives inside gc
+                p = float(np.clip(np.atleast_1d(
+                    gc.transform([p], [f"{c.symbol}|{c.side.value}"]))[0], 0.0, 1.0))
+            except Exception:
+                pass
         c.confidence = round(p, 3)
         return c.confidence
     except Exception:

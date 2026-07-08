@@ -138,6 +138,15 @@ STRATEGY_MODULES = [
               "still LADDERS TO PAPER as SIGNALS-ONLY (paper evidence may promote or bury it "
               "for good). Boss refuses to arm it",
      "approval_requirements": "paper signals-only; revival = fresh full gauntlet on new data"},
+    {"id": "equities_trail_exit", "asset_class": "equities", "style": "day_trading",
+     "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "trail-eq-0.1",
+     "notes": "FULL 7/7 GAUNTLET PASS x2 (gauntlet_trail_hg.py 2026-07-07, F84): the canonical "
+              "07.7 entries with a CHANDELIER-TRAIL exit instead of the 4R cap — the "
+              "expectancy-first profile found in F82. QQQ exp +0.305R CI-lo +0.16 OOS +0.539 "
+              "PF 1.70 2x-frictions +0.278 · SPY +0.223 CI-lo +0.067 OOS +0.403 PF 1.51 2x "
+              "+0.194 — both 7/9 years positive. ~50% WR: EXCEEDS the goal's PF leg, not the "
+              "WR band — runs as its own lineage, judged on expectancy. Ladder: trail-eq-0.1",
+     "approval_requirements": "full AITP ladder from research"},
     {"id": "equities_connors_rsi2", "asset_class": "equities", "style": "swing_trading",
      "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "connors-1d-0.1",
      "notes": "F52 GRADUATE re-confirmed 2026-07-05: Connors RSI-2 (close>SMA200 & RSI2<10 long / "

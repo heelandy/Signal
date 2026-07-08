@@ -54,7 +54,7 @@ def attach_live_journal(seed: pd.DataFrame, sym: str, tf: str) -> pd.DataFrame:
             # on outcomes from a different trade geometry, and a worker row sharing (ts,symbol,
             # side) with its core twin could even REPLACE the canonical row in the dedup. Only
             # core-family rows feed the core dataset; worker lineages are judged by the Boss.
-            & ~lj["family"].astype(str).str.startswith(("worker-", "emergent-"))]
+            & ~lj["family"].astype(str).str.startswith(("worker-", "emergent-", "trail-"))]
     if not len(lj):
         return seed
     from bot.strategy.orb_candidates import STRATEGY_VERSION, T2

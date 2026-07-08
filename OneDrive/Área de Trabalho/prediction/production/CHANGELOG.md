@@ -32,6 +32,31 @@ No Pine changes (BOT + platform only — scope rule).
   features, win-rate) and confirms `approval_required=false`.
 * 130 tests green.
 
+## 2026-07-07 (v18) — TRAIL graduates 7/7×2 (trail-eq-0.1, paper-live) · same-bar TP fix · NQ store current to Jul 7 · alerting/calibrator/emergent-path/contract-tests
+
+STACK + AUTO tooltips updated (exit-mode F84 evidence) — rides the pending TV compile.
+
+* **F84 GAUNTLETS**: the CHANDELIER TRAIL passed the complete 7/7 gauntlet on BOTH equities
+  (QQQ +0.305R CI-lo +0.16 OOS +0.539 PF 1.70 2× +0.278 · SPY +0.223/+0.067/+0.403/1.51/+0.194,
+  7/9 yrs each) → module lineage **trail-eq-0.1**, laddered to paper, SHADOW-EXECUTING live
+  (`_trail_shadow_study` + tracker `_walk_trail` — a trailing stop needs its own outcome walk;
+  family `trail-` sealed out of all core analytics/datasets like workers). The Holy Grail (F79)
+  died honestly at 5/7 (bootstrap CI-low negative) → graveyard.
+* **SAME-BAR TP FIX (user catch)**: outcome walks now start tf-aware at the signal candle's
+  CLOSE — 15m rows were being resolved by 5m price action INSIDE their own signal candle
+  (pre-entry). Both affected rows re-resolved; write-time integrity guards + hourly audit + UI
+  chip already in place from earlier in the day.
+* **NQ BAR STORE CURRENT**: Catalyst-folder inventory (16y GLBX 1m = our existing source; fresh
+  5m file bridges the gap) → +5,595 bars appended, hive resampled (OneDrive rmtree lock beaten
+  by rename-aside), QA clean 2010→**2026-07-07**. Data verdict: folder has NO trades/tick data —
+  the CVD purchase list stands (trades schema 2-3y QQQ/SPY/NQ; NOT MBO).
+* **GATE MOVEMENT**: NQ 5m now PASSES the AUC gate (OOS 0.531; second lineage after QQQ@15m's
+  0.556) — Brier is the last wall (0.2471 vs 0.2443, −0.0028). Honest no-promote.
+* Also shipped: health ALERTING channel (bot/alerts.py, env-ready webhook, wired to integrity/
+  scan/band-pass/phase-8) · emergent-draft ladder path (gauntlet_pass drafts join the dropdown) ·
+  worker-contract sync tests ×3 · GroupCalibrator wired into every future challenger ·
+  journal-lab cleanse. 138 tests green.
+
 ## 2026-07-07 (v17b) — journal root-cause fixes · review items ALL closed · band-pass notify+approve · env-ready providers · docs/PROJECT.md
 
 No Pine changes.

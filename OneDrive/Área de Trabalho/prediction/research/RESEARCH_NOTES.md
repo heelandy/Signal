@@ -4,6 +4,34 @@ Goal: push the FOUR characteristics as high as possible — expectancy (R/trade)
 win %, max drawdown (lower = better) — while staying robust (lower 90% CI > 0, both signals > 0).
 Tool: `python research/orb_mtf_research.py NQ 15m` (computes harness state + MTF once, sweeps cheaply).
 
+## F84 — TWO GAUNTLETS: the CHANDELIER TRAIL GRADUATES ×2; Holy Grail dies honestly (2026-07-07)
+`gauntlet_trail_hg.py` — the two alive candidates through the full 7 checks (exp>0 · CI-lo>0 ·
+both sides · ≥70% yrs · OOS-30>0 · 2×-frictions>0 · PF≥1.2):
+- **TRAIL (chandelier exit on the canonical 07.7 entries): 7/7 PASS on BOTH equities** —
+  QQQ exp +0.305R, CI-lo +0.16, OOS +0.539, PF 1.70, 2× +0.278, 7/9 yrs · SPY +0.223, CI-lo
+  +0.067, OOS +0.403, PF 1.51, 2× +0.194, 7/9 yrs. ~50% WR — the expectancy-first profile:
+  exceeds the goal's PF leg, fails the WR band by design. REGISTERED as module lineage
+  **trail-eq-0.1** (gauntlet_pass, approvable on the ladder). The strongest exit ever
+  gauntleted on equities.
+- **HOLY GRAIL (F79 a-priori entry): 5/7 FAIL on both** — CI-low NEGATIVE (QQQ −0.054 / SPY
+  −0.057: the +0.14R expectancy is not statistically robust) + QQQ 6/9 yrs / SPY PF 1.19.
+  GRAVEYARD — the fresh-entry experiment stays valuable as proof the a-priori pipeline works,
+  but the edge is not deployable. F79 status: closed dead.
+
+## F83 — DAILY-LEVEL SWEEP-REVERSAL: DEAD — the last "daily sweep" reading closed (2026-07-07)
+`daily_sweep_reversal.py` — a-priori spec (PDH/PDL sweep → confirmed reclaim → fade, one per
+level per day, RTH, mirror; TWO declared cells only: any-breach + depth ≥0.25 ATR; house
+exit/costs; single-shot). Verdict — **no cell passes anywhere, both halves, and every 2×-stress
+PF < 1**:
+- QQQ OOS PF 0.76/0.89 · SPY 0.99/0.71 · NQ 0.98/**1.01** (breakeven at best) · ES 0.68/0.72
+  with IS DD −217R (catastrophic). Win rates 19-29% under the 4R house geometry.
+- Consistent with the whole reversal family graveyard: fade (F18/F19), zone-bounce, rangefade,
+  pdsweep-as-filter (F43). **Every reading of "daily sweep" is now formally closed**: as entry
+  (F18/F19 + this), as filter (F42/F43/F44), as the tuning tool (adopted, F-sweep champions),
+  and as standalone daily strategies (F52: volbreak+Connors live, donchian/VIX dead).
+The market's message across six studies is uniform: on these instruments, failed-break REVERSAL
+premia don't survive costs — the edge lives WITH the momentum (breakout side), not against it.
+
 ## F82 — GEOMETRY TUNE 2: the first-touch hints gridded on full history (2026-07-07)
 `geometry_tune2.py` — the LIVE first-touch study (14 trades: median MFE 0.4R, 71% stop-first)
 suggested nearer targets / bank-near+trail. Gridded honestly (14 exit cells × QQQ/SPY/NQ, full
