@@ -118,14 +118,85 @@ def alpaca_chain_0dte(underlying: str = "QQQ", spot: float | None = None,
     return _chain_book(rows, spot=spot, spot_pct=spot_pct, require_0dte=require_0dte)
 
 
+def _et_today() -> str:
+    """Today's date in US/Eastern (the market tz), NOT the server's local wall clock — so the
+    0DTE/DTE gate can't pick an expiry a day off near local midnight (D2 timezone class)."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import date
+        return str(date.today())
+
+
+def alpaca_chain_dte(underlying: str = "QQQ", target_dte: int = 7, spot: float | None = None,
+                     spot_pct: float = 0.12, tol_days: int = 3) -> dict:
+    """LIVE chain for the expiry nearest `target_dte` calendar days out (the F89 7DTE condor feed).
+    Same {ok, expiry, dte, book, strikes, n} shape as alpaca_chain_0dte, but gated to an expiry
+    within `tol_days` of the target rather than 0DTE. `spot_pct` is wider (0.12) because a multi-day
+    expected move is larger than 0DTE — the condor's short strikes sit further out."""
+    import re
+    try:
+        key, secret = settings.require_alpaca()
+        from alpaca.data.historical.option import OptionHistoricalDataClient
+        from alpaca.data.requests import OptionChainRequest
+        cli = OptionHistoricalDataClient(key, secret)
+        chain = cli.get_option_chain(OptionChainRequest(underlying_symbol=underlying))
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:120]}"}
+    rows = []
+    occ = re.compile(r"(\d{6})([CP])(\d{8})$")
+    for osi, snap in (chain.items() if hasattr(chain, "items") else []):
+        m = occ.search(str(osi))
+        q = getattr(snap, "latest_quote", None)
+        if not m or not q or not getattr(q, "bid_price", 0) or not getattr(q, "ask_price", 0):
+            continue
+        yy, mm, dd = m.group(1)[:2], m.group(1)[2:4], m.group(1)[4:6]
+        rows.append({"expiry": f"20{yy}-{mm}-{dd}", "cp": m.group(2),
+                     "strike": int(m.group(3)) / 1000.0,
+                     "bid": float(q.bid_price), "ask": float(q.ask_price),
+                     "mid": (float(q.bid_price) + float(q.ask_price)) / 2.0})
+    return _chain_book_dte(rows, target_dte, spot=spot, spot_pct=spot_pct, tol_days=tol_days)
+
+
+def _chain_book_dte(rows: list[dict], target_dte: int, spot: float | None = None,
+                    spot_pct: float = 0.12, tol_days: int = 3, today: str | None = None) -> dict:
+    """Gate parsed chain `rows` to the expiry nearest `target_dte` days out (within tol_days) and
+    build the {ok, expiry, dte, book, strikes, n} shape build() expects. Split out so the DTE gate
+    is unit-testable without a live feed. `today` defaults to date.today() (override in tests)."""
+    from datetime import date
+    import numpy as np
+    today = today or _et_today()                             # D2: ET market date, not server local
+    if not rows:
+        return {"ok": False, "error": "no two-sided quotes in chain"}
+    td = date.fromisoformat(today)
+    exps = sorted({r["expiry"] for r in rows})
+    def _dte(e: str) -> int:
+        return (date.fromisoformat(e) - td).days
+    exp = min(exps, key=lambda e: abs(_dte(e) - target_dte))
+    if abs(_dte(exp) - target_dte) > tol_days:
+        return {"ok": False, "error": f"no expiry near {target_dte}DTE (nearest {exp}, {_dte(exp)}d)",
+                "is_0dte": False}
+    day = [r for r in rows if r["expiry"] == exp]
+    if spot is None:                                          # real spot preferred; center is a fallback
+        strikes_all = sorted({r["strike"] for r in day})
+        spot = strikes_all[len(strikes_all) // 2]
+    lo, hi = spot * (1 - spot_pct), spot * (1 + spot_pct)
+    day = [r for r in day if lo <= r["strike"] <= hi]
+    book = {(r["cp"], r["strike"]): (r["bid"], r["ask"], r["mid"]) for r in day}
+    strikes = {cp: np.array(sorted({r["strike"] for r in day if r["cp"] == cp})) for cp in ("C", "P")}
+    return {"ok": True, "expiry": exp, "dte": _dte(exp), "is_0dte": _dte(exp) == 0,
+            "book": book, "strikes": strikes, "n": len(day)}
+
+
 def _chain_book(rows: list[dict], spot: float | None = None, spot_pct: float = 0.08,
                 require_0dte: bool = True, today: str | None = None) -> dict:
     """Gate parsed chain `rows` to the nearest expiry and build the {ok, expiry, is_0dte, book,
     strikes, n} shape bot.options.native.build expects. Split out of alpaca_chain_0dte so the
     0-DAY gate is unit-testable without a live feed. `rows`: [{expiry 'YYYY-MM-DD', cp, strike,
-    bid, ask, mid}, ...]. `today` defaults to date.today() (override only in tests)."""
-    from datetime import date
-    today = today or str(date.today())
+    bid, ask, mid}, ...]. `today` defaults to the ET market date (override only in tests)."""
+    today = today or _et_today()                             # D2: ET market date, not server local
     if not rows:
         return {"ok": False, "error": "no two-sided quotes in chain"}
     exp0 = min(r["expiry"] for r in rows)                     # nearest expiry

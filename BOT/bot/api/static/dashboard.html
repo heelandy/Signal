@@ -185,8 +185,8 @@
     </div>
     <div class="card col3"><h2><svg class="ic"><use href="#i-box"/></svg> Selected Contract
         <select id="ctrsel" onchange="pickContract()" style="width:auto;margin-left:auto;padding:2px 5px;font-size:11px">
-          <option>QQQ</option><option>SPY</option><option>NQ</option><option>GC</option>
-          <option value="OPT-NATIVE">opt-native</option></select>
+          <option value="OPT-NATIVE" selected>opt-native</option>
+          <option>QQQ</option><option>SPY</option><option>NQ</option><option>GC</option></select>
         <select id="ctrside" onchange="pickContract()" style="width:auto;padding:2px 5px;font-size:11px">
           <option value="long">call</option><option value="short">put</option></select></h2>
       <div id="contract"><div class="mut">loading…</div></div>
@@ -508,7 +508,7 @@ async function loadStrategies(){
 }
 
 // Selected Contract greeks (BS) for the current pick / first signal / default asset
-let CTR={sym:'QQQ',spot:null,side:'long',iv:0.20,tp1:null,tp2:null,stop:null}; let CTR_MANUAL=false;
+let CTR={sym:'OPT-NATIVE',spot:null,side:'long',iv:0.20,tp1:null,tp2:null,stop:null}; let CTR_MANUAL=false;
 function pickContract(){CTR={sym:$('#ctrsel').value,spot:null,side:$('#ctrside').value,iv:0.20,tp1:null,tp2:null,stop:null};CTR_MANUAL=true;loadContract();}
 function selCtr(sym,spot,side,iv,tp1,tp2,stop){CTR={sym,spot,side,iv,tp1,tp2,stop};CTR_MANUAL=true;
   const sel=$('#ctrsel'); if(sel&&[...sel.options].some(o=>o.value===sym))sel.value=sym; if($('#ctrside'))$('#ctrside').value=side; loadContract();}
@@ -521,7 +521,7 @@ async function renderNative(){
   let d; try{d=await J('/api/options_native?structure='+NAT_STRUCT);}catch(e){setHTML('contract','<span class="dn">'+e+'</span>');return}
   const s=d.signal;
   const pick=`<div style="margin-bottom:6px"><select onchange="setNatStruct(this.value)" style="font-size:10px;padding:1px 4px">`
-    +['long_single','condor','credit_spread'].map(v=>`<option value="${v}" ${v===NAT_STRUCT?'selected':''}>${v==='long_single'?'naked long (small acct)':v}</option>`).join('')+`</select></div>`;
+    +['long_single','condor','credit_spread','condor_7dte'].map(v=>`<option value="${v}" ${v===NAT_STRUCT?'selected':''}>${({long_single:'naked long (small acct)',condor_7dte:'7DTE condor (band ✓)'})[v]||v}</option>`).join('')+`</select></div>`;
   // PERFORMANCE BY STRATEGY (which one is working, after each entry) — always shown
   const perf=d.performance||{};
   const prow=(k,lbl)=>{const p=perf[k]||{}; const sel=(k===NAT_STRUCT); const src=p.live_n?(p.backtest_n?'bt+live':'live'):'bt';
@@ -531,7 +531,7 @@ async function renderNative(){
     +`<td class="num ${p.avg_ret>0?'up':(p.avg_ret!=null?'dn':'')}">${p.avg_ret!=null?(p.avg_ret>0?'+':'')+p.avg_ret+'R':'—'}</td></tr>`;};
   const perfHTML=`<div class="mut" style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-top:9px;padding-top:6px;border-top:1px solid var(--line)">performance by strategy <span style="text-transform:none">(bt = backtest · live = per-entry)</span></div>`
     +`<table style="width:100%;font-size:10px"><tr class="mut"><th style="text-align:left">strat</th><th class="num">n</th><th class="num">WR</th><th class="num">PF</th><th class="num">avg</th></tr>`
-    +prow('long_single','naked long')+prow('credit_spread','credit sprd')+prow('condor','condor')+`</table>`;
+    +prow('long_single','naked long')+prow('credit_spread','credit sprd')+prow('condor','condor')+prow('condor_7dte','7DTE condor')+`</table>`;
   if(!s){setHTML('contract',pick
     +`<div class="mut" style="padding:6px 0">no live <b>${NAT_STRUCT==='long_single'?'naked long':NAT_STRUCT}</b> data — ${d.live_chain?'chain too thin':'chain closed (check during RTH)'}</div>`
     +perfHTML);return}
@@ -594,7 +594,7 @@ async function scanSignals(force){
     const sigs=(d.signals||[]).filter(s=>!s.error); SIGS=sigs;
     if(d.watchlist&&d.watchlist.length) WATCHLIST=d.watchlist;
     notifyNew(sigs); fillSignalPicker();;
-    const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
+    const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL && CTR.sym!=='OPT-NATIVE'){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
     const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
     $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
     if(!sigs.length){$('#signals').innerHTML='<div class="mut">No active setups on the latest bars. (No signal = nothing to trade.)</div>';}
@@ -715,7 +715,7 @@ async function pickSignal(){const v=$('#o_pick').value; if(!v) return;
     let d; try{d=await J('/api/options_native?structure='+NAT_STRUCT);}catch(e){$('#o_opts').innerHTML='<span class="dn">'+e+'</span>';return}
     const s=d.signal;
     const pick=`<select onchange="NAT_STRUCT=this.value;pickSignal.call({},'native');document.getElementById('o_pick').value='native'" style="font-size:10px;padding:1px 4px;margin-bottom:5px">`
-      +['long_single','condor','credit_spread'].map(x=>`<option value="${x}" ${x===NAT_STRUCT?'selected':''}>${x==='long_single'?'naked long (daily · small acct)':x}</option>`).join('')+`</select>`;
+      +['long_single','condor','credit_spread','condor_7dte'].map(x=>`<option value="${x}" ${x===NAT_STRUCT?'selected':''}>${({long_single:'naked long (daily · small acct)',condor_7dte:'7DTE condor (weekly · band ✓)'})[x]||x}</option>`).join('')+`</select>`;
     if(!s){$('#o_opts').innerHTML=pick+`<div class="mut">no live chain now (after hours / no 0DTE) — check during RTH, or approve <b>${d.lineage}</b> on /training</div>`;return}
     if($('#ctrsel')){$('#ctrsel').value='OPT-NATIVE';} CTR={sym:'OPT-NATIVE'};CTR_MANUAL=true;loadContract();  // also drive the contract panel
     const legrow=l=>`<tr><td><b>${l.side==='short'?'SELL':'BUY'}</b></td><td>${l.strike.toFixed(0)}${l.right}</td><td class="num">$${(+l.px).toFixed(2)}</td><td class="num">${(+l.delta).toFixed(3)}</td><td class="num">${(+l.theta).toFixed(3)}</td></tr>`;

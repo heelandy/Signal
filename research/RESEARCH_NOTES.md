@@ -1975,3 +1975,43 @@ on the 1m chart for execution visuals. No further 1m testing warranted (user gat
 
 Remaining adoption gate: **forward paper-test of fills** (≥2 weeks clean reconciliation, RTH first, then
 Asia/London — slippage-sensitive). The AUTO file + `docs/AUTOMATION_SETUP.md` are the harness for it.
+
+
+## F89 — 7DTE managed condor: the first structure to reach the band (2026-07-08)
+
+**Goal (unchanged):** WR 75-85 · PF 1.6-1.8 · maxDD ≤ 11%.
+
+**Why 0DTE can't get there.** Swept the 0DTE credit spread across 480 configs on the shared live
+path (`native.build(structure="credit_spread")` + `native.walk_manage`, real OPRA book): only 2/480
+are even positive-expectancy, best PF 1.11, **zero in-band**. The 0DTE condor tops out ~1.35. Both
+sit below the band's PF floor — 0DTE has heavy negative skew (small frequent wins, occasional
+full-wing losses), so no premium-seller clears PF 1.6 there. The band *describes* a premium-selling
+profile that 0DTE structurally can't deliver. (research/opra_credit_spread.py)
+
+**The lever is DTE.** A 7-day hold with a TP-early / settle manager clears it. Ran the condor through
+a real multi-day intraday manager (30-min mark grid across the whole hold, TP tp·credit / stop
+stop·credit / else settle intrinsic at expiry), same `native.build` geometry the live path uses.
+(research/opra_dte_condor.py)
+
+  | structure | WR | PF | DD | exp | n | in-band |
+  |---|---|---|---|---|---|---|
+  | **7DTE condor** em1.0/wing5/tp0.6/stop2.0 | **83.3%** | **1.73** | 4.4% | +0.122R | 18 | ✅ (6 configs) |
+  | 0DTE credit spread (best of 480) | 75.0% | 1.11 | 0.6% | +0.003R | 44 | ✗ |
+  | 0DTE condor (shipped) | 75.6% | 1.31 | — | +0.019R | 41 | ✗ |
+
+**Robustness.** 15W/3L; the 3 losses are each full −1.0R (fully breached, held to settle). Leave-one-
+out PF stays **1.53–2.60** — not a single-trade artifact. Caveat: the stop rarely binds (losses
+settle at full max-loss), so size on the full wing, not on the stop distance.
+
+**14DTE is untestable on this window** — a 14-day expected move pushes the condor's short strikes
+past the parquet's ±6% strike coverage (12/22 sessions stand aside) and the last 4 expiries settle
+past the QQQ data end. The old "PF 2.32 hold" number was on a daily-close snapshot with looser
+strike constraints; it is NOT a validated 14DTE verdict. Testing 14DTE needs a wider OPRA extract.
+
+**Status: IN-SAMPLE.** 18 trades on 22 OPRA sessions, config chosen on this window. The VRP edge is
+independently established (F85), but this specific geometry must accrue **forward paper** before it's
+trusted. Wired as a selectable structure `condor_7dte` (own spec `SPEC_7DTE`, decoupled from the
+0DTE `SPEC`) into the Selected-Contract panel + options calculator, fed by a real Alpaca ~7-day
+chain (`alpaca_chain_dte`). Confirmed live: QQQ 720 → shorts 738C/703P, wings 743C/698P, credit
+$1.29, max_loss $3.71, ret@max 0.35R, expiry 2026-07-15. Performance bucket is empty until it fires
+forward (correct "no data → empty" behavior).

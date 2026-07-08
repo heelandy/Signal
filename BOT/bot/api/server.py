@@ -403,7 +403,7 @@ def _options_native_live():
         hm = now.hour * 60 + now.minute
         date = now.strftime("%Y-%m-%d")
         spot = (latest_price("QQQ") or {}).get("price")
-        # 1) ENTRY at 10:00 / 13:00 ET — the managed credit spread (the structure that needs it)
+        # 1) ENTRY at 10:00 / 13:00 ET — the managed 0DTE credit spread + ONE 7DTE condor (F89).
         if spot:
             for slot, ehm in (("am", 600), ("pm", 780)):
                 if ehm <= hm <= ehm + 3:
@@ -411,13 +411,30 @@ def _options_native_live():
                                                          structure="credit_spread")
                     if not sig.get("error") and sig.get("priced_from") == "alpaca_live":
                         native.open_position(sig, date, slot, "credit_spread")
-        # 2) MANAGE every open position on the live chain
+            if 600 <= hm <= 603:                      # O11: enter one 7DTE condor/session (backtest cadence)
+                s7 = native.live_signal_from_alpaca("QQQ", spot=float(spot),
+                                                    structure="condor_7dte", dte=7)
+                if not s7.get("error") and s7.get("priced_from") == "alpaca_live":
+                    native.open_position(s7, date, "7d", "condor_7dte")
+        # 2) MANAGE every open position on the chain that MATCHES ITS EXPIRY (O11): a 7DTE condor
+        # must be marked on the 7-day chain, not the 0DTE one; settle only at the stored expiry (O7).
         opens = native.load_open()
         if opens:
-            ch = alpaca_chain_0dte("QQQ", spot=float(spot) if spot else None)
-            book = ch.get("book") if ch.get("ok") else None
+            import datetime as _dt
+            from bot.market_data.options_data import alpaca_chain_dte
+            et_today = _dt.date.fromisoformat(date)
+            books = {}                                # expiry -> book (only if the chain's expiry matches)
+            for r in opens:
+                exp = r.get("expiry") or date
+                if exp in books:
+                    continue
+                rem = (_dt.date.fromisoformat(exp) - et_today).days
+                ch = (alpaca_chain_0dte("QQQ", spot=float(spot) if spot else None) if rem <= 0
+                      else alpaca_chain_dte("QQQ", target_dte=rem, spot=float(spot) if spot else None))
+                books[exp] = ch.get("book") if (ch.get("ok") and ch.get("expiry") == exp) else None
 
             def mark_cost(r):                         # cost to close: buy back shorts, sell wings
+                book = books.get(r.get("expiry") or date)
                 if not book:
                     return None
                 cost = 0.0
@@ -858,8 +875,9 @@ def options_native_feed(structure: str = "long_single"):
                 spot = float(_b["close"].iloc[-1])
             except Exception:
                 spot = None
+        dte = 7 if structure == "condor_7dte" else 0        # F89: the 7DTE condor pulls the week-out chain
         live = native.live_signal_from_alpaca("QQQ", spot=float(spot) if spot else None,
-                                              structure=structure)
+                                              structure=structure, dte=dte)
         if live.get("error"):
             live = None
     except Exception:

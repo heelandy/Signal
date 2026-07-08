@@ -31,6 +31,22 @@ LINEAGE = "options-native-0.1"
 SPEC = {"em_mult": 1.1, "wing": 6, "tp": 0.6, "stop_mult": 2.5, "trend_mult": 1.0, "min_credit": 0.10,
         "directional": True, "dir_em_mult": 2.0, "dir_stop_mult": 1.25}
 
+# 7DTE MANAGED CONDOR (F89) — the FIRST structure to reach the user band on the OPRA window:
+# WR 83.3 · PF 1.73 · DD 4.4% · +0.122R (18 in-sample trades; leave-one-out PF 1.53-2.60, so not a
+# single-trade artifact). 0DTE premium selling structurally caps below the band's PF floor (spread
+# 1.11, condor 1.35 — negative skew); a 7-day hold with a TP-early/settle manager clears it. Its OWN
+# spec so tuning it never perturbs the 0DTE SPEC (the two were coupled before). IN-SAMPLE — accrues
+# forward paper before it's trusted. NOTE the stop rarely binds (losses settle at full max-loss), so
+# size on the full wing. 14DTE is untestable on this window (its EM pushes shorts past ±6% coverage).
+SPEC_7DTE = dict(SPEC, em_mult=1.0, wing=5, tp=0.6, stop_mult=2.0, dte=7)
+STRUCTURE_SPECS = {"condor_7dte": SPEC_7DTE}
+
+
+def spec_for(structure: str) -> dict:
+    """The geometry spec for a structure (its own overrides if any, else SPEC), tagged with the
+    structure so build() dispatches correctly. Keeps per-structure tuning decoupled."""
+    return dict(STRUCTURE_SPECS.get(structure, SPEC), structure=structure)
+
 
 def snap(strikes: np.ndarray, target: float, tol: float = 1.5) -> float | None:
     """Nearest available strike to target (within tol dollars, else None)."""
@@ -334,7 +350,7 @@ def performance_by_structure() -> dict:
     for r in load_journal():
         g[r.get("structure") or _structure_of(r.get("kind"))].append(r)
     out = {}
-    for name in STRUCTURES:
+    for name in STRUCTURES + ("condor_7dte",):    # 7DTE (F89) accrues forward — empty until it fires
         rows = g.get(name, [])
         rr = np.array([x.get("ret", 0.0) for x in rows if x.get("ret") is not None])
         if not len(rr):
@@ -415,32 +431,46 @@ def latest_signal() -> dict | None:
 
 
 def live_signal_from_alpaca(underlying: str = "QQQ", spot: float | None = None,
-                            open_px: float | None = None, structure: str = "condor") -> dict:
-    """Build a LIVE options-native position from the real Alpaca 0DTE chain (the F86 feed), fully
-    priced for the Selected-Contract panel + calculator. Real bid/ask — NOT a BS estimate.
-    structure: "condor" (VRP, needs management) | "long_single" (small-account winner, +0.22R hold-
-    to-settle) | "credit_spread" (needs a live feed to manage)."""
-    from bot.market_data.options_data import alpaca_chain_0dte
-    ch = alpaca_chain_0dte(underlying, spot=spot)             # filter strikes around the REAL spot
+                            open_px: float | None = None, structure: str = "condor",
+                            dte: int = 0) -> dict:
+    """Build a LIVE options-native position from the real Alpaca chain (the F86 feed), fully priced
+    for the Selected-Contract panel + calculator. Real bid/ask — NOT a BS estimate.
+    structure: "condor" (0DTE VRP, needs management) | "long_single" (small-account winner, +0.22R
+    hold-to-settle) | "credit_spread" (needs a live feed to manage) | "condor_7dte" (F89 band-reacher,
+    pulls the ~7-day expiry). `dte`: 0 = the 0DTE chain; >0 = the expiry nearest that many days out."""
+    from bot.market_data.options_data import alpaca_chain_0dte, alpaca_chain_dte
+    ch = (alpaca_chain_dte(underlying, target_dte=dte, spot=spot) if dte > 0
+          else alpaca_chain_0dte(underlying, spot=spot))      # filter strikes around the REAL spot
     if spot is None and ch.get("ok"):
         allk = sorted(set(list(ch["strikes"].get("C", [])) + list(ch["strikes"].get("P", []))))
         spot = float(allk[len(allk) // 2]) if allk else None
     if spot is None:
         return {"error": ch.get("error", "no spot")}
-    spec = dict(SPEC, structure=structure)
+    spec = spec_for(structure)                                # per-structure geometry (7DTE has its own)
     op = open_px if open_px is not None else spot
     # REAL Alpaca chain ONLY — if the selected structure can't build on live quotes (e.g. after
-    # hours, or thin 0DTE OTM wings for a condor), return an error so the panel shows EMPTY rather
-    # than a faked estimate (user 2026-07-08: "if there's no data for the condor leave it empty").
+    # hours, or thin OTM wings for a condor), return an error so the panel shows EMPTY rather than a
+    # faked estimate (user 2026-07-08: "if there's no data for the condor leave it empty").
     if not ch.get("ok"):
         return {"error": ch.get("error", "no live chain")}
     q = (lambda cp, K: ch["book"].get((cp, K)) if K is not None else None)
-    pos = build(spot, op, q, ch["strikes"], spec=spec)
+    # a 7DTE condor is a condor (not a trend-day one-sided spread) — directional=False stands aside
+    # on a trend entry rather than emitting a single spread the backtest never measured.
+    pos = build(spot, op, q, ch["strikes"], spec=spec, directional=(dte == 0))
     if pos is None:
         return {"error": f"no live {structure} data (chain too thin at spot {round(spot, 2)})"}
-    d = describe(pos, spot)
-    d.update({"priced_from": "alpaca_live", "expiry": ch.get("expiry"),
-              "is_0dte": ch.get("is_0dte"), "n_contracts": ch.get("n")})
+    eff_dte = ch.get("dte", 0) or dte
+    from bot.options.pricing import default_iv
+    d = describe(pos, spot, mins_to_close=(eff_dte * 390.0 + _mins_to_close()) if eff_dte else None,
+                 iv=default_iv(eff_dte))
+    d.update({"priced_from": "alpaca_live", "structure": structure, "expiry": ch.get("expiry"),
+              "dte": eff_dte, "is_0dte": ch.get("is_0dte", eff_dte == 0), "n_contracts": ch.get("n")})
+    # O13 FIX (audit 2026-07-08): describe() emits only `legs` (for display) — it DROPS the raw
+    # strikes. open_position/manage_open reconstruct the position from ksc/klc/ksp/klp, so without
+    # these the manager marks all-None legs -> cost 0 -> pnl==credit -> INSTANT FALSE TP on tick 1.
+    # Carry the geometry so a managed position can actually be re-priced on the live chain.
+    d.update({k: pos.get(k) for k in ("structure_type", "cp", "long_k", "short_k",
+                                      "ksc", "klc", "ksp", "klp", "spot_entry")})
     return d
 
 
@@ -501,14 +531,19 @@ def manage_open(mark_cost_fn, settle_close_fn, spec: dict = SPEC, close_hm: int 
         credit = r.get("credit") or 0.0
         exit_kind, pnl = None, None
         is_debit = r.get("structure_type") == "debit"
+        # O12 FIX: resolve the spec PER POSITION — a 7DTE condor manages on SPEC_7DTE (tp/stop that
+        # put it IN band), not on whatever single spec the caller passed. Held to expiry it's only
+        # PF 1.08; the early TP is the whole edge, so the manager must use the structure's own tp.
+        struct = r.get("structure") or _structure_of(r.get("kind"))
+        ps = dict(spec, **STRUCTURE_SPECS.get(struct, {}))
         if not is_debit and credit > 0:                        # credit structure -> TP / stop live
             cost = mark_cost_fn(r)
             if cost is not None:
                 pnl_now = credit - cost
-                stop = (spec.get("dir_stop_mult", spec["stop_mult"])
-                        if r.get("kind") != "condor" else spec["stop_mult"])
-                if pnl_now >= spec["tp"] * credit:
-                    exit_kind, pnl = "tp", spec["tp"] * credit
+                stop = (ps.get("dir_stop_mult", ps["stop_mult"])
+                        if r.get("kind") != "condor" else ps["stop_mult"])
+                if pnl_now >= ps["tp"] * credit:
+                    exit_kind, pnl = "tp", ps["tp"] * credit
                 elif pnl_now <= -stop * credit:
                     exit_kind, pnl = "stop", -stop * credit
         # settle only at the position's ACTUAL expiry (0-day fix): expiry's close must be available,
