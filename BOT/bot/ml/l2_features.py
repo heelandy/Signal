@@ -351,8 +351,11 @@ def synthesize(source_id: str, tf_minutes: int = 1) -> dict:
         symf = f"symbol = '{str(src['symbol']).upper()}'" if "symbol" in cols else None
         if kind == "mbp":
             lvl10 = "bid_sz_09" in cols and "ask_sz_09" in cols
-            deep_b = " + ".join(f"bid_sz_0{i}" for i in range(10)) if lvl10 else "bid_sz_00"
-            deep_a = " + ".join(f"ask_sz_0{i}" for i in range(10)) if lvl10 else "ask_sz_00"
+            # coalesce each level: Databento leaves absent MBP-10 levels NULL, and a single NULL in
+            # an N-term SQL sum makes the WHOLE sum NULL -> book_pressure silently dropped on thin
+            # minutes. Treat an empty level as 0 depth (correct) so only truly-empty books drop out.
+            deep_b = " + ".join(f"coalesce(bid_sz_0{i},0)" for i in range(10)) if lvl10 else "coalesce(bid_sz_00,0)"
+            deep_a = " + ".join(f"coalesce(ask_sz_0{i},0)" for i in range(10)) if lvl10 else "coalesce(ask_sz_00,0)"
             q = f"""
             SELECT {ts} AS minute,
                    avg((ask_px_00 - bid_px_00) / nullif((ask_px_00 + bid_px_00) / 2.0, 0)) * 10000 AS l2_spread_bps,

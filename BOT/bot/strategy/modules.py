@@ -91,16 +91,33 @@ STRATEGY_MODULES = [
               "+0.103, 11/17 years positive. ES FAILS years (9/17). Execution still needs "
               "continuous-contract roll handling before paper. Ladder lineage: swing-fut-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
-    {"id": "daily_volbreak", "asset_class": "multi", "style": "day_trading",
-     "symbols": ["NQ", "QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "volbreak-1d-0.1",
-     "notes": "F52 GRADUATE re-confirmed under the current engine 2026-07-05 (research/"
-              "strat_daily.py): volatility breakout, stop-entry at open ± 0.3x prior-day range, "
-              "EOD exit, gap-aware fills. NQ +0.094R PF 1.54 17/17 YEARS · QQQ +0.103R PF 1.69 "
-              "9/9 · SPY +0.086R PF 1.55 9/9, all OOS+. ES/GC FAIL — not included. CAVEAT: thin "
-              "(~12 bps/trade) => slippage-sensitive; paper must verify live fills before sizing. "
-              "OPTIONS (cross-test 2026-07-06): 0DTE NAKED is its BEST expression — QQQ +1.01 "
-              "ret/premium PF 3.30 9/9 yrs OOS +1.11, SPY +0.63 PF 2.51 9/9 (debit/credit fail). "
-              "Ladder lineage: volbreak-1d-0.1",
+    {"id": "futures_volbreak", "asset_class": "futures", "style": "day_trading",
+     "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "volbreak-fut-0.1",
+     "notes": "VOLATILITY BREAKOUT, OUTRIGHT NQ FUTURES (isolated from the options book, user "
+              "2026-07-08). Stop-entry at open ± 0.3x prior-day range, EOD flat, gap-aware fills "
+              "(research/strat_daily.py). NQ +0.094R PF 1.53 17/17 YEARS OOS+ — the most robust "
+              "underlying edge in the book. ~30% both-levels-hit days are path-assumed (bar-level "
+              "check before sizing). CAVEAT: thin (~12 bps/trade) => trade as futures (low cost), "
+              "NOT options. Ladder lineage: volbreak-fut-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "equities_volbreak", "asset_class": "options", "style": "options_trading",
+     "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "volbreak-0dte-0.1",
+     "notes": "VOLATILITY BREAKOUT expressed as 0DTE NAKED OPTIONS (isolated from the futures "
+              "book, user 2026-07-08). Same open ± 0.3x prior-day-range trigger; on a break, buy "
+              "the 0DTE call/put (convex — the large fast move pays for the gamma). Cross-test "
+              "2026-07-06: QQQ +1.01 ret/premium PF 3.30 9/9 yrs OOS +1.11 · SPY +0.63 PF 2.51 9/9 "
+              "(debit/credit fail — naked only). Underlying QQQ +0.103R PF 1.69, SPY +0.086R PF "
+              "1.55, both 9/9. Ladder lineage: volbreak-0dte-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "equities_overnight", "asset_class": "equities", "style": "swing_trading",
+     "symbols": ["QQQ", "SPY"], "status": "gauntlet_pass", "strategy_version": "overnight-1d-0.1",
+     "notes": "OVERNIGHT DRIFT (research/overnight_drift.py + overnight_hardening.py, 2026-07-08): buy "
+              "MOC / sell next MOO — the night effect (Lou-Polk-Skouras, JFE 2019). QQQ +0.034R PF 1.14 "
+              "8/9 · SPY +0.032R PF 1.12 8/9, BOTH survive 2x cost AND the 2022-26 regime; the intraday "
+              "(O->C) leg FAILS, confirming the effect is overnight. Concentrates AFTER a down close "
+              "(QQQ 9/9 yrs) — the wired conditioning. VEHICLE: SHARES only (options frictions exceed "
+              "the ~0.03%/night edge). Isolated from volbreak so the two never share a book. Ladder "
+              "lineage: overnight-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
     # ── BOSS WORKERS (docs/BOSS_WORKERS_PLAN.md, discovery rounds F80 2026-07-06) — the
     # high-WR per-symbol specs (band: WR 75-85 · PF >= 1.7 · DD <= 10R OOS) under the Main Boss ──

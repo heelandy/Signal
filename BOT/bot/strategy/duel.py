@@ -32,18 +32,22 @@ CONNORS_MAX_HOLD = 10
 DUELISTS = {
     "equities_swing": ("swing-1d-0.1", ["QQQ"]),
     "futures_swing": ("swing-fut-1d-0.1", ["NQ"]),
-    "daily_volbreak": ("volbreak-1d-0.1", ["NQ", "QQQ", "SPY"]),
+    "futures_volbreak": ("volbreak-fut-0.1", ["NQ"]),          # OUTRIGHT futures (shares book)
+    "equities_volbreak": ("volbreak-0dte-0.1", ["QQQ", "SPY"]),  # 0DTE naked options book
     "equities_connors_rsi2": ("connors-1d-0.1", ["QQQ", "SPY"]),
+    "equities_overnight": ("overnight-1d-0.1", ["QQQ", "SPY"]),
 }
 
 # GATE-PASSED options expression per module (user 2026-07-06: "they will show the information
 # according to the gate they pass — volbreak for naked, swing for QQQ debit"). From the
 # cross-strategy payoff replay (research/options_cross.py, F74).
 OPTIONS_EXPRESSION = {
-    "daily_volbreak": "0DTE NAKED — QQQ +1.01/prem PF 3.30 9/9 · SPY +0.63 PF 2.51 9/9",
+    "futures_volbreak": "OUTRIGHT FUTURES — NQ +0.094R PF 1.53 17/17 yrs (thin ~12bps; futures cost only, no options)",
+    "equities_volbreak": "0DTE NAKED — QQQ +1.01/prem PF 3.30 9/9 · SPY +0.63 PF 2.51 9/9",
     "equities_swing": "21DTE NAKED +0.311 & DEBIT +0.236 (QQQ, both 6/6 yrs)",
     "futures_swing": "no options gate run (futures options untested)",
     "equities_connors_rsi2": "no structure passed — underlying only",
+    "equities_overnight": "SHARES only — options frictions (spread + overnight theta) exceed the ~0.03%/night edge",
 }
 
 
@@ -101,7 +105,7 @@ def _entries_for(module: str, sym: str, b: pd.DataFrame) -> list[dict]:
             out.append({"entry": c[i], "sign": sign, "stop": c[i] - sign * STOP_ATR * atr,
                         "tp": c[i] + sign * TGT_ATR * atr, "risk": STOP_ATR * atr,
                         "max_days": HORIZON})
-    elif module == "daily_volbreak":
+    elif module in ("futures_volbreak", "equities_volbreak"):   # same signal, isolated books
         rng = float(h[i] - lo[i])
         if rng > 0:
             out.append({"kind": "volbreak", "prev_range": rng, "max_days": 1})
@@ -113,6 +117,11 @@ def _entries_for(module: str, sym: str, b: pd.DataFrame) -> list[dict]:
             if sign:
                 out.append({"kind": "connors", "entry": c[i], "sign": sign,
                             "risk": STOP_ATR * atr, "max_days": CONNORS_MAX_HOLD})
+    elif module == "equities_overnight":
+        # buy MOC -> sell next MOO; the drift concentrates AFTER a down close (QQQ 9/9 yrs) — the
+        # validated conditioning. Risk-normalised by ATR so R is comparable to the other duelists.
+        if i >= 1 and c[i] < c[i - 1]:
+            out.append({"kind": "overnight", "entry": c[i], "sign": 1, "risk": atr, "max_days": 1})
     for t in out:
         t.update({"module": module, "symbol": sym, "opened": day, "days_held": 0})
     return out
@@ -136,6 +145,8 @@ def _resolve(pos: dict, bar: pd.Series, b: pd.DataFrame) -> float | None:
             return -1.0
         return 0.0                                    # no trigger, no trade (scratch, 0R)
     sign, entry, risk = pos["sign"], pos["entry"], pos["risk"]
+    if pos.get("kind") == "overnight":                # MOC in at prev close -> MOO out at this open
+        return sign * (o - entry) / risk if risk > 0 else 0.0
     if pos.get("kind") == "connors":
         rsi = _rsi2(b["close"]).iloc[-1]
         if (sign == 1 and rsi > 90) or (sign == -1 and rsi < 10) or \
@@ -248,7 +259,7 @@ if __name__ == "__main__":                           # self-test on synthetic ba
     b["atr14"] = tr.ewm(alpha=1 / 14, adjust=False).mean()
     b["ema20"] = b.close.ewm(span=20, adjust=False).mean()
     b["ema50"] = b.close.ewm(span=50, adjust=False).mean()
-    sigs = _entries_for("daily_volbreak", "QQQ", b)
+    sigs = _entries_for("equities_volbreak", "QQQ", b)
     assert sigs and sigs[0]["kind"] == "volbreak"
     r = _resolve(sigs[0], b.iloc[-1], b)
     assert r is not None
