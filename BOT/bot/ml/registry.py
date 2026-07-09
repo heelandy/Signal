@@ -64,6 +64,9 @@ def list_reports() -> list[dict]:
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if d.get("created_at") is None:              # un-timestamped STUDY reports (phase78/gauntlet/
+            continue                                 # sweep/...) have their own panels; phase78 re-saves
+                                                     # hourly so by mtime it hijacked the "latest run" slot
         out.append({"name": p.stem, "kind": d.get("kind", p.stem.split("_")[0]),
                     "sym": d.get("sym"), "created_at": d.get("created_at"),
                     "oos_auc": d.get("oos_auc"), "oos_brier": d.get("oos_brier"),

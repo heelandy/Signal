@@ -231,11 +231,17 @@ def journal_path():
     return BOT_ROOT.parent / "data" / "options_native_journal.jsonl"
 
 
-def load_journal() -> list[dict]:
+def load_journal(lineage: str | None = None) -> list[dict]:
+    """All journaled options rows, or only one lineage's (the journal is a single file tagged by
+    `lineage` — user 2026-07-08: every approved options lineage shares it, keyed by its category id).
+    Rows without a lineage tag are the original options-native ones."""
     p = journal_path()
     if not p.exists():
         return []
-    return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if lineage is None:
+        return rows
+    return [r for r in rows if (r.get("lineage") or LINEAGE) == lineage]
 
 
 def _append_journal(rec: dict) -> None:
@@ -297,6 +303,38 @@ def _structure_of(kind) -> str:
 
 STRUCTURES = ("condor", "credit_spread", "long_single")
 
+# Approved OPTIONS lineages surfaced on the Selected-Contract panel (user 2026-07-08). Each carries
+# the journal STRUCTURE buckets that form its per-strategy scorecard + the underlyings it prices.
+# All share the one journal file, tagged by `lineage` (their "category id").
+# Ordered + tiered by measured edge vs the goal WR75-85 · PF>=1.7 · DD<=10% (user 2026-07-09). T1
+# carries the book · T2 = real edge, watch. The opt-native STRUCTURES are ALSO tier-ordered (7DTE
+# condor is the only in-band one -> first; credit-spread is a loser PF 0.78 -> last, flagged DROP).
+DROP_STRUCTURES = {"credit_spread"}   # loser (VRP credit spread PF 0.78, -0.008R) — deprioritized in the UI
+OPTIONS_LINEAGES = {
+    "volbreak-0dte-0.1":  {"tier": 1, "label": "volbreak · 0DTE naked", "underlyings": ["QQQ", "SPY"],
+                           "structures": ("long_single",), "kind": "naked", "dte": 0,
+                           "headline": "0DTE NAKED — QQQ PF 3.30 9/9 · SPY PF 2.51 9/9 (options_cross) — strongest edge"},
+    "options-native-0.1": {"tier": 1, "label": "opt-native (VRP)", "underlyings": ["QQQ", "SPY"],
+                           "structures": ("condor_7dte", "condor", "long_single", "credit_spread"), "dte": 0,
+                           "headline": "VRP — 7DTE condor WR83%/PF1.73 IN-BAND · condor/naked edge · credit-spread DROP"},
+    "swing-1d-0.1":       {"tier": 2, "label": "swing · 21DTE naked/debit", "underlyings": ["QQQ"],
+                           "structures": ("long_single",), "kind": "naked", "dte": 21,
+                           "headline": "21DTE NAKED PF 1.98 6/6 · DEBIT PF 1.88 6/6 (options_cross); underlying swing 7/7"},
+    "options-0.1":        {"tier": 2, "label": "ORB · 0DTE naked", "underlyings": ["QQQ", "SPY"],
+                           "structures": ("long_single",), "kind": "naked", "dte": 0,
+                           "headline": "ORB → 0DTE NAKED — gauntlet PASS both sides (options_replay F74)"},
+}
+
+
+def approved_options_lineages() -> list[dict]:
+    """The options lineages for the Selected-Contract dropdown, TIER-ORDERED, each with its category
+    id + paper-approval state (data-driven so a newly-approved options lineage shows up in its tier)."""
+    from bot.approval import paper_approved
+    items = sorted(OPTIONS_LINEAGES.items(), key=lambda kv: kv[1].get("tier", 9))
+    return [{"lineage": lin, "tier": m.get("tier", 9), "label": m["label"], "underlyings": m["underlyings"],
+             "structures": list(m["structures"]), "approved": bool(paper_approved(lin))}
+            for lin, m in items]
+
 
 def record_session(date: str, day_book: dict, strikes: dict, ref: dict, spec: dict = SPEC,
                    priced_from: str = "opra_chain") -> list[dict]:
@@ -342,15 +380,16 @@ def record_session(date: str, day_book: dict, strikes: dict, ref: dict, spec: di
     return out
 
 
-def performance_by_structure() -> dict:
+def performance_by_structure(lineage: str = LINEAGE) -> dict:
     """Per-structure scorecard from the journal (which strategy is working, after each entry).
     Buckets: condor · credit_spread · long_single (naked). Includes paper-traded rows if present."""
     from collections import defaultdict
     g = defaultdict(list)
-    for r in load_journal():
+    for r in load_journal(lineage):
         g[r.get("structure") or _structure_of(r.get("kind"))].append(r)
+    structs = OPTIONS_LINEAGES.get(lineage, {}).get("structures") or (STRUCTURES + ("condor_7dte",))
     out = {}
-    for name in STRUCTURES + ("condor_7dte",):    # 7DTE (F89) accrues forward — empty until it fires
+    for name in structs:                          # per-lineage buckets (naked-only lineages -> just long_single)
         rows = g.get(name, [])
         rr = np.array([x.get("ret", 0.0) for x in rows if x.get("ret") is not None])
         if not len(rr):
@@ -565,9 +604,9 @@ def manage_open(mark_cost_fn, settle_close_fn, spec: dict = SPEC, close_hm: int 
     return closed
 
 
-def journal_summary() -> dict:
+def journal_summary(lineage: str = LINEAGE) -> dict:
     """WR / PF / avg-ret / maxDD over the journaled real-premium rows — the live scorecard."""
-    j = [r for r in load_journal() if r.get("priced_from") == "opra_chain"]
+    j = [r for r in load_journal(lineage) if r.get("priced_from") == "opra_chain"]
     if not j:
         return {"n": 0, "rows": []}
     r = np.array([x["ret"] for x in j])

@@ -408,6 +408,14 @@ def _stats(rs: list[float]) -> dict:
             "lo": round(mean - 1.96 * se, 3), "hi": round(mean + 1.96 * se, 3)}
 
 
+def _judge_target(overall: dict, by_grade: dict, min_sample: int = MIN_SAMPLE):
+    """Pick the cohort the live-vs-backtest verdict is judged on: grade-A ONLY when grade-A itself
+    has >= min_sample trades, else the whole book (U2 bug 2026-07-09: `by_grade["A"] or overall`
+    judged a tiny grade-A subset and reported "insufficient sample" even with 18 overall)."""
+    a = by_grade.get("A", {})
+    return (a, "grade A") if a.get("n", 0) >= min_sample else (overall, "all taken trades")
+
+
 def scorecard() -> dict:
     """LIVE-vs-BACKTEST gate: do taken signals realise the backtested edge? Broken down by grade.
     Grade comes from the persisted signal JSON (grade A = production-faithful, what should match)."""
@@ -427,7 +435,7 @@ def scorecard() -> dict:
     by_grade = {g: _stats([r for r, gg in closed if gg == g]) for g in ("A+", "A", "B", "C")
                 if any(gg == g for _r, gg in closed)}
     ref = BACKTEST_REF
-    target = by_grade.get("A") or overall          # judge on grade-A if we have it, else the whole book
+    target, judged = _judge_target(overall, by_grade)   # U2 fix — see helper
     verdict, ok = "insufficient sample (need %d taken+closed)" % MIN_SAMPLE, None
     if target.get("n", 0) >= MIN_SAMPLE:
         if target["hi"] >= ref["exp_R"]:           # backtest expectancy inside/below the live CI upper bound
@@ -437,8 +445,7 @@ def scorecard() -> dict:
         else:
             verdict, ok = "live NOT matching backtest (negative) — do not scale up", False
     return {"overall": overall, "by_grade": by_grade, "backtest_ref": ref,
-            "verdict": verdict, "consistent": ok, "min_sample": MIN_SAMPLE,
-            "judged_on": "grade A" if "A" in by_grade else "all taken trades"}
+            "verdict": verdict, "consistent": ok, "min_sample": MIN_SAMPLE, "judged_on": judged}
 
 
 if __name__ == "__main__":   # self-test with a synthetic long that hits TP1 then TP2

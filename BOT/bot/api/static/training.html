@@ -169,6 +169,8 @@
       <div class="runrow" style="margin-top:10px">
         <button id="bigapprove" style="background:#123a2a;border-color:var(--good);font-weight:700"
                 onclick="approveAndPaper()">✓ APPROVE + paper + continuous learning</button>
+        <button id="approveall" style="background:#10233c;border-color:#4f8ef7;font-weight:700"
+                onclick="approveAllVersions()">✓✓ APPROVE ALL lineages (paper)</button>
       </div>
       <div class="note" id="paperstat"></div>
       <div class="note">one click = ladder approved for the SELECTED version + paper autotrade +
@@ -328,11 +330,12 @@ async function contToggle(){
 window.contToggle = contToggle;
 
 /* ---- approvals (multi-lineage: ORB core + each gauntlet-passed module) ---- */
-let _apprVer = '';
+let _apprVer = ''; let _apprVers = [];
 async function loadApprovals(){
   const st = await j('/api/approval/status' + (_apprVer ? `?version=${encodeURIComponent(_apprVer)}` : ''));
   _apprVer = st.strategy_version;
   const vers = st.available_versions || [st.strategy_version];
+  _apprVers = vers;
   document.getElementById('apprver').innerHTML = vers.length > 1
     ? `<select id="apprversel" onchange="_apprVer=this.value;loadApprovals()">` +
       vers.map(v => `<option${v === st.strategy_version ? ' selected' : ''}>${v}</option>`).join('') + `</select>`
@@ -423,17 +426,30 @@ async function loadDuel(){
     mods.map(m => {
       const r = (d.results || {})[m];
       const joined = (d.joined || {})[m];
+      const stg = (d.stage || {})[m];              // highest APPROVED stage, not a blanket "in the duel"
       const opt = (d.options || {})[m];
       return `<tr><td title="${(d.lineage||{})[m]||''}">${m.replace(/_/g,' ')}` +
         (opt ? `<div class="mut" style="font-size:9px;margin-top:2px" title="gate-passed options expression (payoff replay F74)">⚡ ${opt}</div>` : '') + `</td>` +
         (r ? `<td class="num">${r.n}</td><td class="num">${r.win_pct}</td><td class="num">${r.avg_r}</td><td class="num">${r.total_r}</td><td class="num">${r.pf ?? '—'}</td>`
            : `<td class="num" colspan="5">no resolved trades yet</td>`) +
         `<td class="num">${(d.open_positions||{})[m]||0}</td>` +
-        `<td>${joined ? '<span class="badge b-pass">IN THE DUEL</span>' : '<span class="mut">awaiting approval</span>'}</td></tr>`;
+        `<td>${joined ? `<span class="badge b-pass">${(stg||'research').toUpperCase()} ✓</span>` : '<span class="mut">awaiting approval</span>'}</td></tr>`;
     }).join('') + '</table>' +
     `<div class="note">shadow only — daily rules on completed bars, no orders · last day ${d.last_day || '—'}</div>`;
 }
 window.approveAndPaper = approveAndPaper;
+async function approveAllVersions(){   // walk EVERY lineage through research -> replay -> paper in one click
+  const vers = _apprVers.length ? _apprVers : ((await j('/api/approval/status')).available_versions || []);
+  if (!vers.length) return;
+  if (!confirm(`Approve ALL ${vers.length} lineages through research → replay → PAPER?\n\n(Paper only — live stays hard-locked.)`)) return;
+  let ok = 0;
+  for (const v of vers){
+    try{ await fetch(`/api/approval/approve_paper_all?version=${encodeURIComponent(v)}&notes=${encodeURIComponent('approve-all from ladder')}`, {method:'POST'}); ok++; }catch(e){}
+  }
+  document.getElementById('paperstat').innerHTML = `<span class="ok">approved ${ok}/${vers.length} lineages through paper</span>`;
+  loadApprovals(); loadDuel();
+}
+window.approveAllVersions = approveAllVersions;
 
 async function loadPaperStat(){
   try{

@@ -22,6 +22,10 @@
   .nav a.on .ic{color:var(--blu)}
   .nav .grp{font-size:9px;text-transform:uppercase;letter-spacing:1.2px;color:#455579;margin:14px 10px 6px;font-weight:700}
   .navfoot{margin-top:14px;padding:10px;border-top:1px solid var(--line);font-size:10px;color:var(--mut)}
+  .sidebar{transition:transform .22s ease}
+  .navtoggle{position:fixed;top:8px;left:10px;z-index:60;display:none;align-items:center;justify-content:center;width:34px;height:34px;padding:0;flex:none}
+  .navscrim{position:fixed;inset:0;background:rgba(4,7,14,.55);opacity:0;pointer-events:none;transition:opacity .22s ease;z-index:39}
+  .navscrim.show{opacity:1;pointer-events:auto}
   /* ---- app shell ---- */
   .app{margin-left:var(--nav)}
   header{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:16px;padding:9px 18px;
@@ -55,7 +59,7 @@
   .card>div,.card details{max-width:100%}
   /* bounded scroll boxes — every growing panel scrolls internally so the page stays short */
   #signals,#decisions,#cands,#trades,#positions,#optpos,#attrib,#scorecard,#datasrc,#underlying,#o_opts,
-  #strategies,#alerts,#orbmgr,#perf,#study,#optperf,#riskbrk{overflow:auto;max-height:340px}
+  #contract,#strategies,#alerts,#orbmgr,#perf,#study,#optperf,#riskbrk{overflow:auto;max-height:340px}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
   tr:hover td{background:rgba(79,142,247,.05)} th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
@@ -91,7 +95,13 @@
   details>summary{cursor:pointer;list-style:none} details>summary::-webkit-details-marker{display:none}
   /* top row = Account(6) + Live Market(6) (options engine banner removed, user 2026-07-06) */
   @media(max-width:1250px){.col2,.col3,.col4{grid-column:span 6}.col5,.col7,.col8,.col9{grid-column:span 12}}
-  @media(max-width:1120px){.sidebar{display:none}.app{margin-left:0}.meta{gap:11px}}
+  @media(max-width:1120px){
+    .app{margin-left:0}.meta{gap:11px}
+    header{padding-left:54px}
+    .sidebar{transform:translateX(-100%);box-shadow:0 0 42px rgba(0,0,0,.55)}
+    .sidebar.open{transform:translateX(0)}
+    .navtoggle{display:inline-flex}
+  }
   @media(max-width:820px){.grid>div{grid-column:span 12}.meta{display:none}.wrap{padding:4px 12px 20px}}
 </style></head>
 <body>
@@ -116,10 +126,12 @@
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
   <symbol id="i-dollar" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
 </defs></svg>
 
 <!-- ===== sidebar ===== -->
-<nav class="sidebar">
+<nav class="sidebar" id="sidebar">
   <div class="brand"><svg class="ic"><use href="#i-bolt"/></svg> HIGHSTRIKE</div>
   <div class="nav" id="nav">
     <a data-t="#s-overview" class="on"><svg class="ic"><use href="#i-grid"/></svg> Dashboard</a>
@@ -139,6 +151,8 @@
   </div>
   <div class="navfoot">Signal engine — proposes, you place.<br>Live execution hard-locked.</div>
 </nav>
+<div class="navscrim" id="navScrim" onclick="toggleNav(false)"></div>
+<button class="navtoggle" id="navToggle" aria-label="Toggle menu" onclick="toggleNav()"><svg class="ic"><use href="#i-menu"/></svg></button>
 
 <div class="app">
 <header>
@@ -179,14 +193,15 @@
     <div class="card hero col9"><h2 style="color:var(--txt);font-size:12px"><svg class="ic"><use href="#i-target"/></svg> Signal → Option
         <button class="primary" style="padding:4px 10px" id="scanbtn">SCAN NOW</button>
         <label class="mut" style="font-weight:400;text-transform:none;display:flex;align-items:center;gap:5px;font-size:10.5px">
-          <input type="checkbox" id="alerts" style="width:auto" onchange="armAlerts()"> alert on new</label>
+          <input type="checkbox" id="alerton" style="width:auto" onchange="armAlerts()"> alert on new</label>
         <span id="scanmsg" class="r"></span></h2>
       <div id="signals"><div class="mut">Auto-scanning SPY/QQQ/NQ/GC across Asia · London · RTH — signals appear as they form.</div></div>
     </div>
-    <div class="card col3"><h2><svg class="ic"><use href="#i-box"/></svg> Selected Contract
-        <select id="ctrsel" onchange="pickContract()" style="width:auto;margin-left:auto;padding:2px 5px;font-size:11px">
+    <div class="card col3"><h2 style="flex-wrap:wrap"><svg class="ic"><use href="#i-box"/></svg> Selected Contract
+        <select id="ctrsel" onchange="pickContract()" style="width:auto;max-width:150px;margin-left:auto;padding:2px 5px;font-size:11px">
           <option value="OPT-NATIVE" selected>opt-native</option>
           <option>QQQ</option><option>SPY</option><option>NQ</option><option>GC</option></select>
+        <select id="ctrund" onchange="setCtrUnd(this.value)" style="width:auto;padding:2px 5px;font-size:11px;display:none"></select>
         <select id="ctrside" onchange="pickContract()" style="width:auto;padding:2px 5px;font-size:11px">
           <option value="long">call</option><option value="short">put</option></select></h2>
       <div id="contract"><div class="mut">loading…</div></div>
@@ -321,6 +336,19 @@ document.querySelectorAll('#nav a[data-t]').forEach(a=>a.onclick=()=>{const t=do
   if(t){if(a.dataset.t==='#s-system')t.open=true; t.scrollIntoView({behavior:'smooth',block:'start'});}
   document.querySelectorAll('#nav a').forEach(x=>x.classList.remove('on')); a.classList.add('on');});
 
+// responsive nav — hamburger drawer under 1120px (sidebar is hidden off-canvas otherwise)
+function toggleNav(force){
+  const sb=document.getElementById('sidebar'), sc=document.getElementById('navScrim'),
+        tg=document.querySelector('#navToggle use');
+  const open = force===undefined ? !sb.classList.contains('open') : force;
+  sb.classList.toggle('open',open); sc.classList.toggle('show',open);
+  if(tg) tg.setAttribute('href', open ? '#i-x' : '#i-menu');
+}
+window.toggleNav=toggleNav;
+document.querySelectorAll('#nav a').forEach(a=>a.addEventListener('click',()=>toggleNav(false)));  // pick an item -> close
+addEventListener('keydown',e=>{ if(e.key==='Escape') toggleNav(false); });
+addEventListener('resize',()=>{ if(innerWidth>1120) toggleNav(false); });                          // never stuck open on widen
+
 function tickClock(){$('#servertime').textContent=new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour12:false})}
 function etNow(){const p=new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour12:false});return (+p.slice(0,2))*60+(+p.slice(3,5))}
 function marketOpen(){const m=etNow();const dow=new Date().toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short'});
@@ -383,7 +411,7 @@ async function refreshData(){
   setHTML('trades', t.length?`<table><tr><th>sym</th><th>side</th><th>exit</th><th class="num">net R</th></tr>`+
     t.slice().reverse().map(x=>`<tr><td>${x.symbol}</td><td>${x.side}</td><td class="mut">${x.exit_reason||''}</td><td class="num ${col(x.net_r||0)}">${x.net_r??''}</td></tr>`).join('')+`</table>`:'<div class="mut">no trades logged</div>');
   drawEquity((await J('/api/equity')).curve||[]);
-  loadScorecard(); loadStudy(); loadStrategies(); loadDataSources(); loadPaperLog();
+  loadScorecard(); loadStudy(); loadStrategies(); loadDataSources(); loadPaperLog(); loadCtrOptions();
 }
 async function loadStudy(){
   let d; try{d=await J('/api/study');}catch(e){return}
@@ -435,7 +463,7 @@ function loadUnderlying(m){
   if(s){ $('#uslabel').textContent=s.symbol+' '+(s.session||'rth');
     html+=row('ORB Breakout', s.side==='long'?1:-1);                       // the breakout's own direction
     html+=flag('Structure (HH/HL)', s.struct_aligned, 'ALIGNED', 'not aligned');
-    html+=flag('Vol-Expansion', s.vol_exp, 'WIDE OR', 'narrow OR');
+    html+=flag('Vol-Expansion', s.vol_expansion, 'WIDE OR', 'narrow OR');   // field is vol_expansion (a truncated name here rendered every signal "narrow")
     const ofl=s.orderflow&&s.orderflow.feed; const ofc=s.orderflow&&s.orderflow.confirms;
     html+=(ofl?row('Order-Flow', ofc?(s.side==='long'?1:-1):(s.side==='long'?-1:1)):row('Order-Flow (SPY)', FLOW>=55?1:FLOW<=45?-1:0));
   } else $('#uslabel').textContent='SPY market read';
@@ -473,12 +501,15 @@ async function loadStrategies(){
   ];
   let html=rows.map(([n,s,active,fam])=>
     `<div class="stg"><span class="dot ${active?'on':'warn'}"></span><div><div class="nm">${n}</div><div class="mut" style="font-size:10px">${s} · ${active?'ACTIVE':'idle'}</div></div>${fam?pl(fam):'<span class="pl mut">—</span>'}</div>`).join('');
-  try{ if(!DUELD) DUELD=await J('/api/duel'); }catch(e){}
+  try{ DUELD=await J('/api/duel'); }catch(e){}   // always re-fetch so an approval reflects without a hard reload
   if(DUELD&&DUELD.lineage){
     html+=Object.keys(DUELD.lineage).map(mo=>{
       const r=(DUELD.results||{})[mo]; const joined=(DUELD.joined||{})[mo]; const opt=(DUELD.options||{})[mo];
+      const stg=(DUELD.stage||{})[mo];
+      const badge=(stg==='paper'||stg==='live')?`<span class="badge b-aplus">${stg.toUpperCase()} ✓</span>`
+                 :stg?`<span class="badge b-b">${stg}</span>`:`<span class="badge b-c">awaiting</span>`;
       const stat=r?`<span class="pl ${r.total_r>=0?'up':'dn'}">${r.total_r>=0?'+':''}${r.total_r}R <span class="mut">·${r.n}</span></span>`:'<span class="pl mut">—</span>';
-      return `<div class="stg"><span class="dot ${joined?'on':'warn'}"></span><div><div class="nm">${mo.replace(/_/g,' ')}</div>`+
+      return `<div class="stg"><span class="dot ${joined?'on':'warn'}"></span><div><div class="nm">${mo.replace(/_/g,' ')} ${badge}</div>`+
         `<div class="mut" style="font-size:10px">${joined?'IN THE DUEL':'awaiting approval'}${opt?` · ⚡ ${opt}`:''}</div></div>${stat}</div>`;
     }).join('');
   }
@@ -508,30 +539,74 @@ async function loadStrategies(){
 }
 
 // Selected Contract greeks (BS) for the current pick / first signal / default asset
-let CTR={sym:'OPT-NATIVE',spot:null,side:'long',iv:0.20,tp1:null,tp2:null,stop:null}; let CTR_MANUAL=false;
+let CTR={sym:'options-native-0.1',spot:null,side:'long',iv:0.20,tp1:null,tp2:null,stop:null}; let CTR_MANUAL=false;
+let CUR_LIN='options-native-0.1'; let OPT_LINS=['options-native-0.1']; let CUR_UND='';   // approved options lineages + picked underlying
+function setCtrUnd(u){CUR_UND=u; renderNative();} window.setCtrUnd=setCtrUnd;
+const STRUCT_LBL={long_single:'naked long',credit_spread:'credit sprd',condor:'condor',condor_7dte:'7DTE condor'};
+const DROP_STRUCT=new Set(['credit_spread']);   // loser structures — flagged + ordered last (user 2026-07-09)
+function isOptLin(s){return s==='OPT-NATIVE'||OPT_LINS.includes(s);}
+async function loadCtrOptions(){   // Selected Contract = ONLY the APPROVED options lineages (user 2026-07-09);
+  let strats=[]; try{strats=(await J('/api/options_strategies')).strategies||[];}catch(e){}   // no underlyings
+  const appr=strats.filter(s=>s.approved);   // after approval an options strategy falls under this dropdown
+  OPT_LINS=appr.map(s=>s.lineage);
+  const sel=$('#ctrsel'); if(!sel)return;
+  const want=appr.map(s=>s.tier+'|'+s.lineage+'|'+s.label).join(',');   // rebuild only when the set changes (no 20s DOM churn)
+  if(sel.dataset.sig===want) return; sel.dataset.sig=want;
+  const cur=sel.value;
+  sel.innerHTML = appr.length
+    ? appr.map(s=>`<option value="${s.lineage}">T${s.tier} · ${s.label}</option>`).join('')   // tier-ordered
+    : '<option value="">no approved options strategy</option>';
+  if([...sel.options].some(o=>o.value===cur)&&cur) sel.value=cur;
+  else if(OPT_LINS.length){ sel.value=OPT_LINS[0]; if(!CTR_MANUAL){ CTR.sym=OPT_LINS[0]; renderNative(OPT_LINS[0]); } }
+}
 function pickContract(){CTR={sym:$('#ctrsel').value,spot:null,side:$('#ctrside').value,iv:0.20,tp1:null,tp2:null,stop:null};CTR_MANUAL=true;loadContract();}
 function selCtr(sym,spot,side,iv,tp1,tp2,stop){CTR={sym,spot,side,iv,tp1,tp2,stop};CTR_MANUAL=true;
   const sel=$('#ctrsel'); if(sel&&[...sel.options].some(o=>o.value===sym))sel.value=sym; if($('#ctrside'))$('#ctrside').value=side; loadContract();}
 let NAT_STRUCT='long_single';   // small-account winner by default (naked long, +0.22R hold-to-settle)
 function setNatStruct(v){NAT_STRUCT=v;renderNative();}
-async function renderNative(){
-  // OPTIONS-NATIVE signal (F86): 0DTE structure straight into the Selected Contract panel. Small
-  // account default = naked long (the one that works hold-to-settle); condor/credit_spread need a
-  // live feed to manage. Real Alpaca chain preferred; else last journaled (user 2026-07-08).
-  let d; try{d=await J('/api/options_native?structure='+NAT_STRUCT);}catch(e){setHTML('contract','<span class="dn">'+e+'</span>');return}
+async function renderNative(lineage){
+  // ANY approved OPTIONS lineage into the Selected Contract panel (user 2026-07-08): its live 0DTE
+  // contract + its OWN per-structure journal scorecard, keyed by the lineage's category id. Naked
+  // lineages (volbreak-0dte / options-0.1) show just the naked long; opt-native shows all structures.
+  if(lineage){ const nl = lineage==='OPT-NATIVE'?'options-native-0.1':lineage; if(nl!==CUR_LIN){CUR_LIN=nl; CUR_UND='';} }   // reset underlying when the lineage changes
+  const undP = CUR_UND ? '&underlying='+encodeURIComponent(CUR_UND) : '';
+  let d; try{d=await J('/api/options_native?lineage='+encodeURIComponent(CUR_LIN)+'&structure='+NAT_STRUCT+undP);}catch(e){setHTML('contract','<span class="dn">'+e+'</span>');return}
+  // underlying picker (fix: was QQQ-only) — show only when the lineage trades more than one symbol
+  const undSel=document.getElementById('ctrund');
+  if(undSel){
+    const us=d.underlyings||[d.underlying];
+    if(us.length>1){ CUR_UND = us.includes(CUR_UND)?CUR_UND:d.underlying; undSel.style.display=''; undSel.innerHTML=us.map(u=>`<option ${u===CUR_UND?'selected':''}>${u}</option>`).join(''); }
+    else { undSel.style.display='none'; }
+  }
+  const structs=d.structures||['long_single'];
+  if(!structs.includes(NAT_STRUCT)) NAT_STRUCT=structs[0];   // lineage changed -> reset to a valid structure
   const s=d.signal;
-  const pick=`<div style="margin-bottom:6px"><select onchange="setNatStruct(this.value)" style="font-size:10px;padding:1px 4px">`
-    +['long_single','condor','credit_spread','condor_7dte'].map(v=>`<option value="${v}" ${v===NAT_STRUCT?'selected':''}>${({long_single:'naked long (small acct)',condor_7dte:'7DTE condor (band ✓)'})[v]||v}</option>`).join('')+`</select></div>`;
-  // PERFORMANCE BY STRATEGY (which one is working, after each entry) — always shown
-  const perf=d.performance||{};
-  const prow=(k,lbl)=>{const p=perf[k]||{}; const sel=(k===NAT_STRUCT); const src=p.live_n?(p.backtest_n?'bt+live':'live'):'bt';
-    return `<tr style="${sel?'font-weight:600':''}"><td>${lbl}${sel?' ◄':''}</td><td class="num">${p.n||0} <span class="mut" style="font-size:8px">${src}</span></td>`
+  const hdr=`<div class="mut" style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${d.label||CUR_LIN}${d.approved?' <span class="badge b-aplus" style="text-transform:none">PAPER ✓</span>':' <span class="badge b-c" style="text-transform:none">pending</span>'}</div>`;
+  const structSel=structs.length>1
+    ? `<div style="margin-bottom:6px"><select onchange="setNatStruct(this.value)" style="font-size:10px;padding:1px 4px">`
+      +structs.map(v=>`<option value="${v}" ${v===NAT_STRUCT?'selected':''}>${({long_single:'naked long (small acct)',condor_7dte:'7DTE condor (band ✓)'})[v]||v}</option>`).join('')+`</select></div>`
+    : '';
+  // LIVE-SIGNAL bar: shows EVERY ticker firing right now (not just the selected one) so you see both
+  // QQQ+SPY fire without switching. Green + clickable to jump to that underlying (user 2026-07-09).
+  const sigSyms=[...new Set(SIGS.filter(x=>x.tradeable).map(x=>x.symbol))];
+  const lineUnds=d.underlyings||[d.underlying];
+  const curU=CUR_UND||d.underlying;
+  const sigBar=sigSyms.length
+    ? `<div style="margin-bottom:6px;font-size:10px"><span class="mut">live signal:</span> `+sigSyms.map(sy=>{const inLine=lineUnds.includes(sy);
+        return `<span class="badge b-aplus" style="margin-left:3px;${inLine?'cursor:pointer':'opacity:.6'}" ${inLine?`onclick="setCtrUnd('${sy}')"`:''} title="LIVE tradeable signal on ${sy}${inLine?' — click to view its contract':' (not in this lineage)'}">● ${sy}${sy===curU?' ◄':''}</span>`;}).join('')+`</div>`
+    : '';
+  const pick=hdr+sigBar+structSel;
+  // PER-STRATEGY JOURNAL SCORECARD for THIS lineage; if no rows yet, the backtest headline stands in
+  const perf=d.performance||{}; const hasRows=structs.some(k=>(perf[k]||{}).n);
+  const prow=(k)=>{const p=perf[k]||{}; const sel=(k===NAT_STRUCT); const src=p.live_n?(p.backtest_n?'bt+live':'live'):'bt';
+    return `<tr style="${sel?'font-weight:600':''}"><td>${STRUCT_LBL[k]||k}${DROP_STRUCT.has(k)?' <span class="dn" style="font-size:8px">DROP</span>':''}${sel?' ◄':''}</td><td class="num">${p.n||0} <span class="mut" style="font-size:8px">${p.n?src:''}</span></td>`
     +`<td class="num ${p.win_pct>=75?'up':''}">${p.win_pct!=null?p.win_pct+'%':'—'}</td>`
     +`<td class="num ${p.pf>=1.6?'up':(p.pf!=null?'dn':'')}">${p.pf!=null?p.pf:'—'}</td>`
     +`<td class="num ${p.avg_ret>0?'up':(p.avg_ret!=null?'dn':'')}">${p.avg_ret!=null?(p.avg_ret>0?'+':'')+p.avg_ret+'R':'—'}</td></tr>`;};
   const perfHTML=`<div class="mut" style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-top:9px;padding-top:6px;border-top:1px solid var(--line)">performance by strategy <span style="text-transform:none">(bt = backtest · live = per-entry)</span></div>`
-    +`<table style="width:100%;font-size:10px"><tr class="mut"><th style="text-align:left">strat</th><th class="num">n</th><th class="num">WR</th><th class="num">PF</th><th class="num">avg</th></tr>`
-    +prow('long_single','naked long')+prow('credit_spread','credit sprd')+prow('condor','condor')+prow('condor_7dte','7DTE condor')+`</table>`;
+    +(hasRows
+      ? `<table style="width:100%;font-size:10px"><tr class="mut"><th style="text-align:left">strat</th><th class="num">n</th><th class="num">WR</th><th class="num">PF</th><th class="num">avg</th></tr>`+structs.map(prow).join('')+`</table>`
+      : `<div class="mut" style="font-size:10px;padding:4px 0">no journal rows yet — <b>accrues live</b> as this lineage trades · backtest: ${d.headline||'—'}</div>`);
   if(!s){setHTML('contract',pick
     +`<div class="mut" style="padding:6px 0">no live <b>${NAT_STRUCT==='long_single'?'naked long':NAT_STRUCT}</b> data — ${d.live_chain?'chain too thin':'chain closed (check during RTH)'}</div>`
     +perfHTML);return}
@@ -543,7 +618,7 @@ async function renderNative(){
     ? `<div><div class="v dn">$${s.debit}</div><div class="l">debit (cost)</div></div><div><div class="v dn">$${s.max_loss}</div><div class="l">max loss</div></div><div><div class="v up">${s.max_profit||'—'}</div><div class="l">max profit</div></div>`
     : `<div><div class="v up">$${s.credit}</div><div class="l">credit</div></div><div><div class="v dn">$${s.max_loss}</div><div class="l">max loss</div></div><div><div class="v">${s.ret_at_max}R</div><div class="l">ret@max</div></div>`;
   setHTML('contract', pick
-    +`<div class="mut" style="font-size:10px;margin-bottom:6px"><b>${s.underlying||'QQQ'}</b> · ${s.lineage} · <b>${s.kind}</b> · 0DTE @ ${s.spot} · priced ${s.priced_from||'—'}</div>`
+    +`<div class="mut" style="font-size:10px;margin-bottom:6px">${SIGS.some(x=>x.tradeable&&x.symbol===(s.underlying||'QQQ'))?'<span class="dot on" title="LIVE tradeable signal on this ticker right now"></span> <b class="up">SIGNAL</b> · ':''}<b>${s.underlying||'QQQ'}</b> · ${s.lineage} · <b>${s.kind}</b> · ${s.is_0dte===false?(d.structure==='condor_7dte'?'7DTE':'multi-DTE'):'0DTE'} @ ${s.spot} · priced ${s.priced_from||'—'}</div>`
     +legHTML
     +`<div class="bid3" style="margin-top:8px">${money}</div>`
     +`<div class="mut" style="font-size:10px;margin-top:7px">breakevens ${s.breakevens.join(' / ')} · IV ${(s.iv*100).toFixed(0)}% · BP ~$${Math.round((s.max_loss||0)*100)}</div>`
@@ -551,7 +626,7 @@ async function renderNative(){
 }
 async function loadContract(){
   let {sym,spot,side,iv,tp1,tp2,stop}=CTR;
-  if(sym==='OPT-NATIVE'){return renderNative();}
+  if(isOptLin(sym)){return renderNative(sym);}   // any approved options lineage -> its contract + scorecard
   if(spot==null){ $('#contract').innerHTML='<div class="mut">loading '+sym+'…</div>';
     try{const d=await J('/api/asset_levels?symbol='+sym); if(d&&d.entry){spot=d.entry; iv=d.iv_est||iv; side=d.side||side; tp1=d.tp1; tp2=d.tp2; stop=d.stop;}}catch(e){} }
   if(spot==null||!isFinite(+spot)){$('#contract').innerHTML='<div class="mut">pick a signal or asset to price a contract</div>';return}
@@ -572,7 +647,9 @@ async function loadContract(){
 
 let SIGS=[]; const SEEN=new Set(); let SEEN_PRIMED=false; const ALERTS=[];
 const sigKey=s=>`${s.symbol}|${s.family}|${s.session}|${s.side}|${s.entry}`;
-function armAlerts(){ if($('#alerts').checked && 'Notification' in window && Notification.permission==='default') Notification.requestPermission(); }
+// checkbox renamed alerton (dup-id fix 2026-07-09): it shared the 'alerts' id with the panel div, so
+// the selector grabbed the CHECKBOX and renderAlerts wrote history into it — panel stuck at "no alerts yet"
+function armAlerts(){ if($('#alerton').checked && 'Notification' in window && Notification.permission==='default') Notification.requestPermission(); }
 function beep(){ try{const a=new(window.AudioContext||window.webkitAudioContext)();const o=a.createOscillator(),g=a.createGain();
   o.connect(g);g.connect(a.destination);o.type='sine';o.frequency.value=880;g.gain.value=0.06;o.start();o.stop(a.currentTime+0.18);}catch(e){} }
 function pushAlert(txt,cls){ALERTS.unshift({t:new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour12:false}),txt,cls}); ALERTS.splice(12); renderAlerts();}
@@ -583,7 +660,7 @@ function notifyNew(sigs){
   if(!SEEN_PRIMED){SEEN_PRIMED=true;return;}
   newOnes.slice(0,4).forEach(s=>{const opt=s.options?s.options.recommended.toUpperCase():'';
     pushAlert(`${s.symbol} ${s.side.toUpperCase()} ${s.grade} → ${opt||'futures'} @ ${s.entry}`, s.grade==='A+'?'up':s.grade==='B'?'yel':'blu');});
-  if(newOnes.length && $('#alerts')&&$('#alerts').checked){beep();
+  if(newOnes.length && $('#alerton')&&$('#alerton').checked){beep();
     newOnes.slice(0,2).forEach(s=>{if('Notification' in window && Notification.permission==='granted') new Notification(`HIGHSTRIKE ${s.symbol} ${s.family}`,{body:`${s.side.toUpperCase()} @ ${s.entry} · ${s.grade}`});});}
 }
 function gbadge(g){const map={'A+':'b-aplus','A':'b-a','B':'b-b','C':'b-c'};return `<span class="badge ${map[g]||'b-c'}">${g||'?'}</span>`}
@@ -594,7 +671,7 @@ async function scanSignals(force){
     const sigs=(d.signals||[]).filter(s=>!s.error); SIGS=sigs;
     if(d.watchlist&&d.watchlist.length) WATCHLIST=d.watchlist;
     notifyNew(sigs); fillSignalPicker();;
-    const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL && CTR.sym!=='OPT-NATIVE'){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
+    const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL && !isOptLin(CTR.sym)){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
     const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
     $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
     if(!sigs.length){$('#signals').innerHTML='<div class="mut">No active setups on the latest bars. (No signal = nothing to trade.)</div>';}
@@ -611,7 +688,7 @@ async function scanSignals(force){
           `<td class="num">${s.entry}</td><td class="num ${nowc}">${s.last_price}</td><td class="num">${s.stop}</td><td class="num">${s.tp1}</td><td class="num">${s.tp2}</td>`+
           `<td class="num">${s.rr}${s.heads&&s.heads.expected_r!==undefined?' <span class="mut" style="cursor:help" title="'+headsT(s.heads)+'">eR'+s.heads.expected_r+'</span>':''}</td>`+
           `<td class="num"${s.ml_explain?' title="'+mlxT(s.ml_explain)+'"':''}>${s.confidence}${fl}${s.ml_explain?' <span class="mut" style="cursor:help;font-size:9px">why</span>':''}</td>`+
-          `<td>${s.ai_decision?`<span class="badge ${s.ai_decision.verdict==='approved_high_ai_confidence'?'b-aplus':s.ai_decision.verdict==='risk_blocked'?'b-c':'b-b'}" title="${(s.ai_decision.reasons||[]).join(' · ').replace(/"/g,'&quot;')}">${s.ai_decision.verdict==='approved_high_ai_confidence'?'HIGH':s.ai_decision.verdict==='risk_blocked'?'RISK✗':'low'}</span>`:'<span class="mut">—</span>'}</td>`+
+          `<td>${s.ai_decision?`<span class="badge ${s.ai_decision.verdict==='approved_high_ai_confidence'?'b-aplus':s.ai_decision.verdict==='rules_only'?'b-c':s.ai_decision.verdict==='risk_blocked'?'b-c':'b-b'}" title="${(s.ai_decision.reasons||[]).join(' · ').replace(/"/g,'&quot;')}">${s.ai_decision.verdict==='approved_high_ai_confidence'?'HIGH':s.ai_decision.verdict==='rules_only'?'RULES':s.ai_decision.verdict==='risk_blocked'?'RISK✗':'low'}</span>`:'<span class="mut">—</span>'}</td>`+
           `<td class="num ${s.skip_reco?'dn':(s.grade==='A+'?'up':'mut')}">${s.skip_reco?'<b>SKIP</b>':('<b>'+s.sized_qty+'</b>')}</td>`+
           `<td class="num mut">${s.kelly&&s.kelly.quarter_kelly!==null&&s.kelly&&s.kelly.quarter_kelly!==undefined?s.kelly.quarter_kelly+'x':'—'}</td>`+
           `<td style="font-size:10.5px">${opt}</td>`+

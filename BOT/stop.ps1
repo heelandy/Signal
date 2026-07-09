@@ -1,12 +1,21 @@
 # HIGHSTRIKE signal engine - STOP
-#   .\stop.ps1            # stop the server on :8000 (uses config\server.pid, falls back to the port)
+#   .\stop.ps1             # stop EVERYTHING: the watchdog guard AND the server on :8000
+#   .\stop.ps1 -KeepGuard  # stop only the server; the watchdog relaunches it in ~30s (= easy RESTART)
 param(
-  [int]$Port = 8000
+  [int]$Port = 8000,
+  [switch]$KeepGuard
 )
 $ErrorActionPreference = "SilentlyContinue"
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pidFile = Join-Path $here "config\server.pid"
 $stopped = @()
+
+# 0) the watchdog FIRST - otherwise it resurrects the server ~30s after we stop it
+if (-not $KeepGuard) {
+  Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*-File*watchdog.ps1*' -and $_.ProcessId -ne $PID } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "Stopped watchdog (PID $($_.ProcessId))." -ForegroundColor Green }
+}
 
 # 1) by recorded PID
 if (Test-Path $pidFile) {

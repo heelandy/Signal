@@ -119,6 +119,15 @@ STRATEGY_MODULES = [
               "the ~0.03%/night edge). Isolated from volbreak so the two never share a book. Ladder "
               "lineage: overnight-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
+    {"id": "futures_tsmom", "asset_class": "futures", "style": "swing_trading",
+     "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "tsmom-fut-0.1",
+     "notes": "TIME-SERIES MOMENTUM (Moskowitz-Ooi-Pedersen, JFE 2012; research/tsmom.py, 2026-07-09): "
+              "sign of the trailing 12-mo (skip last mo) return -> position for the next month. "
+              "LONG-ONLY on NQ (the short side loses on secularly-rising indices, which broke the "
+              "2-sided gauntlet). Long NQ 12mo: expR +0.81, PF 1.58, 81% of years+, OOS +1.11%, CI+. "
+              "OUTRIGHT futures (shares book); a slow trend overlay complementing the intraday/vol "
+              "strategies as ORB fades. Ladder lineage: tsmom-fut-0.1",
+     "approval_requirements": "full AITP ladder from research"},
     # ── BOSS WORKERS (docs/BOSS_WORKERS_PLAN.md, discovery rounds F80 2026-07-06) — the
     # high-WR per-symbol specs (band: WR 75-85 · PF >= 1.7 · DD <= 10R OOS) under the Main Boss ──
     {"id": "worker_q_qqq", "asset_class": "equities", "style": "day_trading",

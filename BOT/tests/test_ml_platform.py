@@ -348,7 +348,11 @@ def test_ensemble_verdicts():
     hi = decide_ensemble(True, ml_p=0.62, heads={"expected_r": 0.4, "no_trade": 0.2},
                          similarity={"cluster": 1, "win_rate": 0.5, "avg_r": 0.3}, grade="A+")
     assert hi["verdict"] == "approved_high_ai_confidence" and hi["reasons"]
-    assert decide_ensemble(True)["verdict"] == "approved_low_ai_confidence"
+    # no ML champion -> RULES-ONLY (not "AI low"); a grade-A+ setup alone must NOT read low (user 2026-07-09)
+    assert decide_ensemble(True)["verdict"] == "rules_only"
+    assert decide_ensemble(True, grade="A+")["verdict"] == "rules_only"
+    # ML actually voting down IS a low read
+    assert decide_ensemble(True, ml_p=0.42, heads={"no_trade": 0.8})["verdict"] == "approved_low_ai_confidence"
 
 
 # ---- L2 synthesis (in-memory frame -> features, raw never persisted) ----

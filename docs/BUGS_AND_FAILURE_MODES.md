@@ -84,6 +84,32 @@ the checklist to run against before trusting any result or shipping any change.
 | R7 ⚠️ | Re-place paper order on restart | duplicate order after a restart | placed-set not persisted | `_persist_runtime()` after each placement; dedup key |
 | R8 ⚠️ | Folder-scan cap truncation | a 2-year intake lands only 50 sessions | `register` broke at 50 files | cap raised to 5000 + fingerprint dedup |
 
+## 7. UI / API SERVING plane (dashboard review, 2026-07-09)
+
+| # | Failure | Symptom | Cause | Guard / fix |
+|---|---|---|---|---|
+| U1 ✅ | **`latest_price` NameError (whole endpoint aborts)** | Selected Contract shows "chain closed" ALWAYS (even RTH); options-native paper loop never enters/manages a trade | `latest_price` is imported INSIDE some functions but was USED without importing in `options_native_feed` + `_options_native_live` → NameError → the function's `try/except` swallows it before any pricing runs | import `latest_price` locally in both; **scanned every endpoint (`test_serving_imports`) — the whole class is cleared** |
+| U2 ✅ | **Live-vs-backtest "insufficient sample" with 18 trades** | verdict stuck at "insufficient sample" though 18 taken+closed exist — HID that live is net-negative | `target = by_grade["A"] or overall` judged the tiny grade-A subset whenever ANY grade-A trade existed | judge grade-A only when its own `n >= MIN_SAMPLE`, else the full book; surfaces the honest verdict |
+| U3 ✅ | **Selected Contract "only QQQ"** | a multi-symbol options lineage (volbreak-0dte QQQ/SPY) could only price QQQ | the feed used `underlyings[0]`; no picker | `?underlying=` param + a `#ctrund` picker shown when the lineage trades >1 symbol; feed labels the picked underlying (was defaulting to QQQ) |
+| U4 ✅ | **Approval doesn't reflect on the dashboard** | approve a lineage → nothing moves in Bot-Strategies | `loadStrategies` cached `/api/duel` (`if(!DUELD)`) and never re-fetched | always re-fetch; `test_lineage_duel_sync` locks the lineage↔duel↔render chain |
+| U5 ✅ | **Options-data merge/scale (MBP-10 API)** | `l2_depth_imb` ~3.5e6 (should be ∈[-1,1]); one feature column with two meanings | Databento sizes are UNSIGNED (`bid_sz-ask_sz` underflows to ~4e9); `l2_quote_rate` written by both flow AND book synthesis | cast sizes to float64; drop `l2_quote_rate` from the depth merge; crossed-book (`ask<bid`) guard |
+
+**Full panel sweep 2026-07-09** (every Training-Lab + dashboard panel run independently; regression-locked in `BOT/tests/test_review_bugs_2.py`, 10 tests):
+
+| # | Failure | Symptom | Cause | Guard / fix |
+|---|---|---|---|---|
+| T1 ✅ | **PIT features never reached the journal (learning starved)** | ALL 30 journal rows had every feature NaN → `trainable_with_features: 0` forever; "the journal IS the dataset" fed nothing | `families.scan` computes `pit_features` per candidate and `live.py` even uses it locally, but the PROPOSAL dict `scan_watchlist` returns never copied the field — the autotracker/boss stored `s.get("pit_features")` = None on every decision | one-line plumb: the proposal now carries `pit_features`; features accrue on every new tracked signal (old rows stay NaN — their snapshot moment has passed) |
+| T2 ✅ | **"Latest training run" always empty** | zoo charts/gates/buckets blank though real ml/nn runs exist | `phase78` re-saves itself hourly → newest mtime → sorted first, but it has `created_at: null` and no zoo — the panel rendered IT by default | `list_reports` drops un-timestamped STUDY reports (they have their own panels) |
+| T3 ✅ | **Strategy duel frozen on month-old data** | equity duelists armed on 2026-06-08 bars; `max_days=1` volbreak positions "open" for a month; duel never advanced | duel frames came from the curated hs_db snapshot (equities end 2026-06-08) with no live extension | `_live_daily_frame`: hs_db + live daily bars (completed only — today's forming bar excluded), indicators recomputed on the merged frame |
+| T4 ✅ | Orphaned duel state after the volbreak split | 3 phantom "open" positions + 1 invisible closed trade under `daily_volbreak` (module no longer exists) | rename/split left state rows with no owner; the UI iterates DUELISTS so they never showed | `_migrate` on every load: closed rows remap by symbol into the split books; orphan armed markers dropped |
+| T5 ✅ | Stale volbreak arm books a bogus fill | a 1-day arm left open across a data gap would "resolve" against a much-later bar's bands | `_resolve` walks only the newest bar; nothing checked the gap | stale-arm guard: volbreak arms >4 days old are dropped as scratch |
+| T6 ✅ | Blanket "IN THE DUEL" badge (training lab) | every research-approved lineage looked equally live | the lab's duel table ignored the `stage` map (dashboard was already fixed) | shows the highest APPROVED stage (`PAPER ✓`) per lineage |
+| D1 ✅ | Vol-Expansion always "narrow OR" | Underlying Signals showed narrow OR on every signal, wide or not | UI read `s.vol_exp`; the signal field is `vol_expansion` — undefined is falsy | field name fixed |
+| D2 ✅ | **Alerts panel stuck at "no alerts yet"** | alert history never appeared in the panel (beeps/toasts fine) | the "alert on new" CHECKBOX and the panel DIV shared `id="alerts"` — the selector returned the checkbox, so `renderAlerts` wrote history into the checkbox's innerHTML | checkbox renamed `alerton`; ids unique (regression-locked) |
+| D3 ✅ | Equity curve flat + Attribution empty next to a 30-trade Performance panel | `/api/equity` = `[25000]`, `/api/attribution` = `{}` while `/api/performance` showed 30 trades | equity/attribution read the REPLAY journal, which the live scan never writes (`persist=False`); performance reads the tracker | both endpoints now prefer the tracked live record (same population as `/api/performance`), replay journal as fallback |
+
+**OPS addendum (same sweep):** the worker crashing with `BOT_CONT_TRAINING=1` (continuous training kills the scan loop → snapshot frozen, scanning=True stale) is mitigated by scan-only + the **watchdog** (`BOT/watchdog.ps1`, health-check every 30s → relaunch via `start.ps1`; single-instance mutex; auto-start at logon via `install_autostart.ps1` → Startup-folder VBS). `stop.ps1` kills the watchdog FIRST (else it resurrects the server ~30s later); `stop.ps1 -KeepGuard` = deliberate restart-through-watchdog.
+
 ## How to use this
 Before trusting a result: check the relevant plane's rows. Before shipping a change: does it touch
 a ✅ guard? keep the guard. Most production bugs here were **one source of truth drifting into two**

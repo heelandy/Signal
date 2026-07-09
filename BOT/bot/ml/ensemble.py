@@ -62,8 +62,18 @@ def decide_ensemble(risk_approved: bool, ml_p: float | None = None,
     if grade in ("A+", "A"):
         votes_up += 1; reasons.append(f"grade {grade}")
     score = votes_up - votes_dn
-    verdict = "approved_high_ai_confidence" if (score >= 2 and votes_dn == 0) else \
-              "approved_low_ai_confidence"
+    # No ML champion passed the gates yet, so nothing but the grade votes -> label it RULES-ONLY, not
+    # "AI low" (user 2026-07-09: a grade-A+ setup read "LOW" only because no ML model exists to add a
+    # confirming vote, which is misleading — "low" implied the AI disliked it).
+    ml_voted = (ml_p is not None or exp_r is not None or nt is not None or nn_p is not None
+                or (similarity is not None and similarity.get("avg_r") is not None))
+    if not ml_voted:
+        verdict = "rules_only"
+        reasons.append("no ML champion serving — rules/grade only (not an AI 'low' read)")
+    elif score >= 2 and votes_dn == 0:
+        verdict = "approved_high_ai_confidence"
+    else:
+        verdict = "approved_low_ai_confidence"
     return {"verdict": verdict, "score": score, "reasons": reasons}
 
 
@@ -75,6 +85,8 @@ if __name__ == "__main__":
     assert lo["verdict"] == "approved_low_ai_confidence" and lo["score"] < 0, lo
     rb = decide_ensemble(False)
     assert rb["verdict"] == "risk_blocked"
-    none = decide_ensemble(True)                       # no models at all -> low confidence, no crash
-    assert none["verdict"] == "approved_low_ai_confidence"
+    none = decide_ensemble(True)                       # no models at all -> RULES-ONLY (not "AI low")
+    assert none["verdict"] == "rules_only", none
+    gr = decide_ensemble(True, grade="A+")             # grade A+ but no ML champion -> rules_only, not "low"
+    assert gr["verdict"] == "rules_only", gr
     print("ensemble OK -", hi["verdict"], "|", ", ".join(hi["reasons"][:3]))

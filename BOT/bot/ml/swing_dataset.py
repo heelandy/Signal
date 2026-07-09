@@ -45,7 +45,13 @@ def _daily_frame(sym: str, tf: str) -> pd.DataFrame:
                     "volume": "sum"}).dropna(subset=["open"]).reset_index())
     for c in ("open", "high", "low", "close"):
         b[c] = b[c].astype(float)
-    # indicators the PIT snapshot expects (ATR / EMAs / a session-less 'vwap' = typical price MA)
+    return add_daily_indicators(b)
+
+
+def add_daily_indicators(b: pd.DataFrame) -> pd.DataFrame:
+    """Indicators the PIT snapshot expects (ATR / EMAs / a session-less 'vwap' = typical price MA).
+    Extracted so callers that EXTEND the stored frame with live daily bars (bot.strategy.duel)
+    recompute the block on the merged frame instead of duplicating it."""
     h, l, cl = b["high"], b["low"], b["close"]
     tr = pd.concat([h - l, (h - cl.shift()).abs(), (l - cl.shift()).abs()], axis=1).max(axis=1)
     b["atr14"] = tr.ewm(alpha=1 / 14, adjust=False).mean()

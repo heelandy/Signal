@@ -288,6 +288,10 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats, "iv_est": iv_est,
                 "heads": heads_out or None, "ai_decision": ai, "ml_explain": ml_explain,
                 "nn_seq": s.get("nn_seq"), "similarity": sim_out,
+                # PIT SNAPSHOT PLUMBING (journal-feed fix 2026-07-09): the family candidate carries
+                # pit_features but this proposal dict never copied it, so the autotracker/boss stored
+                # null and EVERY journal row was untrainable (trainable_with_features stuck at 0).
+                "pit_features": s.get("pit_features"),
                 # KELLY (advisory, quarter-Kelly of the risk budget): P(win) from the champion/prior,
                 # payoff b from the symbol's backtest matrix when available (fallback 4R-cap profile)
                 "kelly": _kelly_advice(sym, conf),

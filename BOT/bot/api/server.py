@@ -397,6 +397,7 @@ def _options_native_live():
             return
         import pandas as pd
         from bot.market_data.options_data import alpaca_chain_0dte
+        from bot.market_data.providers import latest_price   # was NameError -> loop never entered/managed (fix 2026-07-09)
         now = pd.Timestamp.now(tz="America/New_York")
         if now.dayofweek >= 5:
             return
@@ -856,40 +857,77 @@ def alerts_feed(n: int = 30):
             "webhook_configured": bool((_get("ALERT_WEBHOOK_URL") or "").strip())}
 
 
+@app.get("/api/options_strategies")
+def options_strategies_list():
+    """The APPROVED options lineages to list on the Selected-Contract dropdown (user 2026-07-08),
+    each keyed by its category id + paper-approval state so the dropdown is data-driven."""
+    from bot.options import native
+    return {"strategies": native.approved_options_lineages()}
+
+
 @app.get("/api/options_native")
-def options_native_feed(structure: str = "long_single"):
-    """OPTIONS-NATIVE (F86) lineage: the sealed 0DTE VRP condor journal + its live scorecard.
-    Real-premium rows only accrue when the OPRA chain covers the session (a BS proxy is advisory —
-    validated-insufficient for 0DTE skew). Approve options-native-0.1 on /training to start it."""
+def options_native_feed(structure: str = "long_single", lineage: str = "", underlying: str = ""):
+    """Any approved OPTIONS lineage's live 0DTE contract + its PER-LINEAGE journal scorecard
+    (user 2026-07-08). `lineage` defaults to options-native (VRP); naked lineages (volbreak-0dte /
+    options-0.1) force the long_single structure and price their own underlying. Real-premium rows
+    accrue as each lineage trades; until then the backtest headline stands in."""
     from bot.options import native
     from bot.approval import paper_approved
-    # LIVE options-native signal off the real Alpaca 0DTE chain (F86 feed); fall back to the last
-    # journaled position if the live chain is unavailable (after hours / no entitlement).
-    live = None
+    from bot.market_data.providers import latest_price   # was NameError here -> spot None -> "chain closed" always (fix 2026-07-09)
+    lin = lineage or native.LINEAGE
+    meta = native.OPTIONS_LINEAGES.get(lin, {})
+    if meta.get("kind") == "naked":                       # naked-only lineages have one structure
+        structure = "long_single"
+    unders = meta.get("underlyings") or ["QQQ"]
+    und = underlying if underlying in unders else unders[0]
+    dte = 7 if structure == "condor_7dte" else meta.get("dte", 0)   # 7DTE condor / 21DTE swing / else 0DTE
+    spot, live = None, None
     try:
-        spot = (latest_price("QQQ") or {}).get("price")
-        if not spot:                                  # after hours: last bar close so it still prices
+        spot = (latest_price(und) or {}).get("price")
+        if not spot:                                      # after hours: last bar close so it still prices
             try:
                 import pandas as _pd
-                _b = _pd.read_parquet(_on_repo_data() / "qqq_continuous_1m.parquet", columns=["close"])
+                _b = _pd.read_parquet(_on_repo_data() / f"{und.lower()}_continuous_1m.parquet", columns=["close"])
                 spot = float(_b["close"].iloc[-1])
             except Exception:
                 spot = None
-        dte = 7 if structure == "condor_7dte" else 0        # F89: the 7DTE condor pulls the week-out chain
-        live = native.live_signal_from_alpaca("QQQ", spot=float(spot) if spot else None,
+        live = native.live_signal_from_alpaca(und, spot=float(spot) if spot else None,
                                               structure=structure, dte=dte)
         if live.get("error"):
             live = None
     except Exception:
         live = None
-    return {"lineage": native.LINEAGE, "approved": paper_approved(native.LINEAGE),
-            "structure": structure,
+    # BS FALLBACK (user 2026-07-09: "we have the data live already"): if the live Alpaca chain is
+    # unavailable (after hours / no entitlement) but we have the underlying spot, price an ESTIMATED
+    # contract off Black-Scholes + the F85-calibrated IV so the panel POPULATES instead of "chain
+    # closed". Advisory only — flagged priced_from='bs_estimate', never journaled (BS can't price
+    # 0DTE skew, O2). Real Alpaca rows still win when the chain is live.
+    if live is None and spot:
+        try:
+            from bot.options.pricing import default_iv
+            mins = native._mins_to_close() if dte == 0 else dte * 390.0
+            q = native.bs_quote(float(spot), mins, default_iv(dte))
+            pos = native.build(float(spot), float(spot), q, native.strikes_around(float(spot)),
+                               spec=dict(native.SPEC, structure=structure))
+            if pos:
+                est = native.describe(pos, float(spot), mins_to_close=mins)
+                est.update({"priced_from": "bs_estimate", "lineage": lin, "underlying": und,
+                            "is_0dte": dte == 0, "spot": round(float(spot), 2)})
+                live = est
+        except Exception:
+            live = None
+    if live:
+        live["underlying"] = und          # label the PICKED underlying (describe/build default to QQQ)
+    return {"lineage": lin, "label": meta.get("label", lin), "approved": paper_approved(lin),
+            "structure": structure, "underlying": und,
+            "underlyings": unders, "structures": list(meta.get("structures", native.STRUCTURES)),
+            "headline": meta.get("headline", ""),
             "target": {"win_pct": [75, 85], "pf": [1.6, 1.8], "maxDD_pct": 11, "signals_per_session": [1, 2]},
-            "summary": native.journal_summary(),
+            "summary": native.journal_summary(lin),
             "signal": live,                               # REAL Alpaca only; None -> panel shows EMPTY
             "live_chain": bool(live),
-            "performance": native.performance_by_structure(),   # which strategy is working, per entry
-            "rows": sorted(native.load_journal(), key=lambda r: (r.get("date"), r.get("slot")))[-60:]}
+            "performance": native.performance_by_structure(lin),   # which structure is working, per entry
+            "rows": sorted(native.load_journal(lin), key=lambda r: (r.get("date"), r.get("slot")))[-60:]}
 
 
 @app.get("/api/journal/integrity")
@@ -908,13 +946,36 @@ def study():
     return _study()
 
 
+def _tracked_closed():
+    """The tracked live record (same closed-decision population as /api/performance) — the
+    attribution/equity panels were reading the REPLAY journal, which live/paper never writes
+    (scan persist=False), so they sat empty next to a Performance panel showing 30 trades."""
+    from bot.tracker import list_decisions
+    return [x for x in list_decisions(3000)
+            if x["taken"] and x.get("result_r") is not None and x["outcome"] != "open"]
+
+
 @app.get("/api/attribution")
 def attribution():
+    d = _tracked_closed()
+    if d:
+        from bot.performance import _bucket
+        rows = [{"net_r": float(x["result_r"]), "strategy_version": x.get("family") or "?",
+                 "symbol": x["symbol"], "side": x["side"], "exit_reason": x.get("outcome") or "?"}
+                for x in d]
+        return {dim: _bucket(rows, key) for dim, key in
+                [("by_strategy", "strategy_version"), ("by_symbol", "symbol"),
+                 ("by_side", "side"), ("by_exit", "exit_reason")]}
     return perf.attribution(_journal)
 
 
 @app.get("/api/equity")
 def equity():
+    d = sorted(_tracked_closed(), key=lambda x: x.get("decided_at") or "")
+    if d:
+        import numpy as np
+        cum = 25_000.0 + np.cumsum([float(x["result_r"]) * 100.0 for x in d])
+        return {"curve": [25000.0] + [round(float(v), 2) for v in cum]}
     return {"curve": [round(float(x), 2) for x in perf.equity_curve(_journal).tolist()]}
 
 
@@ -1154,7 +1215,8 @@ def candidates(limit: int = 50):
     out = []
     for x in list_decisions(limit):
         risk = abs((x.get("entry") or 0) - (x.get("stop") or 0))
-        rr = round(abs((x.get("tp2") or 0) - (x.get("entry") or 0)) / risk, 1) if risk else None
+        tp2 = x.get("tp2")   # single-target lineages (worker/trail) have tp2=None -> R:R is n/a, not entry/risk
+        rr = round(abs(tp2 - x["entry"]) / risk, 1) if (risk and tp2 is not None and x.get("entry")) else None
         out.append({"symbol": x["symbol"], "side": x["side"], "setup": x.get("family"), "entry": x["entry"],
                     "expected_r": rr, "generated_at": x.get("signal_at") or x.get("decided_at"),
                     "outcome": x.get("outcome")})

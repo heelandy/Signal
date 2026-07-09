@@ -34,8 +34,9 @@ DUELISTS = {
     "futures_swing": ("swing-fut-1d-0.1", ["NQ"]),
     "futures_volbreak": ("volbreak-fut-0.1", ["NQ"]),          # OUTRIGHT futures (shares book)
     "equities_volbreak": ("volbreak-0dte-0.1", ["QQQ", "SPY"]),  # 0DTE naked options book
-    "equities_connors_rsi2": ("connors-1d-0.1", ["QQQ", "SPY"]),
-    "equities_overnight": ("overnight-1d-0.1", ["QQQ", "SPY"]),
+    "equities_overnight": ("overnight-1d-0.1", ["QQQ", "SPY"]),   # shares book (night effect)
+    "futures_tsmom": ("tsmom-fut-0.1", ["NQ"]),                   # 12-mo trend, long-only (shares book)
+    # equities_connors_rsi2 DROPPED 2026-07-09 (weak — "no structure passed, underlying only")
 }
 
 # GATE-PASSED options expression per module (user 2026-07-06: "they will show the information
@@ -46,7 +47,7 @@ OPTIONS_EXPRESSION = {
     "equities_volbreak": "0DTE NAKED — QQQ +1.01/prem PF 3.30 9/9 · SPY +0.63 PF 2.51 9/9",
     "equities_swing": "21DTE NAKED +0.311 & DEBIT +0.236 (QQQ, both 6/6 yrs)",
     "futures_swing": "no options gate run (futures options untested)",
-    "equities_connors_rsi2": "no structure passed — underlying only",
+    "futures_tsmom": "OUTRIGHT FUTURES — NQ 12-mo trend long-only PF 1.58, 81% of years (tsmom.py)",
     "equities_overnight": "SHARES only — options frictions (spread + overnight theta) exceed the ~0.03%/night edge",
 }
 
@@ -54,10 +55,27 @@ OPTIONS_EXPRESSION = {
 def _load() -> dict:
     if STATE.exists():
         try:
-            return json.loads(STATE.read_text(encoding="utf-8"))
+            return _migrate(json.loads(STATE.read_text(encoding="utf-8")))
         except Exception:
             pass
     return {"open": [], "closed": [], "last_day": None}
+
+
+# volbreak was SPLIT by asset (2026-07-09) — remap orphaned daily_volbreak history to the book
+# that owns its symbol so the trades stay visible; futures symbols -> the outright-futures book.
+_VB_SPLIT = {"NQ": "futures_volbreak", "ES": "futures_volbreak", "GC": "futures_volbreak"}
+
+
+def _migrate(st: dict) -> dict:
+    """State hygiene on every load: (a) closed trades of RENAMED modules remap into the current
+    book (daily_volbreak split); (b) open positions of modules no longer in DUELISTS are armed
+    markers with no owner — drop them (they'd sit 'open' forever and skew the open count)."""
+    for t in st.get("closed", []):
+        m = t.get("module")
+        if m not in DUELISTS and "volbreak" in str(m):
+            t["module"] = _VB_SPLIT.get(t.get("symbol"), "equities_volbreak")
+    st["open"] = [p for p in st.get("open", []) if p.get("module") in DUELISTS]
+    return st
 
 
 def _save(d: dict) -> None:
@@ -122,9 +140,45 @@ def _entries_for(module: str, sym: str, b: pd.DataFrame) -> list[dict]:
         # validated conditioning. Risk-normalised by ATR so R is comparable to the other duelists.
         if i >= 1 and c[i] < c[i - 1]:
             out.append({"kind": "overnight", "entry": c[i], "sign": 1, "risk": atr, "max_days": 1})
+    elif module == "futures_tsmom":
+        # 12-mo time-series momentum, LONG-ONLY (short side loses on secularly-rising indices). Enter
+        # long when the trailing 12mo (skip last mo) return is positive; hold ~1 month (21 trading days).
+        if i >= 252:
+            past = c[i - 21] / c[i - 252] - 1.0
+            if past > 0:
+                out.append({"kind": "tsmom", "entry": c[i], "sign": 1, "risk": STOP_ATR * atr, "max_days": 21})
     for t in out:
         t.update({"module": module, "symbol": sym, "opened": day, "days_held": 0})
     return out
+
+
+def _live_daily_frame(sym: str) -> pd.DataFrame:
+    """hs_db daily frame EXTENDED with live daily bars. The stored snapshot is curated and can
+    lag weeks (equities ended 2026-06-08) — without the extension the duel armed positions on
+    month-old bars and 1-day volbreak markers could never resolve (frozen 'open' forever)."""
+    from bot.ml.swing_dataset import _daily_frame, add_daily_indicators
+    b = _daily_frame(sym, "1d")
+    try:
+        from bot.market_data.providers import get_bars
+        live = get_bars(sym, tf="1d", period="3mo")
+        if live is not None and len(live):
+            live = live.copy()
+            live["ts"] = pd.to_datetime(live["ts_et"] if "ts_et" in live.columns else live["ts"],
+                                        utc=True)     # providers frame carries ts_et, not ts
+            # COMPLETED bars only: today's forming daily bar would resolve 1-day positions early
+            today_et = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
+            live = live[live["ts"].dt.strftime("%Y-%m-%d") < today_et]
+            cols = [c for c in ("ts", "open", "high", "low", "close", "volume") if c in live.columns]
+            add = live[live["ts"] > b["ts"].max()][cols]
+            if len(add):
+                base = b[[c for c in ("ts", "open", "high", "low", "close", "volume") if c in b.columns]]
+                b = pd.concat([base, add], ignore_index=True)
+                for c in ("open", "high", "low", "close"):
+                    b[c] = b[c].astype(float)
+                b = add_daily_indicators(b)
+    except Exception:
+        pass                                          # live feed down -> stored frame still works
+    return b
 
 
 def _resolve(pos: dict, bar: pd.Series, b: pd.DataFrame) -> float | None:
@@ -147,6 +201,8 @@ def _resolve(pos: dict, bar: pd.Series, b: pd.DataFrame) -> float | None:
     sign, entry, risk = pos["sign"], pos["entry"], pos["risk"]
     if pos.get("kind") == "overnight":                # MOC in at prev close -> MOO out at this open
         return sign * (o - entry) / risk if risk > 0 else 0.0
+    if pos.get("kind") == "tsmom":                    # long-only 12-mo trend: hold to max_days, exit at close
+        return sign * (c - entry) / risk if (pos["days_held"] + 1 >= pos["max_days"] and risk > 0) else None
     if pos.get("kind") == "connors":
         rsi = _rsi2(b["close"]).iloc[-1]
         if (sign == 1 and rsi > 90) or (sign == -1 and rsi < 10) or \
@@ -170,12 +226,11 @@ def run_duel_once(frames: dict | None = None) -> dict:
     (tests) = {sym: daily frame}; live loads bot.ml.swing_dataset._daily_frame."""
     st = _load()
     if frames is None:
-        from bot.ml.swing_dataset import _daily_frame
         syms = sorted({s for _, (v, ss) in DUELISTS.items() for s in ss})
         frames = {}
         for s in syms:
             try:
-                frames[s] = _daily_frame(s, "1d")
+                frames[s] = _live_daily_frame(s)
             except Exception:
                 continue
     if not frames:
@@ -189,6 +244,12 @@ def run_duel_once(frames: dict | None = None) -> dict:
         b = frames.get(pos["symbol"])
         if b is None or str(b["ts"].iloc[-1])[:10] <= pos.get("last_seen", pos["opened"]):
             still_open.append(pos)
+            continue
+        # STALE-ARM GUARD (2026-07-09): a 1-day volbreak marker resolves on the NEXT bar after it
+        # armed; if a data gap left it open >4 days the current bar is the wrong day for its
+        # bands — drop it as a scratch instead of booking a bogus fill.
+        if pos.get("kind") == "volbreak" and \
+                (pd.Timestamp(str(b["ts"].iloc[-1])[:10]) - pd.Timestamp(pos["opened"])).days > 4:
             continue
         r = _resolve(pos, b.iloc[-1], b)
         pos["days_held"] += 1
@@ -239,10 +300,13 @@ def leaderboard() -> dict:
     for p in st["open"]:
         open_by[p["module"]] = open_by.get(p["module"], 0) + 1
     versions = {m: v for m, (v, _) in DUELISTS.items()}
-    from bot.approval import status
-    joined = {m: bool(status(v)["stages"].get("research")) for m, v in versions.items()}
+    from bot.approval import status, STAGES
+    stmap = {m: status(v)["stages"] for m, v in versions.items()}
+    joined = {m: bool(s.get("research")) for m, s in stmap.items()}
+    stage = {m: next((x for x in reversed(STAGES) if s.get(x)), None)          # highest approved
+             for m, s in stmap.items()}                                        # stage -> dashboard badge
     return {"last_day": st.get("last_day"), "results": out, "open_positions": open_by,
-            "lineage": versions, "joined": joined, "options": OPTIONS_EXPRESSION,
+            "lineage": versions, "joined": joined, "stage": stage, "options": OPTIONS_EXPRESSION,
             "note": "shadow duel — no orders; a module joins once its lineage has a research "
                     "approval (one-click on /training)"}
 
