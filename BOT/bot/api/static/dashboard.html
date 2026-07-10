@@ -365,7 +365,17 @@ async function loadStatusBar(){
   $('#botstatus').innerHTML=`<span class="dot ${h.healthy?'on':'off'}"></span>${h.healthy?(h.scanning?'SCANNING':'RUNNING'):'HALTED'}`;
   $('#mode').textContent='mode: '+h.mode; $('#mode').style.borderColor=h.mode==='live'?'var(--red)':'var(--line)';
   $('#f-market').textContent=marketOpen()?'OPEN':'CLOSED'; $('#f-next').textContent=nextOrb();
+  // SUBSYSTEM HEARTBEATS (D5 prevention): a failing scan-loop step turns the bot dot red and is
+  // named in Health & Controls — a dead resolver can never hide for 19 hours again.
+  const fails=h.beats_failing||[];
+  if(fails.length){
+    $('#botstatus').innerHTML=`<span class="dot off"></span>DEGRADED`;
+    fails.forEach(f=>{ if(!window['_bt_'+f]){window['_bt_'+f]=1;
+      pushAlert(`${aic('shield')} subsystem FAILING: ${f} — ${((h.beats||{})[f]||{}).error||''}`,'dn');} });
+  } else { fails.forEach&&Object.keys(window).filter(k=>k.startsWith('_bt_')).forEach(k=>delete window[k]); }
+  const beatline=fails.length?fails.map(f=>`<span class="dn" title="${(((h.beats||{})[f]||{}).error||'').replace(/"/g,'&quot;')}">✗ ${f}</span>`).join(' · '):'<span class="up">all subsystems ✓</span>';
   kpis($('#healthkpi'),{mode:h.mode,kill_switch:h.kill_switch,live_allowed:h.live_allowed,alpaca_paper:h.alpaca_paper,uptime:$('#uptime').textContent});
+  $('#healthkpi').innerHTML+=`<div class="kpi"><span class="mut">scan-loop steps</span><b>${beatline}</b></div>`;
 }
 let RISK_PRIMED=false;
 async function loadAccount(){
@@ -405,7 +415,7 @@ async function refreshData(){
     Object.entries(a).map(([s,v])=>`<tr><td>${s}</td><td class="num">${v.trades}</td><td class="num ${col(v.exp_R)}">${v.exp_R}</td><td class="num ${col(v.total_R)}">${v.total_R}</td></tr>`).join('')+`</table>`:'<div class="mut">—</div>');
   const c=(await J('/api/candidates?limit=12')).candidates||[];
   setHTML('cands', c.length?`<table><tr><th>time</th><th>sym</th><th>side</th><th>setup</th><th class="num">entry</th><th class="num">R:R</th><th>outcome</th></tr>`+
-    c.map(x=>{const oc=x.outcome,cc=(oc==='tp2'||oc==='tp1'||oc==='tp1_open')?'up':(oc==='stop'||oc==='tp1_then_stop')?'dn':'mut';
+    c.map(x=>{const oc=x.outcome,cc=(oc==='tp2'||oc==='tp1'||oc==='tp1_open')?'up':(oc==='stop'||oc==='tp1_then_stop'||oc==='stop_gap')?'dn':'mut';
       return `<tr><td class="mut">${(x.generated_at||'').slice(11,16)}</td><td><b>${x.symbol}</b></td><td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.setup}</td><td class="num">${x.entry}</td><td class="num">${x.expected_r??''}</td><td class="${cc}">${oc||'open'}</td></tr>`;}).join('')+`</table>`:'<div class="mut">no candidates yet — acceptable signals log here as they fire</div>');
   const t=(await J('/api/positions')).recent_closed||[];
   setHTML('trades', t.length?`<table><tr><th>sym</th><th>side</th><th>exit</th><th class="num">net R</th></tr>`+
@@ -505,7 +515,7 @@ async function loadOrbManager(){
     `<div class="mut" style="font-size:10px;margin-top:5px">now ${d.now_et||''} ET · 30-min OR · arm at OR close (delay 0), chase-cap waits for the retest</div>`;
 }
 // Bot Strategies with P&L from the journal (decisions grouped by family) + the MODULE lineup
-// with each one's GATE-PASSED options expression (⚡, from /api/duel — user 2026-07-06)
+// with each one's GATE-PASSED options expression (bolt icon, from /api/duel — user 2026-07-06)
 let DECS=[]; let DUELD=null;
 async function loadStrategies(){
   const m=etNow(); const win=(a,b)=>a<=b?(m>=a&&m<b):(m>=a||m<b);
@@ -521,32 +531,82 @@ async function loadStrategies(){
     `<div class="stg"><span class="dot ${active?'on':'warn'}"></span><div><div class="nm">${n}</div><div class="mut" style="font-size:10px">${s} · ${active?'ACTIVE':'idle'}</div></div>${fam?pl(fam):'<span class="pl mut">—</span>'}</div>`).join('');
   try{ DUELD=await J('/api/duel'); }catch(e){}   // always re-fetch so an approval reflects without a hard reload
   if(DUELD&&DUELD.lineage){
-    html+=Object.keys(DUELD.lineage).map(mo=>{
+    // BOOK chips (user 2026-07-10: options/equities/futures separated): OP=options chain,
+    // EQ=shares, FT=futures outright — sorted op -> eq -> ft so the books never visually mix
+    const bookChip=b=>b?`<span class="badge ${b==='op'?'b-aplus':b==='eq'?'b-a':'b-b'}" style="font-size:8px" title="${({op:'OPTIONS book (0DTE/21DTE chain)',eq:'EQUITIES shares book',ft:'FUTURES outright book'})[b]}">${b.toUpperCase()}</span>`:'';
+    const bOrd={op:0,eq:1,ft:2};
+    html+=Object.keys(DUELD.lineage).sort((a,b)=>(bOrd[(DUELD.books||{})[a]]??9)-(bOrd[(DUELD.books||{})[b]]??9)).map(mo=>{
       const r=(DUELD.results||{})[mo]; const joined=(DUELD.joined||{})[mo]; const opt=(DUELD.options||{})[mo];
-      const stg=(DUELD.stage||{})[mo];
+      const stg=(DUELD.stage||{})[mo]; const bk=(DUELD.books||{})[mo];
       const badge=(stg==='paper'||stg==='live')?`<span class="badge b-aplus">${stg.toUpperCase()} ✓</span>`
                  :stg?`<span class="badge b-b">${stg}</span>`:`<span class="badge b-c">awaiting</span>`;
       const stat=r?`<span class="pl ${r.total_r>=0?'up':'dn'}">${r.total_r>=0?'+':''}${r.total_r}R <span class="mut">·${r.n}</span></span>`:'<span class="pl mut">—</span>';
-      return `<div class="stg"><span class="dot ${joined?'on':'warn'}"></span><div><div class="nm">${mo.replace(/_/g,' ')} ${badge}</div>`+
-        `<div class="mut" style="font-size:10px">${joined?'IN THE DUEL':'awaiting approval'}${opt?` · ⚡ ${opt}`:''}</div></div>${stat}</div>`;
+      return `<div class="stg"><span class="dot ${joined?'on':'warn'}"></span><div><div class="nm">${mo.replace(/_/g,' ')} ${bookChip(bk)} ${badge}</div>`+
+        `<div class="mut" style="font-size:10px">${joined?'IN THE DUEL':'awaiting approval'}${opt?` · ${aic('bolt')} ${opt}`:''}</div></div>${stat}</div>`;
     }).join('');
+    // TODAY'S DAILY ENTRIES (user 2026-07-10 "signals are not populated properly"): every open
+    // duel position — the daily strategies' live signals, visible without digging into duel.json
+    // + SESSION-strategy opens (weekend-fade / nq-composite) so no live book is invisible here
+    const od=(DUELD.open_detail||[]).concat((window._LASTSO||[]).map(x=>({module:x.module,
+      book:x.book,symbol:x.symbol,side:x.side,entry:x.entry,opened:x.opened,
+      days_held:0,max_days:1,kind:'session',_stop:x.stop,_note:x.note})));
+    if(od.length){
+      html+=`<div class="mut" style="margin:7px 0 3px;font-size:10px;letter-spacing:.6px"><b>DAILY BOOKS — open entries</b> (shadow · resolve on daily bars)</div>`;
+      html+=od.map(p=>`<div class="stg" style="padding:3px 0${p.book==='op'?';cursor:pointer':''}" ${p.book==='op'?`onclick="selDailyOp('${p.module}','${p.symbol}')" title="click → this strategy's live contract in Selected Contract"`:''}><span class="dot on" style="background:var(--blu,#4f8ef7)"></span><div><div class="nm" style="font-size:10.5px">${p.module.replace(/_/g,' ')} ${bookChip(p.book)} <b>${p.symbol}</b> <span class="${p.side==='long'?'up':p.side==='short'?'dn':'yel'}">${p.side}</span>`+
+        (p.unreal_r!=null?` <span class="${p.unreal_r>=0?'up':'dn'}" style="font-weight:700">${p.unreal_r>=0?'+':''}${p.unreal_r}R</span> <span class="mut" style="font-size:9px">(${p.unreal_pts>=0?'+':''}${p.unreal_pts} pts)</span>`:'')+`</div>`+
+        `<div class="mut" style="font-size:9.5px">${p.entry?('entry '+p.entry+' · '):''}${p._stop?('stop '+p._stop+' · '):''}${p.last?('now '+p.last+' · '):''}opened ${p.opened}${p.kind==='session'?(p._note?' · '+p._note:''):' · held '+p.days_held+'/'+p.max_days+'d'}${p.kind==='volbreak'?' · fires on ±k·range break, EOD flat':''}</div></div></div>`).join('');
+    }
+    // PRE-CLOSE PREVIEW (user 2026-07-10: Webull/Robinhood have no MOC — the real order must go in
+    // 15:50-15:59, so the decision must be VISIBLE before the close): from 15:35 ET, ask what the
+    // daily book would enter at today's close and alert ONCE per module/symbol/day.
+    const _mNow=etNow();
+    if(_mNow>=935&&_mNow<960){
+      try{const pv=await J('/api/duel_preview');
+        (pv.entries||[]).forEach(p=>{const k='_pv|'+p.module+'|'+p.symbol+'|'+new Date().toDateString();
+          if(!window[k]){window[k]=1;
+            pushAlert(`${aic('clock')} PRE-CLOSE: ${p.module.replace(/_/g,' ')} [${(p.book||'?').toUpperCase()}] ${p.symbol} <b>${p.side}</b>${p.entry_now?' ~'+p.entry_now:''}${p.levels?' · '+p.levels:''} — place the order 15:50-15:59`,'yel');
+            if($('#alerton')&&$('#alerton').checked){beep();
+              if('Notification' in window && Notification.permission==='granted')
+                new Notification(`HIGHSTRIKE pre-close: ${p.module.replace(/_/g,' ')}`,{body:`${p.symbol} ${p.side} — act before 16:00`});}
+          }});
+      }catch(e){}
+    }
+    // DAILY-ENTRY NOTIFICATIONS (user 2026-07-10): a NEW daily-book entry alerts exactly like an
+    // intraday signal (panel + beep + desktop toast when armed). First load primes silently so a
+    // page refresh never re-announces existing positions.
+    const dKey=p=>`${p.module}|${p.symbol}|${p.opened}`;
+    if(!window._DSEEN){ window._DSEEN=new Set(od.map(dKey)); }
+    else od.filter(p=>!window._DSEEN.has(dKey(p))).forEach(p=>{ window._DSEEN.add(dKey(p));
+      pushAlert(`${aic('layers')} DAILY ENTRY — ${p.module.replace(/_/g,' ')} [${(p.book||'?').toUpperCase()}] ${p.symbol} ${p.side}${p.entry?' @ '+p.entry:''}`,'blu');
+      if($('#alerton')&&$('#alerton').checked){ beep();
+        if('Notification' in window && Notification.permission==='granted')
+          new Notification(`HIGHSTRIKE daily: ${p.module.replace(/_/g,' ')}`,{body:`${p.symbol} ${p.side}${p.entry?' @ '+p.entry:''} · ${(p.book||'').toUpperCase()} book`}); }
+    });
   }
   // THE BOSS + WORKERS (BOSS_WORKERS_PLAN §4): armed/disarmed/OBSOLETE per worker; the
   // graveyard stays VISIBLE (collapsed) — nothing is silently deleted.
   try{
     const bo=await J('/api/boss'); const W=bo.workers||{};
-    const live=Object.entries(W).filter(([,w])=>!w.obsolete), dead=Object.entries(W).filter(([,w])=>w.obsolete);
-    html+=`<div class="mut" style="margin:8px 0 4px;font-size:10px;letter-spacing:.6px"><b>MAIN BOSS</b> — workers (band WR 75-85 · PF≥1.7 · DD≤10R)</div>`;
+    // CATEGORY SEPARATION (user 2026-07-10: "options, equities, futures need to be separated"):
+    // equities workers first, then futures — each row wears its eq/ft chip; options books live
+    // in the Selected Contract / duel lineages, never here.
+    const catOf=s=>['QQQ','SPY'].includes(s)?'eq':'ft';
+    const live=Object.entries(W).filter(([,w])=>!w.obsolete)
+      .sort((a,b)=>(catOf(a[1].symbol)>catOf(b[1].symbol)?1:catOf(a[1].symbol)<catOf(b[1].symbol)?-1:0));
+    const dead=Object.entries(W).filter(([,w])=>w.obsolete);
+    html+=`<div class="mut" style="margin:8px 0 4px;font-size:10px;letter-spacing:.6px"><b>MAIN BOSS</b> — workers (band WR 75-85 · PF≥1.7 · DD≤10R) · park = pause the study, keep the record</div>`;
     html+=live.map(([id,w])=>{const conf=w.conformance||{}; const roll=conf.rolling||{};
-      const armed=(w.state||{}).armed, pass=conf.band_pass, papered=w.paper_approved;
+      const armed=(w.state||{}).armed, pass=conf.band_pass, papered=w.paper_approved, parked=w.parked;
       // BAND-PASS NOTIFICATION + one-click paper approval NEXT TO IT (user 2026-07-07)
-      if(pass && !window['_bp_'+id]){window['_bp_'+id]=1; pushAlert(`🏆 ${id} PASSES ITS BAND (${roll.wr}% · PF ${roll.pf} · n${roll.n}) — approve for paper?`,'up');}
+      if(pass && !parked && !window['_bp_'+id]){window['_bp_'+id]=1; pushAlert(`${aic('target')} ${id} PASSES ITS BAND (${roll.wr}% · PF ${roll.pf} · n${roll.n}) — approve for paper?`,'up');}
       const passBadge = pass ? `<span class="badge b-aplus" title="rolling window meets the FULL band (WR ${roll.wr}% · PF ${roll.pf} · DD ${roll.dd_r}R · n${roll.n})">PASSES BAND</span> `+
         (papered ? '<span class="mut" style="font-size:9px">paper ✓</span>'
                  : `<button style="border-color:var(--grn);padding:2px 6px;font-size:10px" onclick="approveWorker('${w.lineage}','${id}')">Approve paper</button>`) : '';
-      return `<div class="stg"><span class="dot ${armed?'on':'warn'}"></span><div><div class="nm">${id} <span class="mut">${w.symbol}</span> ${passBadge}</div>`+
-        `<div class="mut" style="font-size:10px" title="${((w.state||{}).note||'').replace(/"/g,'&quot;')}">${w.spec||''}</div></div>`+
-        `<span class="pl ${pass?'up':'mut'}">${roll.n?`${roll.wr}% ·${roll.n}`:'no window'}</span></div>`;}).join('');
+      const catChip=`<span class="badge ${catOf(w.symbol)==='eq'?'b-a':'b-b'}" style="font-size:8px" title="${catOf(w.symbol)==='eq'?'equities book':'futures book'}">${catOf(w.symbol).toUpperCase()}</span>`;
+      const parkBtn=`<button style="padding:2px 6px;font-size:9px;${parked?'border-color:var(--grn)':'border-color:var(--yel)'}" title="${parked?'resume the shadow study (starts writing journal rows again)':'pause the shadow study — no new journal rows; history + approvals kept'}" onclick="event.stopPropagation();parkWorker('${id}',${parked?0:1})">${parked?'Resume':'Park'}</button>`;
+      return `<div class="stg" style="${parked?'opacity:.5':''}"><span class="dot ${parked?'':'on'}" style="${parked?'background:#666':''}"></span><div><div class="nm">${id} <span class="mut">${w.symbol}</span> ${catChip} ${parked?'<span class="badge b-c">PARKED</span>':''} ${parked?'':passBadge}</div>`+
+        `<div class="mut" style="font-size:10px" title="${((w.state||{}).note||'').replace(/"/g,'&quot;')}">${parked?'paused — no new rows accrue; record kept':w.spec||''}</div></div>`+
+        `<span class="pl ${pass&&!parked?'up':'mut'}">${roll.n?`${roll.wr}% ·${roll.n}`:'no window'}</span>${parkBtn}</div>`;}).join('');
     if(dead.length){
       html+=`<details style="margin-top:4px"><summary class="mut" style="cursor:pointer;font-size:10px">OBSOLETE (${dead.length}) — auditable graveyard, revival = fresh gauntlet on new data</summary>`+
         dead.map(([id,w])=>`<div class="stg"><span class="dot" style="background:#555"></span><div><div class="nm">${id} <span class="mut">${w.symbol}</span></div>`+
@@ -670,6 +730,7 @@ const sigKey=s=>`${s.symbol}|${s.family}|${s.session}|${s.side}|${s.entry}`;
 function armAlerts(){ if($('#alerton').checked && 'Notification' in window && Notification.permission==='default') Notification.requestPermission(); }
 function beep(){ try{const a=new(window.AudioContext||window.webkitAudioContext)();const o=a.createOscillator(),g=a.createGain();
   o.connect(g);g.connect(a.destination);o.type='sine';o.frequency.value=880;g.gain.value=0.06;o.start();o.stop(a.currentTime+0.18);}catch(e){} }
+const aic=n=>`<svg class="ic" style="width:11px;height:11px;vertical-align:-1px"><use href="#i-${n}"/></svg>`;
 function pushAlert(txt,cls){ALERTS.unshift({t:new Date().toLocaleTimeString('en-US',{timeZone:'America/New_York',hour12:false}),txt,cls}); ALERTS.splice(12); renderAlerts();}
 function renderAlerts(){$('#alerts').innerHTML=ALERTS.length?ALERTS.map(a=>`<div class="kpi" style="border:0;padding:3px 0"><span class="${a.cls||'mut'}" style="font-size:11.5px">${a.txt}</span><span class="mut" style="font-size:10px">${a.t}</span></div>`).join(''):'<div class="mut">no alerts yet</div>';}
 function notifyNew(sigs){
@@ -688,7 +749,42 @@ async function scanSignals(force){
     const d=await J('/api/signals'+(force?'?force=1':''));
     const sigs=(d.signals||[]).filter(s=>!s.error); SIGS=sigs;
     if(d.watchlist&&d.watchlist.length) WATCHLIST=d.watchlist;
-    notifyNew(sigs); fillSignalPicker();;
+    notifyNew(sigs); fillSignalPicker();
+    // RESOLUTION ALERTS (user 2026-07-10 awareness): every first-touch outcome announces itself
+    // the cycle it books — TP2 runners get the trophy. Primes silently on first load.
+    const res=d.resolutions||[]; const rKey=x=>`${x.symbol}|${x.outcome}|${x.ts}`;
+    if(!window._RSEEN){ window._RSEEN=new Set(res.map(rKey)); }
+    else res.filter(x=>!window._RSEEN.has(rKey(x))).forEach(x=>{ window._RSEEN.add(rKey(x));
+      const big=x.outcome==='tp2'||Math.abs(x.r||0)>=2;
+      pushAlert(`${aic(x.outcome==='tp2'?'target':x.r>0?'activity':'x')} RESOLVED ${x.symbol} ${x.outcome} ${x.r>0?'+':''}${(+x.r).toFixed(2)}R`, x.r>0?'up':'dn');
+      if(big&&$('#alerton')&&$('#alerton').checked){beep();
+        if('Notification' in window && Notification.permission==='granted')
+          new Notification(`HIGHSTRIKE: ${x.symbol} ${x.outcome}`,{body:`${x.r>0?'+':''}${(+x.r).toFixed(2)}R`});}
+    });
+    // SESSION-STRATEGY OPENS (F104/F97b): weekend-fade + nq-composite entries announce
+    // AUTOMATICALLY — you never hunt for the confluence yourself.
+    const so=d.session_opens||[]; window._LASTSO=so;   // feeds the DAILY BOOKS strip too
+    const soKey=x=>`${x.module}|${x.opened}`;
+    if(!window._SOSEEN){ window._SOSEEN=new Set(so.map(soKey)); }
+    else so.filter(x=>!window._SOSEEN.has(soKey(x))).forEach(x=>{ window._SOSEEN.add(soKey(x));
+      pushAlert(`${aic('target')} SESSION ENTRY — ${x.module.replace(/_/g,' ')} [${(x.book||'').toUpperCase()}] ${x.symbol} ${x.side} @ ${x.entry}${x.stop?' · stop '+x.stop:''} · ${x.note||''}`,'up');
+      if($('#alerton')&&$('#alerton').checked){beep();
+        if('Notification' in window && Notification.permission==='granted')
+          new Notification(`HIGHSTRIKE: ${x.module.replace(/_/g,' ')}`,{body:`${x.symbol} ${x.side} @ ${x.entry}`});} });
+    // INTRABAR TOUCHES (F102 tick watcher): a stop/TP level crossed BETWEEN bar closes — the
+    // official outcome still books on the walk; this is the seconds-level heads-up.
+    const ib=d.intrabar||[]; const ibKey=x=>`${x.symbol}|${x.level}|${x.ts}`;
+    if(!window._IBSEEN){ window._IBSEEN=new Set(ib.map(ibKey)); }
+    else ib.filter(x=>!window._IBSEEN.has(ibKey(x))).forEach(x=>{ window._IBSEEN.add(ibKey(x));
+      pushAlert(`${aic('bolt')} INTRABAR ${x.symbol} ${x.side} touched ${x.level.toUpperCase()} @ ${x.px} — walk books it on the bar close`, x.level==='stop'?'dn':'up');
+      if($('#alerton')&&$('#alerton').checked)beep(); });
+    // RESEARCH ALERTS (F98 pattern discovery): the nightly battery's verdict CHANGES — a new
+    // edge appearing or a known edge decaying — announce once each.
+    const ra=d.research_alerts||[]; const raKey=x=>`${x.kind}|${x.study}|${x.line}`;
+    if(!window._RASEEN){ window._RASEEN=new Set(ra.map(raKey)); }
+    else ra.filter(x=>!window._RASEEN.has(raKey(x))).forEach(x=>{ window._RASEEN.add(raKey(x));
+      pushAlert(`${aic('cpu')} ${x.kind==='NEW_PASS'?'NEW EDGE':x.kind==='LOST_PASS'?'EDGE DECAY':'STUDY ERROR'} — ${x.study}: ${(x.line||'').slice(0,90)}`,
+                x.kind==='NEW_PASS'?'up':x.kind==='LOST_PASS'?'dn':'yel'); });
     const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL && !isOptLin(CTR.sym)){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
     const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
     $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
@@ -696,13 +792,23 @@ async function scanSignals(force){
     else $('#signals').innerHTML=`<table><tr><th>asset</th><th>sess</th><th>family</th><th title="A+ = HH/HL structure aligned; A = slope aligned; B = neither; C = info-only/unverified. Structure & slope GRADE the setup — arming comes from the context pair (futures MID+VWAP · equities STRUCT+VWAP).">grade</th><th>side</th><th class="num">entry</th><th class="num">now</th><th class="num">stop</th>`+
       `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th title="ensemble verdict: rules emitted it, risk decided, AI grades confidence (ML P(win) + heads + similarity + grade). Hover a badge for the reasons.">AI</th><th class="num" title="grade-weighted units: base 0.25%-risk × A+1.5/A1.0/B0.4, skip B on ES/SPY & C">size</th><th class="num" title="quarter-Kelly multiple of the risk budget (P(win) + realized payoff)">¼K</th><th>option</th><th>action</th></tr>`+
       sigs.map((s,i)=>{
+        // CROSS-LAYER CONFLUENCE badge (user 2026-07-11 "wire the rest of the confluence"):
+        // advisory voters that exist RIGHT NOW — day-bias (|score|>=2), tick direction, and the
+        // composite's open side (NQ) — counted for/against this signal's side. Display only;
+        // entries stay rule-gated.
+        const _sgn=s.side==='long'?1:-1; let _cf=0,_cn=0;
+        if(window.BIAS&&BIAS_SYM===s.symbol&&Math.abs(window.BIAS.score||0)>=2){_cn++; if(Math.sign(window.BIAS.score)===_sgn)_cf++;}
+        if(s.tick_dir&&s.tick_dir.dir){_cn++; if(s.tick_dir.dir===_sgn)_cf++;}
+        const _nc=(window._LASTSO||[]).find(x=>x.module==='nq_composite'&&x.symbol===s.symbol);
+        if(_nc){_cn++; if((_nc.side==='long'?1:-1)===_sgn)_cf++;}
+        const confBadge=_cn?` <span class="badge ${_cf===_cn&&_cf>=2?'b-aplus':_cf>_cn/2?'b-a':'b-c'}" title="cross-layer agreement with this signal's side: day-bias / tick direction / composite (advisory — never gates the entry)">CONF ${_cf}/${_cn}</span>`:'';
         const opt=s.options?(()=>{const r=s.options.recommended;const st=s.options.structures[r];return `<b>${r.toUpperCase()}</b> ${st.legs.join('/')} $${st.cost_or_credit_usd}`;})():'<span class="mut">futures</span>';
         const flags=[s.priority?'★PRIORITY':'',s.tradeable?'':'INFO',s.asset_status==='unverified'?'UNVERIFIED':'',s.bar_age_min>30?'STALE':''].filter(Boolean).join(' ');
         const fl=s.orderflow&&s.orderflow.feed?(s.orderflow.confirms?' ✓':s.orderflow.diverges?' ✗':''):'';
         const drift=Math.abs((s.last_price-s.entry));const nowc=drift>(Math.abs(s.entry-s.stop))?'dn':'mut';
         return `<tr onclick="selCtr('${s.symbol}',${s.last_price||s.entry},'${s.side}',${s.iv_est||0.2},${s.tp1||0},${s.tp2||0},${s.stop||0})" style="cursor:pointer">`+
           `<td><b>${s.symbol}</b></td><td class="mut">${s.session||'rth'}</td><td>${s.family}${flags?' <span class="dn" style="font-size:9px">'+flags+'</span>':''}</td>`+
-          `<td>${gbadge(s.grade)}</td><td class="${s.side==='long'?'up':'dn'}">${s.side.toUpperCase()}</td>`+
+          `<td>${gbadge(s.grade)}${confBadge}</td><td class="${s.side==='long'?'up':'dn'}">${s.side.toUpperCase()}</td>`+
           `<td class="num">${s.entry}</td><td class="num ${nowc}">${s.last_price}</td><td class="num">${s.stop}</td><td class="num">${s.tp1}</td><td class="num">${s.tp2}</td>`+
           `<td class="num">${s.rr}${s.heads&&s.heads.expected_r!==undefined?' <span class="mut" style="cursor:help" title="'+headsT(s.heads)+'">eR'+s.heads.expected_r+'</span>':''}</td>`+
           `<td class="num"${s.ml_explain?' title="'+mlxT(s.ml_explain)+'"':''}>${s.confidence}${fl}${s.ml_explain?' <span class="mut" style="cursor:help;font-size:9px">why</span>':''}</td>`+
@@ -723,6 +829,20 @@ function mlxT(x){const f=a=>(a||[]).map(p=>p[0]+' '+(p[1]>0?'+':'')+p[1]).join('
   return ('why this P(win) ('+x.method+') — FOR: '+f(x.top_positive)+'  |  AGAINST: '+f(x.top_negative)).replace(/"/g,'&quot;');}
 function headsT(h){const L={tp2_prob:'P(TP2)',stop_prob:'P(stop)',expected_r:'expected R',no_trade:'P(no-trade better)'};
   return Object.keys(L).filter(k=>h[k]!==undefined).map(k=>L[k]+' '+h[k]).join(' · ').replace(/"/g,'&quot;')||'expected R (model)';}
+// DAILY BOOK -> SELECTED CONTRACT (user 2026-07-10): click an OP-book entry to load that
+// strategy's LIVE contract (its lineage + underlying) into the Selected Contract panel.
+const LIN_OF={equities_swing:'swing-1d-0.1',equities_volbreak:'volbreak-0dte-0.1'};
+function selDailyOp(mo,sym){const lin=LIN_OF[mo]; if(!lin) return;
+  const sel=$('#ctrsel'); if(sel&&[...sel.options].some(o=>o.value===lin)) sel.value=lin;
+  CTR_MANUAL=true; CUR_UND=sym; renderNative(lin);
+  const el=document.getElementById('contract'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'center'});}
+window.selDailyOp=selDailyOp;
+async function parkWorker(id,on){   // PARK = pause the shadow study (no new rows), keep everything
+  const d=await (await fetch(`/api/boss/park?worker=${id}&on=${on}`,{method:'POST'})).json();
+  pushAlert(d.error?`park failed: ${d.error}`:`${id} ${d.parked?'PARKED — no new journal rows':'RESUMED — study running'}`, d.error?'dn':d.parked?'yel':'up');
+  loadStrategies();
+}
+window.parkWorker=parkWorker;
 async function approveWorker(lineage,id){   // band-passed worker -> one-click paper approval
   if(!confirm(`Approve ${id} (${lineage}) for PAPER trading? Its rolling window passed the band.`))return;
   for(const st of ['research','replay','paper'])
@@ -791,7 +911,7 @@ async function loadDecisions(){
   // "time is not correct" bug (user 2026-07-07); tf column separates the 5m and 15m lineages.
   const etT=iso=>{try{return new Date(iso).toLocaleString('en-US',{timeZone:'America/New_York',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).replace(',','')}catch(e){return (iso||'').slice(5,16)}};
   setHTML('decisions', DECS.length?`<table><tr><th>when (ET)</th><th>sym</th><th>strategy</th><th>tf</th><th>side</th><th>take?</th><th class="num">entry</th><th class="num">stop</th><th class="num">TP1</th><th class="num">TP2</th><th>outcome</th><th class="num">R</th></tr>`+
-    DECS.map(x=>{const oc=x.outcome,c=oc==='tp2'||oc==='tp1_open'||oc==='tp1'?'up':oc==='stop'||oc==='tp1_then_stop'?'dn':'mut';
+    DECS.map(x=>{const oc=x.outcome,c=oc==='tp2'||oc==='tp1_open'||oc==='tp1'?'up':oc==='stop'||oc==='tp1_then_stop'||oc==='stop_gap'?'dn':'mut';
       return `<tr><td class="mut">${etT(x.signal_at||x.decided_at)}</td><td><b>${x.symbol}</b></td><td>${x.family||''}</td><td class="mut">${x.tf||'5m'}</td><td class="${x.side==='long'?'up':'dn'}">${x.side}</td><td>${x.taken?'TAKEN':'skip'}</td><td class="num">${x.entry}</td><td class="num">${x.stop}</td><td class="num">${x.tp1??''}</td><td class="num">${x.tp2??''}</td><td class="${c}">${oc}</td><td class="num ${c}">${x.result_r??''}</td></tr>`;}).join('')+`</table>`:'<div class="mut">No decisions yet.</div>');
   loadStrategies();
 }

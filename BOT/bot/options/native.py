@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 
+from bot.contracts import utcnow_iso as _utcnow_iso
+
 import numpy as np
 
 LINEAGE = "options-native-0.1"
@@ -374,7 +376,7 @@ def record_session(date: str, day_book: dict, strikes: dict, ref: dict, spec: di
                    "spot_entry": pos.get("spot_entry"), "close": round(float(ref["close"]), 2),
                    "ret": round(ret, 3), "pnl": round(pnl, 3),
                    "outcome": "win" if ret > 0 else "loss", "priced_from": priced_from,
-                   "resolved_at": datetime.datetime.utcnow().isoformat() + "Z"}
+                   "resolved_at": _utcnow_iso()}
             _append_journal(rec)
             out.append(rec)
     return out
@@ -552,7 +554,7 @@ def open_position(sig: dict, date: str, slot: str, structure: str) -> dict | Non
                                    "klc", "ksp", "klp", "wing", "credit", "debit", "max_loss",
                                    "spot_entry", "underlying", "priced_from", "expiry")}
     rec.update({"lineage": LINEAGE, "date": date, "slot": slot, "structure": structure,
-                "opened_at": datetime.datetime.utcnow().isoformat() + "Z", "status": "open"})
+                "opened_at": _utcnow_iso(), "status": "open"})
     rows.append(rec)
     _save_open(rows)
     return rec
@@ -597,7 +599,7 @@ def manage_open(mark_cost_fn, settle_close_fn, spec: dict = SPEC, close_hm: int 
         ret = pnl / r["max_loss"] if r.get("max_loss") else 0.0
         rec = dict(r, exit=exit_kind, ret=round(ret, 3), pnl=round(pnl, 3),
                    outcome="win" if ret > 0 else "loss", status="closed",
-                   resolved_at=datetime.datetime.utcnow().isoformat() + "Z")
+                   resolved_at=_utcnow_iso())
         _append_journal(rec)
         closed.append(rec)
     _save_open(still)

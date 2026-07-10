@@ -55,7 +55,9 @@ def purged_walk_forward(X: np.ndarray, y: np.ndarray, model_factory,
     train/test boundary are dropped from training so overlapping label horizons cannot leak
     (López de Prado's purged CV, sample-index approximation). Returns per-fold AUC/Brier plus the
     POOLED out-of-sample predictions — the honest inputs for calibration + bucket analysis."""
-    n = len(X)
+    X = np.asarray(X, dtype=float)          # one dtype/shape for fit AND predict (warning sweep
+    y = np.asarray(y)                       # 2026-07-11: mixed frame/ndarray tripped sklearn's
+    n = len(X)                              # feature-name check on every canary fold)
     fold = n // (n_splits + 1)
     aucs, briers = [], []
     oos_p, oos_y, oos_idx = [], [], []

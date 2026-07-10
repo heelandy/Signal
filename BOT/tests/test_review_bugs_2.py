@@ -155,3 +155,69 @@ if __name__ == "__main__":
         f()
         print(f"PASS {f.__name__}")
     print(f"\nall {len(fns)} review-2 regression tests OK")
+
+
+def test_d5_tracker_resolver_cannot_be_stranded():
+    """D5 ('positions still open', 2026-07-10): _walk_trail used np without importing numpy — the
+    first trail-eq row NameError'd EVERY track_outcomes run, stranding all opens; the crash also
+    leaked a mid-transaction sqlite handle ('database is locked'). Guards: numpy imported at module
+    level; per-row try/except so one poisoned row never strands the rest; bars prefetched before
+    the write pass; polled endpoints are read-only."""
+    import bot.tracker as tk
+    assert hasattr(tk, "np"), "numpy must be a module-level import in tracker.py"
+    src = inspect.getsource(tk.track_outcomes)
+    assert "PREFETCH" in src and src.index("get_bars(") < src.index("UPDATE decisions")
+    assert "except Exception:" in src            # per-row walk guard
+    assert src.count("finally:") >= 2            # both db handles always close
+    server = (BOT_DIR / "bot" / "api" / "server.py").read_text(encoding="utf-8")
+    for ep in ("def decisions()", "def scorecard()"):
+        seg = server[server.index(ep):server.index(ep) + 700]
+        assert "track_outcomes()" not in seg, f"{ep} must be read-only (scan loop owns resolution)"
+
+
+def test_p1_no_undefined_names_anywhere():
+    """PREVENTION (D5's class, killed for good): pyflakes 'undefined name' across every bot module.
+    The np NameError lived in a code path that only ran when a trail-eq row existed — invisible to
+    import-time and to every endpoint probe. Static analysis sees ALL paths without running them."""
+    import subprocess, sys, glob
+    files = []
+    for pat in ("bot/*.py", "bot/**/*.py"):
+        files += glob.glob(str(BOT_DIR / pat), recursive=True)
+    files = [f for f in files if "__pycache__" not in f]
+    r = subprocess.run([sys.executable, "-m", "pyflakes", *files],
+                       capture_output=True, text=True, cwd=str(BOT_DIR))
+    bad = [l for l in (r.stdout + r.stderr).splitlines() if "undefined name" in l]
+    assert not bad, "undefined names found (the np-NameError class):\n" + "\n".join(bad)
+
+
+def test_p2_training_plane_heartbeats():
+    """PREVENTION, lab plane (user 2026-07-10 'same test for the training lab'): the slow-cadence
+    governance steps (market context, reconcile, DUEL, phase78, boss, journal integrity) must run
+    through _beat_val so their failures surface in beats_failing — and the Training Lab status
+    endpoint must expose them."""
+    server = (BOT_DIR / "bot" / "api" / "server.py").read_text(encoding="utf-8")
+    loop = server[server.index("def _scan_loop"):server.index("def _startup")]
+    for name in ('"market_context"', '"reconcile"', '"duel"', '"phase78"', '"boss"',
+                 '"journal_integrity"'):
+        assert f"_beat_val({name}" in loop, f"{name} step is not heartbeat-wrapped"
+    i = server.index("def training_status")
+    assert "beats_failing" in server[i:i + 800], "lab status endpoint must expose failing beats"
+    assert "beats_failing" in (BOT_DIR / "bot" / "api" / "static" / "training.html").read_text(encoding="utf-8")
+
+
+def test_p3_parked_worker_writes_no_journal_rows():
+    """PARK (user 2026-07-10): a parked worker's shadow study is paused — identical signals must
+    produce rows for un-parked workers only. Park is state-only: history/approvals untouched."""
+    from bot.boss import shadow_decisions, park, _load
+    prior = bool(_load().get("workers", {}).get("worker-n", {}).get("parked"))
+    park("worker-n", True)
+    try:
+        fake = [{"tradeable": True, "grade": "A", "signal_state": "active", "bars_ago": 2,
+                 "symbol": sym, "side": "long", "entry": 100.0, "stop": 99.0, "session": "rth",
+                 "slope_grade": "A", "candidate": {"generated_at": "2026-07-10T10:00:00-04:00"}}
+                for sym in ("NQ", "QQQ", "SPY")]
+        fams = sorted(r["family"] for r in shadow_decisions(fake))
+        assert "worker-n" not in fams, "parked worker still writing rows"
+        assert fams == ["worker-q", "worker-s"], f"un-parked workers must keep running: {fams}"
+    finally:
+        park("worker-n", prior)                        # restore the user's actual state

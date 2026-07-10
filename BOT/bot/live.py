@@ -44,6 +44,16 @@ def _zone_state(side: str, price: float, or_high, or_low) -> str:
         return "unknown"
 
 
+def _tick_direction(sym: str):
+    """F103: tick-ring direction when the watcher has a fresh ring (server process, market open);
+    None otherwise — callers treat None as 'no tick vote' and the 1m reads stand alone."""
+    try:
+        from bot.market_data.tickwatch import direction
+        return direction(sym)
+    except Exception:
+        return None
+
+
 def _dir_fast(ctx, or_high, or_low):
     """1m-feed DIR-fast votes + combined slope engine for a proposal (None when 1m unavailable)."""
     if not ctx:
@@ -275,6 +285,10 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "slope_grade": s.get("slope_grade"), "slope_S": s.get("slope_S"),
                 "dir_fast": _dir_fast(_df_ctx, s.get("or_high"), s.get("or_low")),
                 "mtf_direction": mtf_dir,          # rolling per-TF read (1m array); dir_fast = backup
+                # TICK DIRECTION (F103, user 2026-07-10 "use ticks instead of the 1m"): the 3s
+                # tick-ring slope+persistence read — RECORDED alongside the 1m reads first (the
+                # agreement study decides the swap); grade-layer input only, never an entry gate.
+                "tick_dir": _tick_direction(sym),
                 "family": s["family"], "status": s["status"],
                 "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide, "tranche": tranche,

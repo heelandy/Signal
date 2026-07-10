@@ -151,7 +151,9 @@ def shadow_decisions(signals: list[dict]) -> list[dict]:
     DISARMED workers keep recording (that's how they earn re-arming) but their rows carry
     disarmed=true so the Boss can split benched evidence from live conformance (review fix)."""
     from bot.approval import paper_approved
-    _armed = {k: bool(v.get("armed")) for k, v in _load().get("workers", {}).items()}
+    _st_workers = _load().get("workers", {})
+    _armed = {k: bool(v.get("armed")) for k, v in _st_workers.items()}
+    _parked = {k: bool(v.get("parked")) for k, v in _st_workers.items()}
     out = []
     for s in signals:
         if not s.get("tradeable") or s.get("grade") not in ("A+", "A", "B"):
@@ -160,6 +162,8 @@ def shadow_decisions(signals: list[dict]) -> list[dict]:
             continue
         wid = _worker_for(s.get("symbol", ""))
         if wid is None:
+            continue
+        if _parked.get(wid):                   # PARKED = garaged: writes NO new journal rows
             continue
         w = WORKERS[wid]
         if not paper_approved(w["lineage"]):
@@ -233,9 +237,30 @@ def evaluate() -> dict:
             papered = _pa(w["lineage"])
         except Exception:
             papered = None
-        out["workers"][wid] = {**w, "state": ws, "conformance": conf, "paper_approved": papered}
+        out["workers"][wid] = {**w, "state": ws, "conformance": conf, "paper_approved": papered,
+                               "parked": bool(ws.get("parked"))}
     _save(st)
     return out
+
+
+def park(wid: str, on: bool) -> dict:
+    """PARK a worker (user 2026-07-10): pause its shadow study — no NEW journal rows — keeping
+    code, history and approval state intact. The garage, not the crusher: un-park anytime and it
+    resumes exactly where it stood. Use case: worker-n rides the delayed Yahoo NQ feed, so its
+    rows are noise until a real-time futures feed exists; worker-q/s stay live (clean Webull)."""
+    if wid not in WORKERS:
+        return {"error": f"unknown worker {wid}", "workers": sorted(WORKERS)}
+    st = _load()
+    ws = st.setdefault("workers", {}).setdefault(wid, {"armed": False})
+    ws["parked"] = bool(on)
+    ws["parked_at"] = _now() if on else None
+    _save(st)
+    try:
+        from bot.audit import log as _audit
+        _audit("worker_park", worker=wid, parked=bool(on))
+    except Exception:
+        pass
+    return {"worker": wid, "parked": bool(on)}
 
 
 def allowed(symbol: str) -> bool:

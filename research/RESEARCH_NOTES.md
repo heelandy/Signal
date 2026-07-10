@@ -2026,3 +2026,176 @@ NQ ctl +0.53%/t CI +0.246 vs TOM +0.43%/t CI +0.057). On 2018–2026 data the TO
 explained by ordinary drift; the 1988 anomaly is arbitraged away. **Do not wire; do not re-test
 without a new conditioning idea.** Lesson locked: any calendar/window strategy must beat its
 complement-window control, not just zero.
+
+## F92 — Acceptance entry (grind-day capture, 2026-07-10): QQQ-only MICRO-edge, too thin to wire
+
+`research/acceptance_entry.py` — enter when price HOLDS beyond the OR edge N consecutive 5m closes
+(no strong-body confirm), stop OR-mid, 1.5R/4R/14:30 flat. QQQ hold-3/4 PASS the basic bar
+(+0.018/+0.020R net, PF 1.04/1.05, 7/9 yrs, OOS +0.06-0.08, n~2000) but PF 1.05 dies at 2x slip —
+would not survive the cost-stress gauntlet. SPY fails years gate; NQ NEGATIVE (grind = chop trap
+on futures). Verdict: the stack is mostly RIGHT to skip grind days; a QQQ-only conditioned variant
+(day-bias aligned / wide-OR only) is the one refinement worth one more pass. DO NOT wire as-is.
+
+## F27 rerun — NQ exit management (2026-07-10): scale_be@1.5R is FREE protection on NQ
+
+Full grid rerun (n=184 NQ stack): scale 50% at TP1=1.5R + stop-to-BE = +0.068R vs +0.052 prod vs
+tp2_full +0.045-0.063 — the BE/scale protection that COSTS equities ~0.13R/trade (kept full-to-TP2
+there) is FREE-to-slightly-positive on NQ, and it converts the tp1_then_stop give-back class
+(-1.0R booked) into >= +0.75R banked. Trail 3ATR is the top cell (+0.113, PF 1.27) but CI still
+<0 on this sample. Candidate: PER-ASSET exit — futures scale_be@1.5R, equities full-to-TP2 —
+needs the full gauntlet + Pine mirror (E8) before adoption.
+
+## F93 — Exit gauntlet: scale_be@1.5R+BE for futures (2026-07-10): KEEP_DEFAULT
+
+`research/exit_gauntlet.py` — the F27-rerun winner ran the full 7-check gauntlet vs full-to-TP2.
+NQ: passed 6/7 (exp +0.068 vs +0.058 · OOS +0.046 vs −0.034 · survives 2x slip +0.014 · DD −11 vs
+−16 · both sides +) but FAILED years-consistency (9/17 positive, needs 12) → not wired. ES: clear
+fail (negative everywhere — consistent with its known cost-stress fragility). NOTE the honest
+nuance: the DEFAULT is also only 9/17 on this sample — the inconsistency belongs to the old-stack
+NQ entry cohort, not the exit change itself; the candidate flipped ZERO positive years negative.
+RETEST once (a) the 07.7-stack entries can be replayed through the exit grid, or (b) the clean
+live record reaches n>=50 NQ trades. Until then the booking convention stays full-to-TP2.
+
+## F94 — tsmom + disaster stop (2026-07-10): STOPS DESTROY THE EDGE — no-stop stands
+
+`research/tsmom_stop.py`, gap-aware fills. NQ baseline +1.386%/trade PF 1.91 14/16 yrs OOS +1.03%.
+EVERY stop cell gives up 28-58% of the edge (1xATR +0.58% · 1.5x +0.75% · 2x +0.75% · 3x +1.00%),
+none keeps the 80% bar — trend profit IS sitting through the drawdown. Verdict: tsmom stays
+no-stop; under a tight-DD account it is managed by NOT SIZING it (risk unit ~1,043 pts ≈ $2,086/
+micro), never by adding a stop. Side effect of the same session: tracker._walk + duel._resolve
+were booking gapped stops AT THE STOP PRICE (optimistic on the exact overnight risk equities
+can't protect) — both now book gap fills at the OPEN ('stop_gap' outcome class in the journal).
+
+## F95 — Session relay (2026-07-10): the 24h NQ cycle FADES weak closes; Asia carries the drift
+
+`research/session_relay.py` — ASIA(18:00-03:00) -> LONDON(03:00-09:30) -> RTH(09:30-16:00) hand-offs,
+~4,130 instances each, bootstrap CI + OOS. PASS cells:
+  · RTH->ASIA baseline +3.7bps (WR 55, OOS +3.1) — the overnight drift, session form
+  · after RTH DOWN -> ASIA +5.1bps (WR 57, OOS +4.6) — down-close conditioning CROSS-VALIDATES the
+    overnight duelist's rule on NQ futures (currently equities-only)
+  · after WEAK RTH close (bottom ⅓) -> ASIA FADES it: continuation -6.3bps (58% reversal, OOS -3.9)
+    — the strongest hand-off signal
+  · ASIA weak close -> LONDON fades it -2.8bps (OOS thin)
+  · LONDON->RTH baseline +2.7bps (OOS +2.7)
+CONTINUATION is ~zero everywhere — the relay is a MEAN-REVERSION cycle at session boundaries, not
+momentum. Candidates for the gauntlet (full trade sim, costs, years):
+  1. "asia-fade": long NQ at 18:00 after a bottom-third RTH close, exit 03:00 (≈+6bps gross,
+     NQ round-trip cost ~0.5bp — real margin)
+  2. overnight-1d extension to NQ (the +5.1bps cell = its rule, already validated 9/9 on QQQ/SPY)
+Nothing wired — pattern -> gauntlet -> ladder, as always.
+
+## F96 — asia-fade WIRED (2026-07-10): gauntlet 7/7 -> lineage asia-fade-0.1 on the ladder
+
+`session_fade_gauntlet.py`: asia-fade PASSED ALL SEVEN (n=1163 +4.0bps net WR 55 PF 1.25 CI_lo
++1.1 12/17yrs OOS +4.0 2x-slip +2.1). overnight-NQ REJECTED (11/17 yrs, PF 1.15 — the equities
+overnight rule does NOT transfer to NQ). Wired: STRATEGY_MODULES entry futures_asia_fade
+(gauntlet_pass) -> ladder auto-registers asia-fade-0.1; live shadow study bot/strategy/asia_fade.py
+(approval-gated: enters 18:05 after a bottom-third RTH close at the 18:00 reopen price, exits at
+the 03:00 Asia close, journal data/asia_fade.json, R = move / RTH-range unit, NO stop by rule);
+heartbeat "asia_fade"; performance-board row (FT book, source session·shadow). Idea (user's
+session-relay cycle) -> study (F95) -> gauntlet -> wired: SAME DAY.
+
+## F97/F97b — the stop question + cohort decomposition (2026-07-10): asia-fade -> WEEKEND FADE
+
+User rule: "first rule I have is risk management — we need a stop loss." The F96 daily spec's
+stop grid EXPOSED a harness discrepancy -> decomposition: the weekday 18:00->03:00 cohort is DEAD
+OOS (-0.3bps, n=901); the edge is the WEEKEND hand-off (weak Fri close -> Sun 18:00 reopen ->
+Mon 03:00): n=247 +7.9bps PF 1.45 13/17yrs OOS +18.9. AND the user's stop is POSITIVE-SUM here:
+stop 0.5x Friday-range = +8.5bps (keeps 107%), PF 1.50, CI_lo +2.6, OOS +22.5, worst capped
+-2.35% — ALL 7 gauntlet checks WITH the stop. Lineage RESPECIFIED before any approval:
+weekend-fade-0.1 (modules.py futures_weekend_fade; live study bot/strategy/asia_fade.py enters
+Sunday 18:05 off Friday's RTH, walks the 0.5x stop live, exits Mon 03:00). Lesson locked: two
+harnesses disagreeing = decompose before adopting; cohort splits find where edges LIVE.
+
+## F99 — NQ census (2026-07-10): the 17-year pattern atlas (4,110 RTH days, CI+OOS gated)
+
+`research/nq_census.py` — only noise-gated cells: MONDAY RTH +8.1bps WR58 OOS+18 (strongest day;
+completes the weekend complex with weekend-fade). Overnight into Wed +8.7 OOS+8.9. Gap-UP mildly
+FOLLOWS (+3.5). FIRST HOUR -> rest-of-day CONTINUES (+2.7; big first hour +5.1 OOS+9.7 — the ORB
+premise independently confirmed). Day-over-day REVERSES (-3.9 — fade yesterday). VOL CLUSTERING is
+the monster: after a high-range day next-day range is +79bps above median 77% of the time (OOS
++66) — a SIZING signal, and why volbreak works. Coherent NQ physics: momentum WITHIN the day,
+mean-reversion BETWEEN days/sessions, vol clusters. Gauntlet queue: monday-drift, first-hour-follow.
+
+## F100-F102 — tick/resolution work (2026-07-10)
+
+F100 `resolution_parity.py` (5m vs 1m, 17y parquets): WEEKEND-FADE is resolution-ROBUST (+8.3bps
+@5m vs +8.1 @1m, PF 1.48/1.47 — also independently REPRODUCES F97b on a second data source).
+VOLBREAK-style band entry is resolution-SENSITIVE: +0.017R PF 1.02 @5m flips to -0.024R PF 0.97
+@1m (same spec, finer walk) — the band-entry fill assumption flatters at coarse resolution.
+ACTION QUEUED: re-validate the exact futures_volbreak duelist spec at 1m before it advances past
+paper. One-bar both-touch ambiguity is NOT the driver (26->5 cases of ~3k); entry fill timing is.
+F101 `census_gauntlet.py`: monday-drift REJECT by ONE check (PF 1.17 vs 1.2; OOS +17.1 — watch),
+first-hour-follow REJECT (4/7). Patterns != strategies; the gauntlet held.
+F102 tick watcher WIRED: bot/market_data/tickwatch.py — 3s snapshot poll of the ACTIVE set only
+(open positions + session holds + firing signals), 1-min flush to data/ticks/<date>/ (forward
+tick archive), intrabar stop/TP TOUCH alerts (walk still books outcomes), heartbeat 'tickwatch'.
+Webull SDK verified: get_event_tick / get_futures_tick / get_option_tick / snapshots / depth
+exist — true tick pulls possible live; NO tick history, hence the forward archive.
+
+## F103 — tick DIRECTION wired (2026-07-10, "use ticks instead of the 1m — the old plan")
+
+tickwatch.direction(): least-squares slope + persistence over the last ~90s of 3s polls, whole
+watchlist ringed (cap 8, positions prioritized). Every proposal now carries `tick_dir` RECORDED
+ALONGSIDE the 1m reads (dir_fast / mtf_direction) — the agreement study on accrued rows decides
+whether tick replaces 1m in the grade layer. Advisory only; entries stay on validated 5m closes.
+
+## F104 — NQ pattern COMPOSITE wired (2026-07-10): confluence of the census cells, ALL-7 PASS
+
+`nq_composite_gauntlet.py`: the F99 pass-cells as VOTES (Monday + big-FH momentum + fade-
+yesterday + gap-up), trade only |votes|>=2, 10:30->16:00. Single votes REJECT (PF 1.07);
+CONFLUENCE passes everything: n=1320 +6.3bps WR 57 PF 1.22 CI_lo +2.2 **15/17 years** OOS +9.5
+2x-slip +4.4 — most year-consistent rule in the book. Vol overlay confirms inside it (high-vol
+days +12.2bps vs calm +3.3 — V2 sizing). Wired: lineage nq-composite-0.1 (module
+futures_nq_composite, shadow study bot/strategy/nq_composite.py, FH_BIG=0.476% trailing tercile
+constant, beat nq_composite). Stacked-mining bias acknowledged — shadow accrual judges.
+
+## F105 — volbreak re-validation (2026-07-10): RED FLAG CLOSED — resolution-robust in exact spec
+
+`volbreak_revalidation.py` — the EXACT duelist spec (open ± 0.3x prior FULL-session range, first
+band wins, whipsaw=-1R, gap-aware, EOD close) at 5m AND 1m: +0.3286R vs +0.3284R, PF 1.57 both,
+15/17 yrs both, OOS +0.460/+0.459 — identical to 4 decimals, ALL checks pass at both. The F100
+flip came from the simplified parity walk (RTH-only window, no whipsaw rule), NOT the strategy.
+futures_volbreak's paper seat is SAFE. Lesson: re-validate with the exact spec before acting on
+a proxy study's red flag — and the proxy DID its job by forcing this check.
+
+## F106 — tick-vs-1m agreement study WIRED (battery member): matures with the forward archive;
+swap bar = agreement>=80% AND tick leads next-bar direction on >=5 RTH days. Battery also now
+watches weekend_fade_gauntlet, nq_composite_gauntlet, census (monday-drift) nightly.
+
+## F104b — composite TRANSFER test (2026-07-10): NQ-ONLY. Rejected on QQQ/SPY/ES/GC
+
+The NQ-fit confluence rule verbatim elsewhere: QQQ -40.5bps (WR 31), SPY -30.3 (WR 28), ES -0.2,
+GC -8.1 — ALL REJECT. Equities aren't just edgeless — they lean OPPOSITE (intraday mean-reversion
+vs NQ's intraday momentum; literature-consistent). Do NOT sign-flip the rule (post-hoc mining);
+the right path is each symbol's OWN census -> own votes -> own gauntlet. (strategy x symbol)
+discipline holds at the composite level. Caveat absorbed: nq-composite is a single-symbol rule —
+its shadow record carries the full burden of proof.
+
+## F107 — composite STOP adopted + per-symbol confluence verdicts (2026-07-10)
+
+`composite_stop.py`: stop 0.25x prior-day range IMPROVES nq-composite (+6.2bps keeps 124%, PF
+1.29, CI_lo +2.2, OOS +15.0, worst -1.59% — ALL 7; no-stop baseline fails CI on this walk).
+WIRED into bot/strategy/nq_composite.py (STOP_MULT=0.25, live stop check per cycle, risk unit =
+prior-day range = sizing denominator). Second positive-sum stop after weekend-fade.
+`nq_composite_gauntlet.py QQQ` (QQQ's OWN votes: monday+fh+fade): REJECT, -37bps, 1/9 yrs — the
+cells pass on their OWN WINDOWS (full-day/calendar), not on the 10:30->16:00 composite window.
+WINDOW-matching matters like symbol-matching. Confluence = NQ-only. QQQ's Monday full-RTH cell
+remains a separate window-matched candidate (not yet gauntleted).
+
+## F108 + CORRECTIONS (2026-07-10 evening): equity cost-model bug fixed -> THREE new passes
+
+BUG: census_gauntlet/nq_composite_gauntlet charged QQQ/SPY the FUTURES cost (~30-40bps on a $500
+ETF vs real ~0.4bp) — every equity verdict from those drivers was poisoned. CORRECTED verdicts
+supersede: F104b transfer numbers and the F107-note QQQ reject are amended by these reruns.
+CORRECT-COST results: **qqq-composite-0.1** (Monday+fade votes |v|>=2 == Monday after a DOWN
+Friday, 9:30 open->close): n=172 +19.6bps WR61 PF 1.57 CI +5.5 7/9 OOS +24.0 — ALL 7 (the
+equities twin of the weekend complex; on QQQ the OPEN beats 10:35 — per-symbol clocks).
+**qqq monday-drift** ALL-7 (+14.6, PF 1.46, 8/9) but SUBSUMED by the composite (overlap — one
+book per symbol, the conditioned rule wins). **spy-monday-0.1** ALL-7 (+9.0, PF 1.40, 7/9).
+QQQ FH-follow and the QQQ 10:35 composite still REJECT (6/9 yrs). NQ 9:30 variant REJECT
+(PF 1.16; the FH witness is worth waiting for on NQ: OOS +9.5 vs +2.6). WIRED (F108):
+bot/strategy/eq_calendar.py (both rules, EQ shares book, Monday 9:31-9:50 entries, close exit,
+approval-gated), beat eq_calendar, ladder lineages qqq-composite-0.1 + spy-monday-0.1. Stop
+grids for both queued. Lesson relocked: an impossible census-vs-gauntlet spread = check the
+CQST model first.

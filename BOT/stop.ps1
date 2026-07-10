@@ -1,9 +1,13 @@
 # HIGHSTRIKE signal engine - STOP
 #   .\stop.ps1             # stop EVERYTHING: the watchdog guard AND the server on :8000
+#                          # (stays down until you start it again OR until the next logon)
 #   .\stop.ps1 -KeepGuard  # stop only the server; the watchdog relaunches it in ~30s (= easy RESTART)
+#   .\stop.ps1 -Uninstall  # stop everything AND remove the logon autostart - never comes back
+#                          # by itself, even after a reboot (reinstall: .\install_autostart.ps1)
 param(
   [int]$Port = 8000,
-  [switch]$KeepGuard
+  [switch]$KeepGuard,
+  [switch]$Uninstall
 )
 $ErrorActionPreference = "SilentlyContinue"
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,6 +19,13 @@ if (-not $KeepGuard) {
   Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like '*-File*watchdog.ps1*' -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "Stopped watchdog (PID $($_.ProcessId))." -ForegroundColor Green }
+}
+
+# 0b) -Uninstall: remove the logon autostart so it NEVER comes back by itself (even after reboot)
+if ($Uninstall) {
+  $vbs = Join-Path ([Environment]::GetFolderPath("Startup")) "HIGHSTRIKE.vbs"
+  if (Test-Path $vbs) { Remove-Item $vbs -Force; Write-Host "Removed logon autostart ($vbs)." -ForegroundColor Green }
+  else { Write-Host "No logon autostart installed." -ForegroundColor Yellow }
 }
 
 # 1) by recorded PID

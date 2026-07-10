@@ -15,7 +15,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-import pandas as pd
+import numpy as np    # _walk_trail used np WITHOUT this import — every resolver run died at the
+import pandas as pd   # first trail-eq row (NameError), stranding all opens (2026-07-10 lock saga)
 
 from bot.config import BOT_ROOT
 from bot.contracts import utcnow_iso
@@ -133,6 +134,7 @@ def _walk(bars: pd.DataFrame, signal_at: str, side: str, entry, stop, tp1, tp2, 
     risk = abs(entry - stop) or 1e-9
     hi, lo = fwd["high"].to_numpy(float), fwd["low"].to_numpy(float)
     cl = fwd["close"].to_numpy(float)
+    op = fwd["open"].to_numpy(float)
     fet = pd.to_datetime(fwd["ts_et"]); fmin = (fet.dt.hour * 60 + fet.dt.minute).to_numpy()
     single = tp2 is None                                          # single-target lineage (workers): TP1 IS the exit
     tp1_hit = False; mfe = 0.0; mae = 0.0
@@ -150,6 +152,18 @@ def _walk(bars: pd.DataFrame, signal_at: str, side: str, entry, stop, tp1, tp2, 
         # before reaching TP2 — the give-back protection is outweighed. Kept full-to-TP2.
         # SAME-BAR AMBIGUITY (review 2026-07): when the stop AND a target are both inside one bar
         # the intrabar sequence is unknown — score the STOP first (conservative), never the target.
+        # GAP-AWARE FILLS (user 2026-07-10 "first rule is risk management" — QQQ/SPY don't trade
+        # 24h): a bar that OPENS through the stop fills at the OPEN, not the stop price — booking
+        # the stop price on a gap was optimistic accounting on exactly the overnight risk that
+        # matters. Symmetric: opening beyond TP2 books the (better) open.
+        gap_stop = (op[j] <= stop) if sign == 1 else (op[j] >= stop)
+        gap_tp2 = (not single) and tp2 is not None and \
+                  ((op[j] >= tp2) if sign == 1 else (op[j] <= tp2))
+        if gap_stop:
+            r_gap = round(sign * (op[j] - entry) / risk, 2)
+            return (("tp1_then_stop", r_gap) if tp1_hit else ("stop_gap", r_gap)) + (round(mfe, 2), round(mae, 2))
+        if gap_tp2:
+            return "tp2", round(sign * (op[j] - entry) / risk, 2), round(mfe, 2), round(mae, 2)
         if hit_stop and not tp1_hit:
             return "stop", -1.0, round(mfe, 2), round(mae, 2)
         if hit_stop and tp1_hit:                      # came back to stop after TP1 (give-back)
@@ -204,22 +218,35 @@ def _walk_trail(bars: pd.DataFrame, signal_at: str, side: str, entry, stop0, tra
 
 
 def track_outcomes(provider=None) -> list[dict]:
-    """Update every OPEN decision with its first-touch outcome (pulls recent bars per symbol)."""
+    """Update every OPEN decision with its first-touch outcome (pulls recent bars per symbol).
+
+    LOCK FIX (2026-07-10, 'positions still open'): bars are prefetched BEFORE any write and the
+    write pass is wrapped in try/finally. The old shape fetched bars (5-10s of network) BETWEEN
+    UPDATEs inside one open transaction — the write lock outlived the 5s busy_timeout of any
+    concurrent caller, and a lock error leaked the connection MID-TRANSACTION, jamming every
+    later resolution until a restart (rows sat 'open' all night)."""
     from bot.market_data.providers import get_bars
     con = _con()
-    rows = con.execute("SELECT id,symbol,side,entry,stop,tp1,tp2,signal_at,"
-                       "COALESCE(json_extract(json,'$.tf'),'5m'),"
-                       "json_extract(json,'$.exit_mode'),"
-                       "COALESCE(json_extract(json,'$.trail_atr'),2.0) FROM decisions "
-                       "WHERE outcome IN ('open','tp1_open')").fetchall()
-    bars_cache, updated = {}, []
+    try:
+        rows = con.execute("SELECT id,symbol,side,entry,stop,tp1,tp2,signal_at,"
+                           "COALESCE(json_extract(json,'$.tf'),'5m'),"
+                           "json_extract(json,'$.exit_mode'),"
+                           "COALESCE(json_extract(json,'$.trail_atr'),2.0) FROM decisions "
+                           "WHERE outcome IN ('open','tp1_open')").fetchall()
+    finally:
+        con.close()
+    # 1) PREFETCH every symbol's bars with NO db handle open (network must never hold the lock)
+    bars_cache = {}
+    for sym in {r[1] for r in rows}:
+        try:
+            bars_cache[sym] = get_bars(sym, "5m", period="5d", provider=provider)
+        except Exception:
+            bars_cache[sym] = pd.DataFrame()
+    # 2) fast write pass — milliseconds of lock, always closed
+    updated = []
+    con = _con()
     for rid, sym, side, entry, stop, tp1, tp2, sig_at, tf, exit_mode, trail_mult in rows:
-        if sym not in bars_cache:
-            try:
-                bars_cache[sym] = get_bars(sym, "5m", period="5d", provider=provider)
-            except Exception:
-                bars_cache[sym] = pd.DataFrame()
-        bars = bars_cache[sym]
+        bars = bars_cache.get(sym, pd.DataFrame())
         if not len(bars) or not sig_at:
             continue
         close_hm = 870 if sym.upper() in _EQUITY_RTH else None       # equities force-flat 2:30pm ET (user rule)
@@ -230,17 +257,26 @@ def track_outcomes(provider=None) -> list[dict]:
         # signal candle's close (tf−5 minutes past the open); 5m rows are unchanged (offset 0).
         _tfm = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(str(tf), 5)
         walk_from = str(pd.Timestamp(sig_at) + pd.Timedelta(minutes=max(_tfm - 5, 0)))
-        if str(exit_mode or "") == "trail":       # trail-eq lineage: moving stop needs its own walk
-            outcome, r, mfe, mae = _walk_trail(bars, walk_from, side, entry, stop,
-                                               float(trail_mult or 2.0), close_hm=close_hm)
-        else:
-            outcome, r, mfe, mae = _walk(bars, walk_from, side, entry, stop,
-                                         tp1, tp2, close_hm=close_hm)  # None preserved (single-target)
+        try:                                      # ONE bad row must never strand the rest (the np
+            if str(exit_mode or "") == "trail":   # NameError in _walk_trail killed every run here)
+                outcome, r, mfe, mae = _walk_trail(bars, walk_from, side, entry, stop,
+                                                   float(trail_mult or 2.0), close_hm=close_hm)
+            else:
+                outcome, r, mfe, mae = _walk(bars, walk_from, side, entry, stop,
+                                             tp1, tp2, close_hm=close_hm)  # None preserved (single-target)
+        except Exception:
+            continue
         if outcome not in ("open",):
-            con.execute("UPDATE decisions SET outcome=?, result_r=?, outcome_at=?, mfe_r=?, mae_r=? WHERE id=?",
-                        [outcome, r, utcnow_iso(), mfe, mae, rid])
-            updated.append({"symbol": sym, "outcome": outcome, "r": r})
-    con.commit(); con.close()
+            try:
+                con.execute("UPDATE decisions SET outcome=?, result_r=?, outcome_at=?, mfe_r=?, mae_r=? WHERE id=?",
+                            [outcome, r, utcnow_iso(), mfe, mae, rid])
+                updated.append({"symbol": sym, "outcome": outcome, "r": r})
+            except sqlite3.OperationalError:
+                break                                 # locked despite the fast pass — commit what we have
+    try:
+        con.commit()
+    finally:
+        con.close()                                   # NEVER leak a mid-transaction handle (the jam)
     return updated
 
 

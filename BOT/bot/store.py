@@ -43,6 +43,23 @@ class Store:
         self.con.executescript(_SCHEMA)
         self.con.commit()
 
+    def close(self) -> None:
+        """Explicit lifecycle (warning sweep 2026-07-11): Store objects held their connection
+        until GC — the 'unclosed database' ResourceWarnings in the suite. Close when done."""
+        try:
+            self.con.close()
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def _ins(self, table, cols, vals):
         ph = ",".join("?" * len(vals))
         self.con.execute(f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({ph})", vals)

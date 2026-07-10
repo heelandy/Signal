@@ -91,6 +91,45 @@ STRATEGY_MODULES = [
               "+0.103, 11/17 years positive. ES FAILS years (9/17). Execution still needs "
               "continuous-contract roll handling before paper. Ladder lineage: swing-fut-1d-0.1",
      "approval_requirements": "full AITP ladder from research"},
+    {"id": "equities_qqq_composite", "asset_class": "equities", "style": "day_trading",
+     "symbols": ["QQQ"], "status": "gauntlet_pass", "strategy_version": "qqq-composite-0.1",
+     "notes": "QQQ CONFLUENCE AT THE OPEN (F108, gauntlet-passed 2026-07-10 after the equity "
+              "cost-model fix — ALL 7): Monday + fade-yesterday votes |v|>=2 == LONG on a MONDAY "
+              "AFTER A DOWN FRIDAY, 9:30 open -> 16:00 close. n=172 +19.6bps WR 61 PF 1.57 CI_lo "
+              "+5.5 7/9 yrs OOS +24.0 2x-slip +18.9 — the equities twin of the NQ weekend "
+              "complex; on QQQ the OPEN beats the 10:35 entry. EQ SHARES book (overnight "
+              "precedent: option theta eats a 1-day ~20bps edge). Stop grid queued in the "
+              "battery. Ladder lineage: qqq-composite-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "equities_spy_monday", "asset_class": "equities", "style": "day_trading",
+     "symbols": ["SPY"], "status": "gauntlet_pass", "strategy_version": "spy-monday-0.1",
+     "notes": "SPY MONDAY DRIFT (F108, ALL 7 after the cost fix): LONG every Monday 9:30 open -> "
+              "16:00 close. n=382 +9.0bps WR 59 PF 1.40 CI_lo +2.3 7/9 yrs OOS +11.9 2x +8.5. "
+              "Single census cell — confluence needs >=2 votes and SPY has one, so this is a "
+              "CALENDAR rule, not a composite. EQ SHARES book. Stop grid queued. "
+              "Ladder lineage: spy-monday-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "futures_nq_composite", "asset_class": "futures", "style": "day_trading",
+     "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "nq-composite-0.1",
+     "notes": "PATTERN COMPOSITE (F104, gauntlet-passed 2026-07-10 — ALL 7): the census pass-"
+              "cells as VOTES at 10:30 ET (Monday drift + big-first-hour momentum + fade-"
+              "yesterday + gap-up follow); trade ONLY on CONFLUENCE |votes|>=2, enter 10:35, exit "
+              "the 16:00 close. n=1320 +6.3bps net WR 57 PF 1.22 CI_lo +2.2 **15/17 YEARS** OOS "
+              "+9.5 2x-slip +4.4 — the most year-consistent rule in the book. Vol-cluster sizing "
+              "overlay (high-vol days ~4x edge) is the V2 upgrade. Stacked-mining bias is real "
+              "despite pre-registration -> shadow accrual judges (research/nq_composite_gauntlet"
+              ".py). Ladder lineage: nq-composite-0.1",
+     "approval_requirements": "full AITP ladder from research"},
+    {"id": "futures_weekend_fade", "asset_class": "futures", "style": "session_trading",
+     "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "weekend-fade-0.1",
+     "notes": "WEEKEND FADE (F95->F97b, gauntlet-passed 2026-07-10 — ALL 7 WITH ITS STOP): weak "
+              "FRIDAY RTH close (bottom third of the range) -> LONG NQ at the SUNDAY 18:00 reopen "
+              "-> STOP at entry - 0.5x Friday's RTH range (the stop IMPROVES the edge: +8.5bps vs "
+              "+7.9 no-stop, PF 1.50, CI_lo +2.6, OOS +22.5bps, worst capped -2.35%) -> else exit "
+              "Monday 03:00. n=247, 12/17 yrs, WR 59%. NOTE: the daily 18:00->03:00 spec (F96) was "
+              "DECOMPOSED — its weekday cohort is DEAD OOS (-0.3bps); Friday-only IS the edge "
+              "(research/weekend_fade_gauntlet.py). Ladder lineage: weekend-fade-0.1",
+     "approval_requirements": "full AITP ladder from research"},
     {"id": "futures_volbreak", "asset_class": "futures", "style": "day_trading",
      "symbols": ["NQ"], "status": "gauntlet_pass", "strategy_version": "volbreak-fut-0.1",
      "notes": "VOLATILITY BREAKOUT, OUTRIGHT NQ FUTURES (isolated from the options book, user "

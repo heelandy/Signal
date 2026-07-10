@@ -39,6 +39,17 @@ DUELISTS = {
     # equities_connors_rsi2 DROPPED 2026-07-09 (weak — "no structure passed, underlying only")
 }
 
+# EXECUTION BOOK per module (user rule: equities trade via OPTIONS, futures via OUTRIGHTS/shares;
+# the books are isolated so records never mix). op = options chain · eq = shares · ft = futures.
+BOOKS = {
+    "equities_swing": "op",        # 21DTE naked/debit (swing-1d is an OPTIONS lineage)
+    "equities_volbreak": "op",     # 0DTE naked (volbreak-0dte is an OPTIONS lineage)
+    "equities_overnight": "eq",    # SHARES only — options frictions exceed the ~0.03%/night edge
+    "futures_swing": "ft",
+    "futures_volbreak": "ft",      # NQ outright
+    "futures_tsmom": "ft",
+}
+
 # GATE-PASSED options expression per module (user 2026-07-06: "they will show the information
 # according to the gate they pass — volbreak for naked, swing for QQQ debit"). From the
 # cross-strategy payoff replay (research/options_cross.py, F74).
@@ -165,9 +176,16 @@ def _live_daily_frame(sym: str) -> pd.DataFrame:
             live = live.copy()
             live["ts"] = pd.to_datetime(live["ts_et"] if "ts_et" in live.columns else live["ts"],
                                         utc=True)     # providers frame carries ts_et, not ts
-            # COMPLETED bars only: today's forming daily bar would resolve 1-day positions early
-            today_et = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
-            live = live[live["ts"].dt.strftime("%Y-%m-%d") < today_et]
+            # COMPLETED bars only: today's forming daily bar would resolve 1-day positions early.
+            # After 17:10 ET (equities closed 16:00, futures 17:00) TODAY's bar IS complete —
+            # include it so daily entries register/alert the same EVENING, not after midnight
+            # (user 2026-07-10: "does the daily book fire at night or armed at night?")
+            now_et = pd.Timestamp.now(tz="America/New_York")
+            today_et = now_et.strftime("%Y-%m-%d")
+            if (now_et.hour, now_et.minute) >= (17, 10):
+                live = live[live["ts"].dt.strftime("%Y-%m-%d") <= today_et]
+            else:
+                live = live[live["ts"].dt.strftime("%Y-%m-%d") < today_et]
             cols = [c for c in ("ts", "open", "high", "low", "close", "volume") if c in live.columns]
             add = live[live["ts"] > b["ts"].max()][cols]
             if len(add):
@@ -211,6 +229,13 @@ def _resolve(pos: dict, bar: pd.Series, b: pd.DataFrame) -> float | None:
         return None
     adverse = lo if sign == 1 else h
     favor = h if sign == 1 else lo
+    # GAP-AWARE (2026-07-10, "first rule is risk management"): a daily bar OPENING through the
+    # stop/tp fills at the OPEN — equities can't be stop-protected overnight, so booking the stop
+    # price on a gap-down overstated the swing book's safety. Symmetric on the target side.
+    if sign * (o - pos["stop"]) <= 0:
+        return sign * (o - entry) / risk
+    if sign * (o - pos["tp"]) >= 0:
+        return sign * (o - entry) / risk
     if sign * (adverse - pos["stop"]) <= 0:
         return sign * (pos["stop"] - entry) / risk
     if sign * (favor - pos["tp"]) >= 0:
@@ -281,6 +306,96 @@ def run_duel_once(frames: dict | None = None) -> dict:
     return {"day": day, "opened": opened, "open": len(st["open"]), "closed": len(st["closed"])}
 
 
+_px_cache: dict = {}
+
+
+def _last_px(sym: str):
+    """60s-cached last price for the open-detail unrealized read (leaderboard polls every 20s)."""
+    import time as _t
+    hit = _px_cache.get(sym)
+    if hit and _t.time() - hit[0] < 60:
+        return hit[1]
+    px = None
+    try:
+        from bot.market_data.providers import latest_price
+        px = (latest_price(sym) or {}).get("price")
+    except Exception:
+        pass
+    _px_cache[sym] = (_t.time(), px)
+    return px
+
+
+def preview_today() -> list[dict]:
+    """PRE-CLOSE PREVIEW (user 2026-07-10: manual brokers like Webull/Robinhood have NO MOC/MOO —
+    the real order must be placed 15:45-15:59 DURING the session, so the decision must be visible
+    BEFORE the close): evaluate every approved module's entry rule on TODAY'S FORMING bar as if it
+    closed right now. Advisory only — the official shadow entry still books on the completed bar."""
+    from bot.market_data.providers import get_bars
+    from bot.ml.swing_dataset import add_daily_indicators
+    syms = sorted({s for _, (v, ss) in DUELISTS.items() for s in ss})
+    frames = {}
+    for s in syms:
+        try:
+            b = _live_daily_frame(s)                       # completed bars only
+            live = get_bars(s, tf="1d", period="5d")
+            if live is None or not len(live):
+                continue
+            live = live.copy()
+            tcol = "ts_et" if "ts_et" in live.columns else "ts"
+            live["ts"] = pd.to_datetime(live[tcol], utc=True)
+            add = live[live["ts"] > b["ts"].max()]
+            if not len(add):                               # no forming bar yet -> nothing to preview
+                continue
+            cols = [c for c in ("ts", "open", "high", "low", "close", "volume") if c in live.columns]
+            base = b[[c for c in ("ts", "open", "high", "low", "close", "volume") if c in b.columns]]
+            b2 = pd.concat([base, add[cols]], ignore_index=True)
+            for c in ("open", "high", "low", "close"):
+                b2[c] = b2[c].astype(float)
+            frames[s] = add_daily_indicators(b2)
+        except Exception:
+            continue
+    out = []
+    for module, (version, msyms) in DUELISTS.items():
+        if not _approved(version):
+            continue
+        for sym in msyms:
+            b = frames.get(sym)
+            if b is None:
+                continue
+            try:
+                for t in _entries_for(module, sym, b):
+                    sgn = t.get("sign", 0)
+                    # ACTIONABLE LEVELS in the alert (user 2026-07-10 "I don't see the stop loss"):
+                    # each kind states its real risk plan — swing has stop+tp; tsmom has NO hard
+                    # stop by rule (time exit — the risk unit is for SIZING); volbreak's bands
+                    # only exist off tomorrow's open, so state the band width now.
+                    risk = t.get("risk")
+                    if t.get("stop") is not None:
+                        levels = (f"stop {t['stop']:.2f} · tp {t['tp']:.2f}"
+                                  f" · risk {risk:.2f} pts" if risk else f"stop {t['stop']:.2f}")
+                    elif t.get("kind") == "tsmom":
+                        levels = (f"NO hard stop (time exit {t.get('max_days')}d at the close) — "
+                                  f"SIZE on risk {risk:.2f} pts (1.5×ATR)" if risk else
+                                  "NO hard stop — time exit")
+                    elif t.get("kind") == "volbreak":
+                        off = VB_K * float(t.get("prev_range") or 0)
+                        levels = (f"bands = tomorrow's open ±{off:.2f} pts · stop = opposite band"
+                                  f" · flat by the close" if off else "bands off tomorrow's open")
+                    else:
+                        levels = ""
+                    out.append({"module": module, "book": BOOKS.get(module, "?"), "symbol": sym,
+                                "kind": t.get("kind"),
+                                "side": "long" if sgn > 0 else "short" if sgn < 0 else "arms for tomorrow",
+                                "entry_now": t.get("entry"), "stop": t.get("stop"), "tp": t.get("tp"),
+                                "risk": risk, "levels": levels,
+                                "max_days": t.get("max_days"),
+                                "note": "would enter at TODAY'S close if the bar closed here — "
+                                        "place the real order 15:50-15:59 ET"})
+            except Exception:
+                continue
+    return out
+
+
 def leaderboard() -> dict:
     """Head-to-head table: every duelist's resolved shadow trades + the ORB core's live shadow
     scorecard (the tracker) for reference."""
@@ -299,6 +414,25 @@ def leaderboard() -> dict:
     open_by = {}
     for p in st["open"]:
         open_by[p["module"]] = open_by.get(p["module"], 0) + 1
+    # TODAY'S ENTRIES, visible (user 2026-07-10 "signals are not populated properly"): every open
+    # duel position with its book/side/entry — PLUS live unrealized R (user: "I also need to be
+    # aware of them" — a tsmom leg 480 points onside must be visible, not buried in a JSON file)
+    open_detail = []
+    for p in st["open"]:
+        sgn = p.get("sign", 0)
+        row = {"module": p["module"], "book": BOOKS.get(p["module"], "?"),
+               "symbol": p["symbol"], "kind": p.get("kind"),
+               "side": ("long" if sgn > 0 else "short" if sgn < 0
+                        else "armed (side decided intraday)"),
+               "entry": p.get("entry"), "opened": p.get("opened"),
+               "days_held": p.get("days_held"), "max_days": p.get("max_days")}
+        if sgn and p.get("entry") and p.get("risk"):
+            px = _last_px(p["symbol"])
+            if px:
+                row["last"] = round(float(px), 2)
+                row["unreal_r"] = round(sgn * (float(px) - float(p["entry"])) / float(p["risk"]), 2)
+                row["unreal_pts"] = round(sgn * (float(px) - float(p["entry"])), 2)
+        open_detail.append(row)
     versions = {m: v for m, (v, _) in DUELISTS.items()}
     from bot.approval import status, STAGES
     stmap = {m: status(v)["stages"] for m, v in versions.items()}
@@ -306,6 +440,7 @@ def leaderboard() -> dict:
     stage = {m: next((x for x in reversed(STAGES) if s.get(x)), None)          # highest approved
              for m, s in stmap.items()}                                        # stage -> dashboard badge
     return {"last_day": st.get("last_day"), "results": out, "open_positions": open_by,
+            "open_detail": open_detail, "books": BOOKS,
             "lineage": versions, "joined": joined, "stage": stage, "options": OPTIONS_EXPRESSION,
             "note": "shadow duel — no orders; a module joins once its lineage has a research "
                     "approval (one-click on /training)"}

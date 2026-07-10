@@ -81,7 +81,7 @@
 <div class="wrap">
 
   <div class="card col12" style="grid-column:span 12;margin-top:10px">
-    <details><summary style="cursor:pointer;font-weight:700">📖 HOW EACH PANEL WORKS (click)</summary>
+    <details><summary style="cursor:pointer;font-weight:700">HOW EACH PANEL WORKS (click)</summary>
       <div class="note" style="line-height:1.7">
       <b>Run</b> — buttons launch one research job at a time as a subprocess. Symbol select + timeframe select apply to dataset/ML/NN/heads. The log streams below; the status pill (top-right) shows what is running, its ET start time and elapsed. Results land in their own panel when the job finishes.<br>
       <b>0·Data QA</b> — validates the historical bar store (duplicates, bad candles, gaps, bars/day) for all symbols.<br>
@@ -120,6 +120,7 @@
       <button onclick="run('pairs')">11 · DIR-fast pairs</button>
       <button onclick="run('geometry')" title="ultimate-goal check: WR/PF/DD per TP×stop geometry (45t futures / $4 equities)">12 · Target geometry</button>
       <button onclick="run('nqwr')" title="futures high-WR search: stop budget × TP × regime grid (NQ/ES)">13 · Futures 75% WR</button>
+      <button onclick="run('battery')" title="PATTERN DISCOVERY (F98): re-run the whole study library, diff verdicts vs the last run, alert NEW edges + decay. Auto-runs nightly ~02:00 ET.">14 · Research battery</button>
       <span class="mut" id="runhint">ALL = pooled multi-symbol · one subprocess at a time</span>
     </div>
     <div class="log" id="runlog">—</div>
@@ -303,6 +304,10 @@ async function poll(force){
     txt.textContent = `continuous: ${c.current} — cycle started ${fmtET(c.last_start)} (${elapsed(c.last_start)})`; }
   else { dot.className = 'dot off'; txt.textContent = st.rc === null ? (c.on ? 'continuous armed' : 'idle')
     : `done (${st.kind} ${st.sym||''}, rc=${st.rc}, started ${fmtET(st.started)})`; }
+  // SUBSYSTEM HEARTBEATS (D5 prevention, lab surface): failing scan-loop/governance steps go RED here
+  const bf = st.beats_failing || [];
+  if (bf.length){ dot.className = 'dot off';
+    txt.innerHTML += ` · <span class="no" title="${Object.entries(st.beats_errors||{}).map(([k,v])=>k+': '+(v||'')).join(' | ').replaceAll('"','&quot;')}">⚠ FAILING: ${bf.join(', ')}</span>`; }
   if (st.log && st.log.length) document.getElementById('runlog').textContent = st.log.join('\n');
   renderCont(c);
   const busy = st.running || (c.on && c.current);
@@ -372,8 +377,22 @@ async function loadApprovals(){
         ${gRuns ? ` | gauntlet: ${gRuns}` : ''}</div>
     </details>
     <table><tr><th>stage</th><th>status</th><th></th></tr>${rows}</table><div class="note">${evline}</div>
+    <div class="note" id="ladderperf">record: loading…</div>
     <div class="note" id="ph78">phase 7–8: loading…</div>`;
-  loadPhase78();
+  loadPhase78(); loadLadderPerf();
+}
+// LIVE RECORD next to the approve/revoke buttons (user 2026-07-10: "approve/revoke base on their
+// performance") — every perf-board row belonging to the SELECTED lineage, with its book (eq/ft/op).
+let _SPERF=null;
+async function loadLadderPerf(){
+  const el=document.getElementById('ladderperf'); if(!el) return;
+  try{ if(!_SPERF) _SPERF=await j('/api/strategy_perf'); }catch(e){ el.textContent='record: '+e; return }
+  const mine=(_SPERF.strategies||[]).filter(r=>r.lineage===_apprVer);
+  el.innerHTML = mine.length
+    ? '<b>LIVE RECORD of this lineage</b> — ' + mine.map(r=>
+        `<span class="${(r.avg_r||0)>0?'ok':'no'}">${r.strategy}${r.book?` [${r.book.toUpperCase()}]`:''}: n${r.n} · ${r.win_pct!=null?r.win_pct+'%':'—'} · ${r.avg_r!=null?(r.avg_r>0?'+':'')+r.avg_r+'R':'—'}${r.pf!=null?' · PF '+r.pf:''} <span class="mut">(${r.record})</span></span>`).join(' | ')
+      + (mine.some(r=>r.n>=(_SPERF.min_sample||12))?'':' <span class="mut">· thin sample — judge after n≥'+(_SPERF.min_sample||12)+'</span>')
+    : '<span class="mut">no record yet for this lineage — it accrues as it trades (see the ranked board below)</span>';
 }
 // AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06): the paper study evaluates itself hourly on the
 // server; this row just SHOWS the readiness — when everything is green the 'live' stage advances
@@ -434,7 +453,7 @@ async function loadDuel(){
       const stg = (d.stage || {})[m];              // highest APPROVED stage, not a blanket "in the duel"
       const opt = (d.options || {})[m];
       return `<tr><td title="${(d.lineage||{})[m]||''}">${m.replace(/_/g,' ')}` +
-        (opt ? `<div class="mut" style="font-size:9px;margin-top:2px" title="gate-passed options expression (payoff replay F74)">⚡ ${opt}</div>` : '') + `</td>` +
+        (opt ? `<div class="mut" style="font-size:9px;margin-top:2px" title="gate-passed options expression (payoff replay F74)">&raquo; ${opt}</div>` : '') + `</td>` +
         (r ? `<td class="num">${r.n}</td><td class="num">${r.win_pct}</td><td class="num">${r.avg_r}</td><td class="num">${r.total_r}</td><td class="num">${r.pf ?? '—'}</td>`
            : `<td class="num" colspan="5">no resolved trades yet</td>`) +
         `<td class="num">${(d.open_positions||{})[m]||0}</td>` +
@@ -776,7 +795,7 @@ async function loadL2(){
   el.innerHTML = (d.sources && d.sources.length) ?
     `<div class="runrow" style="margin-bottom:8px">` +
     (n_reg > 1 ? `<button class="primary" onclick="l2syncAll()">⟳ SYNC ALL (${n_reg} pending)</button>` : '') +
-    ((d.sources || []).some(s => s.status === 'synthesized') ? `<button onclick="l2retrain()" title="dataset → ML → NN for every symbol with synthesized depth features (runs automatically after SYNC ALL — this button re-runs it on demand)">⚙ Rebuild + retrain synced</button>` : '') +
+    ((d.sources || []).some(s => s.status === 'synthesized') ? `<button onclick="l2retrain()" title="dataset → ML → NN for every symbol with synthesized depth features (runs automatically after SYNC ALL — this button re-runs it on demand)">Rebuild + retrain synced</button>` : '') +
     `</div>` +
     '<table><tr><th>sym</th><th>kind</th><th class="num">MB</th><th>status</th><th class="num">feat rows</th><th></th></tr>' +
     d.sources.map(s => `<tr><td>${s.symbol}</td><td>${s.kind}</td><td class="num">${s.size_mb}</td>
@@ -894,12 +913,14 @@ window.loadEvolve = loadEvolve;
 /* ---- LIVE STRATEGY PERFORMANCE (ranked — the prioritisation substrate) ---- */
 async function loadStratPerf(){
   let d; try{ d=await j('/api/strategy_perf'); }catch(e){ document.getElementById('stratperf').innerHTML='<span class="dn">'+e+'</span>'; return }
+  _SPERF=d; loadLadderPerf();          // keep the ladder's record line fresh off the same fetch
   const rows=d.strategies||[];
   if(!rows.length){ document.getElementById('stratperf').textContent='no strategy records yet'; return }
   const cell=(v,pos)=>v==null?'—':`<span class="${pos===true?'ok':pos===false?'no':''}">${v}</span>`;
+  const bookChip=b=>b?`<span class="badge ${b==='op'?'b-aplus':b==='eq'?'b-a':'b-b'}" style="font-size:8px" title="${({op:'OPTIONS book',eq:'EQUITIES shares book',ft:'FUTURES outright book'})[b]}">${b.toUpperCase()}</span> `:'';
   const tr=(r,i)=>`<tr style="${r.rankable?'':'opacity:.55'}">`+
     `<td>${r.rankable?('#'+(i+1)):'<span class="mut">…</span>'}</td>`+
-    `<td><b>${r.strategy}</b>${r.band_pass?' <span class="badge b-pass" title="meets the goal band">BAND ✓</span>':''}</td>`+
+    `<td>${bookChip(r.book)}<b>${r.strategy}</b>${r.band_pass?' <span class="badge b-pass" title="meets the goal band">BAND ✓</span>':''}</td>`+
     `<td class="mut">${r.source}</td><td class="mut" style="font-size:9px">${r.record||''}</td>`+
     `<td class="num">${r.n}${r.rankable?'':' <span class="mut" style="font-size:8px">/'+d.min_sample+'</span>'}</td>`+
     `<td class="num">${cell(r.win_pct!=null?r.win_pct+'%':null, r.win_pct>=75&&r.win_pct<=85?true:undefined)}</td>`+

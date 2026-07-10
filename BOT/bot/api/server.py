@@ -405,9 +405,14 @@ def _options_native_live():
         date = now.strftime("%Y-%m-%d")
         spot = (latest_price("QQQ") or {}).get("price")
         # 1) ENTRY at 10:00 / 13:00 ET — the managed 0DTE credit spread + ONE 7DTE condor (F89).
+        # BROKER 0DTE OPEN CUTOFF (user-verified 2026-07-10): Webull blocks NEW same-day-expiry
+        # opens after 15:00 ET; Robinhood after 15:30 AND auto-closes at-risk expiring positions
+        # FROM 15:30 (hold-to-settle rows get force-closed early there). Current slots comply;
+        # this hard gate keeps any FUTURE slot from silently violating manual-broker reality.
+        zdte_cut = int(os.environ.get("ZERO_DTE_OPEN_CUTOFF_HM", "900"))     # 900 = 15:00 ET (Webull, strictest)
         if spot:
             for slot, ehm in (("am", 600), ("pm", 780)):
-                if ehm <= hm <= ehm + 3:
+                if ehm <= hm <= ehm + 3 and hm <= zdte_cut:
                     sig = native.live_signal_from_alpaca("QQQ", spot=float(spot),
                                                          structure="credit_spread")
                     if not sig.get("error") and sig.get("priced_from") == "alpaca_live":
@@ -494,6 +499,32 @@ def _autotrack_acceptable(signals=None):
             pass
 
 
+_beats: dict = {}    # SUBSYSTEM HEARTBEATS (D5 lesson: the resolver was dead 19h, silently)
+
+
+def _beat(name, fn):
+    """SILENT-FAILURE KILLER: run one scan-loop step ISOLATED — one failing step no longer skips
+    every step after it — and record the outcome so /api/health + the dashboard surface a dead
+    subsystem within one cycle instead of never."""
+    try:
+        fn()
+        _beats[name] = {"ok": True, "ts": _now(), "error": None}
+    except Exception as e:
+        _beats[name] = {"ok": False, "ts": _now(), "error": f"{type(e).__name__}: {str(e)[:120]}"}
+
+
+def _beat_val(name, fn):
+    """_beat for steps whose RESULT is kept (market context, duel tick, phase78...): returns the
+    value on success, an {'error': ...} stub on failure — and always records the heartbeat."""
+    try:
+        v = fn()
+        _beats[name] = {"ok": True, "ts": _now(), "error": None}
+        return v
+    except Exception as e:
+        _beats[name] = {"ok": False, "ts": _now(), "error": f"{type(e).__name__}: {str(e)[:120]}"}
+        return {"error": str(e)[:120]}
+
+
 def _scan_loop():
     from bot.live import scan_watchlist
     from bot.tracker import track_outcomes
@@ -514,17 +545,44 @@ def _scan_loop():
                     pass
                 _latest["signals"] = _sigs       # publish AFTER allocate's in-place sort (review
                 _latest["ts"] = _now(); _latest["error"] = None   # fix: no mid-sort reads)
-                _snapshot_latest()               # share signals with the reloadable API process
-                _autotrack_acceptable()          # shadow-track ACCEPTABLE 5m signals -> journal (training-lab feed)
-                if _mkt_tick["n"] % 3 == 0:       # 15m LINEAGE live journal (every ~3 min — 15m bars are slower)
-                    _capture_15m_journal()
-                _worker_shadow_study()           # BOSS WORKERS: per-worker tight-target what-if study (approved workers)
-                _trail_shadow_study()            # TRAIL-EQ (F84 graduate): chandelier-exit twin on core signals
-                _options_native_study()          # OPTIONS-NATIVE (F86): 0DTE VRP condor, real-chain journal (sealed)
-                _options_native_live()           # LIVE per-tick management: enter + mark + TP/stop/settle (F88)
-                _paper_autotrade()               # STUDY: place paper orders when the toggle is on
-                track_outcomes()                 # resolve first-touch outcomes of tracked signals each cycle
-                _persist_runtime()               # heartbeat (last_scan_at) for the phase-7 health check
+                # EVERY step below runs ISOLATED with a heartbeat (D5 lesson): before, one raise
+                # here skipped every later step — track_outcomes died silently for 19 hours.
+                _beat("snapshot", _snapshot_latest)        # share signals with the reloadable API process
+                _beat("autotrack", _autotrack_acceptable)  # shadow-track ACCEPTABLE 5m signals -> journal
+                if _mkt_tick["n"] % 3 == 0:                # 15m LINEAGE live journal (every ~3 min)
+                    _beat("journal_15m", _capture_15m_journal)
+                _beat("workers", _worker_shadow_study)     # BOSS WORKERS: tight-target what-if study
+                _beat("trail", _trail_shadow_study)        # TRAIL-EQ (F84): chandelier-exit twin
+                _beat("options_study", _options_native_study)  # OPTIONS-NATIVE (F86): 0DTE VRP journal
+                _beat("options_live", _options_native_live)    # LIVE per-tick: enter + mark + settle (F88)
+                _beat("paper_autotrade", _paper_autotrade)     # STUDY: paper orders when armed
+                def _run_outcomes():                           # resolve + SURFACE the outcomes
+                    upd = track_outcomes()
+                    if upd:                                    # awareness (user 2026-07-10): a TP2/stop
+                        for u in upd:                          # resolution must announce itself, not
+                            u["ts"] = _now()                   # sit silently in the journal
+                        buf = _latest.setdefault("resolutions", [])
+                        buf.extend(upd); del buf[:-30]
+                _beat("track_outcomes", _run_outcomes)
+                def _weekend_fade_tick():                      # F97b weekend fade (Sun 18:05 in,
+                    from bot.strategy.asia_fade import tick    # 0.5x stop live, Mon 03:05 out) —
+                    tick()                                     # approval-gated shadow
+                _beat("weekend_fade", _weekend_fade_tick)
+                def _nq_composite_tick():                      # F104 confluence composite (votes
+                    from bot.strategy.nq_composite import tick  # @10:35, exit 16:00) — approval-
+                    tick()                                     # gated shadow
+                _beat("nq_composite", _nq_composite_tick)
+                def _eq_calendar_tick():                       # F108 QQQ confluence@open + SPY
+                    from bot.strategy.eq_calendar import tick  # monday (EQ shares book) —
+                    tick()                                     # approval-gated shadow
+                _beat("eq_calendar", _eq_calendar_tick)
+                _beat("persist", _persist_runtime)             # heartbeat for the phase-7 health check
+                def _tickwatch_check():                        # F102: the 3s poll thread must stay fresh
+                    from bot.market_data import tickwatch
+                    st = tickwatch.status()
+                    if st["on"] and (st["age_sec"] is None or st["age_sec"] > 90):
+                        raise RuntimeError(f"tick poll stale {st['age_sec']}s")
+                _beat("tickwatch", _tickwatch_check)
                 try:                             # persist flow scores each cycle (data-first — future feature backfill)
                     from bot.orderflow.persist import snapshot as _of_snap
                     _of_snap(list(dict.fromkeys(s.get("symbol") for s in (_latest.get("signals") or [])
@@ -532,37 +590,53 @@ def _scan_loop():
                 except Exception:
                     pass
                 if _mkt_tick["n"] % 10 == 0:      # market context every ~10 cycles (slow daily data)
-                    _latest["market"] = market_context()
-                    # PERIODIC RECONCILE (phase-7 pulled forward): compare tracked open decisions
-                    # vs the paper broker's positions every ~10 min while autotrade is armed
+                    # TRAINING-LAB-PLANE HEARTBEATS (user 2026-07-10 "same test for the training
+                    # lab"): the slow-cadence steps recorded errors into _latest but nothing
+                    # SURFACED them — a dead duel/phase78 hid exactly like the dead resolver (D5)
+                    _latest["market"] = _beat_val("market_context", market_context)
                     if _state.get("paper_autotrade"):
-                        try:
-                            from bot.reconcile import reconcile_once
-                            _latest["reconcile"] = reconcile_once(_paper_broker())
-                        except Exception as e:
-                            _latest["reconcile"] = {"error": str(e)[:120]}
-                    # STRATEGY DUEL (user 2026-07-06): approved module lineages shadow-trade
-                    # their daily rules head-to-head; idempotent per completed trading day
-                    try:
-                        from bot.strategy.duel import run_duel_once
-                        _latest["duel_tick"] = run_duel_once()
-                    except Exception as e:
-                        _latest["duel_tick"] = {"error": str(e)[:120]}
+                        from bot.reconcile import reconcile_once
+                        _latest["reconcile"] = _beat_val("reconcile",
+                                                         lambda: reconcile_once(_paper_broker()))
+                    from bot.strategy.duel import run_duel_once
+                    _latest["duel_tick"] = _beat_val("duel", run_duel_once)
                 if _mkt_tick["n"] % 60 == 0:      # AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06):
-                    try:                          # the paper study evaluates itself hourly; when
-                        from bot.phase78 import evaluate as _p78   # done, the 'live' stage
-                        _latest["phase78"] = _p78()                # advances — lock stays manual
-                    except Exception as e:
-                        _latest["phase78"] = {"error": str(e)[:120]}
-                    try:                          # BOSS conformance watch (hourly, same cadence)
-                        from bot.boss import evaluate as _boss
-                        _latest["boss"] = _boss()
-                    except Exception as e:
-                        _latest["boss"] = {"error": str(e)[:120]}
+                    # NIGHTLY RESEARCH BATTERY (F98 — pattern discovery): launch ~02:00 ET once
+                    # a day; surface verdict CHANGES (new edges / decay) as research alerts.
+                    def _battery_tick():
+                        import json as _json
+                        import pandas as _pd
+                        from bot.config import BOT_ROOT
+                        rep_p = BOT_ROOT / "data" / "ml" / "reports" / "nightly_research.json"
+                        now_et = _pd.Timestamp.now(tz="America/New_York")
+                        today = now_et.strftime("%Y-%m-%d")
+                        rep = {}
+                        if rep_p.exists():
+                            try:
+                                rep = _json.loads(rep_p.read_text(encoding="utf-8"))
+                            except Exception:
+                                rep = {}
+                        if now_et.hour == 2 and str(rep.get("generated_at", ""))[:10] != today \
+                                and _train_state["proc"] is None:
+                            log = open(rep_p.parent / "nightly_research.log", "a", encoding="utf-8")
+                            _subprocess.Popen([_sys.executable,
+                                               str(BOT_ROOT.parent / "research" / "nightly_battery.py")],
+                                              cwd=str(BOT_ROOT.parent), stdout=log,
+                                              stderr=_subprocess.STDOUT)
+                        # surface a fresh report's changes exactly once
+                        ts = rep.get("generated_at")
+                        if ts and ts != _latest.get("battery_seen"):
+                            _latest["battery_seen"] = ts
+                            _latest["research_alerts"] = (rep.get("changes") or [])[:12]
+                    _beat("battery", _battery_tick)
+                    from bot.phase78 import evaluate as _p78       # paper study self-eval, hourly
+                    _latest["phase78"] = _beat_val("phase78", _p78)
+                    from bot.boss import evaluate as _boss         # BOSS conformance watch
+                    _latest["boss"] = _beat_val("boss", _boss)
                     try:                          # JOURNAL INTEGRITY watch (hourly): corruption
                         from bot.tracker import integrity as _integ   # never sits unnoticed
-                        _latest["journal_integrity"] = _integ()
-                        if not _latest["journal_integrity"]["ok"]:
+                        _latest["journal_integrity"] = _beat_val("journal_integrity", _integ)
+                        if not _latest["journal_integrity"].get("ok", True):   # error stub = no alert (beat shows it)
                             from bot.alerts import alert as _alert
                             ji = _latest["journal_integrity"]
                             _alert(f"journal integrity: {len(ji['dupes'])} dupes, "
@@ -725,13 +799,76 @@ def datasources(probe: int = 0):
     return provider_status(probe=bool(probe))
 
 
-@app.on_event("startup")
-def _startup():
+_tw_cache = {"t": 0.0, "syms": [], "rows": []}
+
+
+def _tick_symbols() -> list:
+    """ACTIVE set for the tick watcher (30s-cached): open tracked positions + the weekend-fade
+    hold + currently-firing tradeable signals. Small on purpose — rate-limit friendly."""
+    import time as _t
+    if _t.time() - _tw_cache["t"] < 30:
+        return _tw_cache["syms"]
+    syms, rows = [], []
+    try:
+        from bot.tracker import list_decisions
+        for x in list_decisions(200):
+            if x.get("taken") and x.get("outcome") in ("open", "tp1_open"):
+                syms.append(x["symbol"])
+                rows.append({"id": x["id"], "symbol": x["symbol"], "side": x["side"],
+                             "stop": x.get("stop"), "tp1": x.get("tp1"), "tp2": x.get("tp2")})
+    except Exception:
+        pass
+    try:
+        from bot.strategy.asia_fade import open_position
+        if open_position():
+            syms.append("NQ")
+    except Exception:
+        pass
+    syms += [s.get("symbol") for s in (_latest.get("signals") or []) if s.get("tradeable")]
+    syms += list(_WATCH)                    # F103: tick-direction rings for the whole watchlist
+    _tw_cache.update(t=_t.time(), syms=[s for s in dict.fromkeys(syms) if s], rows=rows)
+    return _tw_cache["syms"]
+
+
+_tw_touched: set = set()
+
+
+def _tick_touch(sym: str, ts: float, px: float) -> None:
+    """Intrabar TOUCH detection (F102): a tracked position's stop/TP crossed between bar closes
+    fires an alert IMMEDIATELY (the walk still books the official outcome — no double-booking)."""
+    for r in _tw_cache["rows"]:
+        if r["symbol"] != sym:
+            continue
+        sgn = 1 if r["side"] == "long" else -1
+        for level, val in (("stop", r.get("stop")), ("tp1", r.get("tp1")), ("tp2", r.get("tp2"))):
+            if val is None:
+                continue
+            crossed = (px - float(val)) * sgn <= 0 if level == "stop" else (px - float(val)) * sgn >= 0
+            key = f"{r['id']}|{level}"
+            if crossed and key not in _tw_touched:
+                _tw_touched.add(key)
+                buf = _latest.setdefault("intrabar", [])
+                buf.append({"symbol": sym, "level": level, "px": round(px, 2),
+                            "side": r["side"], "ts": _now()})
+                del buf[:-20]
+
+
+@app.on_event("startup")   # NOTE: on_event is deprecated in FastAPI; migration to lifespan is
+def _startup():            # queued — it touches the thread-startup path, so it gets its own
+                           # change + verification pass rather than riding a warning sweep.
     _restore_runtime()                      # kill-switch/paper toggles + dedup keys survive restarts
     if os.environ.get("BOT_AUTOSCAN", "1") != "0":
         _threading.Thread(target=_scan_loop, daemon=True).start()
     else:                                   # API-ONLY (reloadable): the worker scans; we just read
         _threading.Thread(target=_latest_reader, daemon=True).start()
+    # TICK WATCHER (F102): 3s snapshot poll for the ACTIVE set only — open tracked positions,
+    # session holds, firing signals. Serves intrabar TOUCH alerts + the forward tick archive;
+    # entries stay on validated 5m closes.
+    try:
+        from bot.market_data import tickwatch
+        tickwatch.start(_tick_symbols, on_tick=_tick_touch)
+    except Exception:
+        pass
     # AUTO-ARM continuous training on boot (opt-in): set BOT_CONT_TRAINING=1 (+ optional
     # BOT_CONT_INTERVAL_MIN). Pairs with run_server.bat's --reload so new code always runs.
     if os.environ.get("BOT_CONT_TRAINING", "0") == "1" and not _cont["on"]:
@@ -764,7 +901,11 @@ def health():
             "uptime_sec": int(_time.time() - _START), "scanning": _latest["scanning"],
             "paper_autotrade": _state.get("paper_autotrade", False),
             "strategy_version": _sv,           # stale-server tell: compare with the CHANGELOG
-            "continuous_training": _cont["on"]}
+            "continuous_training": _cont["on"],
+            # SUBSYSTEM HEARTBEATS (D5 prevention): each scan-loop step's last outcome — a step
+            # that is failing or hasn't succeeded recently shows RED on the dashboard
+            "beats": _beats,
+            "beats_failing": sorted(k for k, v in _beats.items() if not v.get("ok"))}
 
 
 @app.get("/api/contract")
@@ -1008,6 +1149,22 @@ def strategy_perf():
     from collections import defaultdict
     from bot.tracker import MIN_SAMPLE
     rows = []
+    # tracker families -> their lineage + book (so the APPROVAL LADDER can show each version's
+    # live record, and eq/ft/op stay visibly separated — user 2026-07-10)
+    _fam_lineage = {"trail-eq": "trail-eq-0.1"}
+    _fam_book = {}
+    try:
+        from bot.boss import WORKERS
+        for wid, w in WORKERS.items():
+            _fam_lineage[wid] = w["lineage"]
+            _fam_book[wid] = "eq" if w["symbol"] in ("QQQ", "SPY") else "ft"
+    except Exception:
+        pass
+    try:
+        from bot.strategy.orb_candidates import STRATEGY_VERSION as _sv
+        _fam_lineage["breakout"] = _sv
+    except Exception:
+        pass
     g = defaultdict(list)
     for x in _tracked_closed():
         g[x.get("family") or "?"].append(float(x["result_r"]))
@@ -1016,15 +1173,18 @@ def strategy_perf():
         rows.append({"strategy": fam, "source": "tracker · intraday", "n": int(len(rs)),
                      "win_pct": round(100 * float((rs > 0).mean()), 1),
                      "avg_r": round(float(rs.mean()), 3), "total_r": round(float(rs.sum()), 1),
-                     "pf": round(w / l, 2) if l > 0 else None, "record": "live-shadow"})
+                     "pf": round(w / l, 2) if l > 0 else None, "record": "live-shadow",
+                     "lineage": _fam_lineage.get(fam), "book": _fam_book.get(fam)})
     try:
         from bot.strategy.duel import leaderboard
         lb = leaderboard()
         stage = lb.get("stage") or {}
+        lins, books = lb.get("lineage") or {}, lb.get("books") or {}
         for m, r in (lb.get("results") or {}).items():
             rows.append({"strategy": m, "source": "duel · daily", "n": r["n"], "win_pct": r["win_pct"],
                          "avg_r": r["avg_r"], "total_r": r["total_r"], "pf": r.get("pf"),
-                         "record": f"shadow · {stage.get(m, 'research')}"})
+                         "record": f"shadow · {stage.get(m, 'research')}",
+                         "lineage": lins.get(m), "book": books.get(m)})
     except Exception:
         pass
     try:
@@ -1036,7 +1196,37 @@ def strategy_perf():
                 rows.append({"strategy": f"{lin} · {struct}", "source": "options journal",
                              "n": p["n"], "win_pct": p.get("win_pct"), "avg_r": p.get("avg_ret"),
                              "total_r": round((p.get("avg_ret") or 0) * p["n"], 1), "pf": p.get("pf"),
-                             "record": p.get("source", "backtest") + (f" · live {p['live_n']}" if p.get("live_n") else "")})
+                             "record": p.get("source", "backtest") + (f" · live {p['live_n']}" if p.get("live_n") else ""),
+                             "lineage": lin, "book": "op"})
+    except Exception:
+        pass
+    try:                                             # F97b weekend-fade (session shadow, FT book)
+        from bot.strategy.asia_fade import perf as _af_perf, LINEAGE as _AF_LIN
+        p = _af_perf()
+        if p.get("n"):
+            rows.append({"strategy": "weekend_fade", "source": "session · shadow", "n": p["n"],
+                         "win_pct": p["win_pct"], "avg_r": p["avg_r"], "total_r": p["total_r"],
+                         "pf": p.get("pf"), "record": "live-shadow", "lineage": _AF_LIN, "book": "ft"})
+    except Exception:
+        pass
+    try:                                             # F104 confluence composite (FT book)
+        from bot.strategy.nq_composite import perf as _nc_perf, LINEAGE as _NC_LIN
+        p = _nc_perf()
+        if p.get("n"):
+            rows.append({"strategy": "nq_composite", "source": "session · shadow", "n": p["n"],
+                         "win_pct": p["win_pct"], "avg_r": p["avg_r"], "total_r": p["total_r"],
+                         "pf": p.get("pf"), "record": "live-shadow", "lineage": _NC_LIN, "book": "ft"})
+    except Exception:
+        pass
+    try:                                             # F108 equity calendar rules (EQ shares book)
+        from bot.strategy.eq_calendar import perf as _ec_perf, RULES as _EC_RULES
+        for key, cfg in _EC_RULES.items():
+            p = _ec_perf(key)
+            if p.get("n"):
+                rows.append({"strategy": key, "source": "session · shadow", "n": p["n"],
+                             "win_pct": p["win_pct"], "avg_r": p["avg_r"], "total_r": p["total_r"],
+                             "pf": p.get("pf"), "record": "live-shadow",
+                             "lineage": cfg["lineage"], "book": "eq"})
     except Exception:
         pass
     for r in rows:
@@ -1114,6 +1304,43 @@ def daily_bias(symbol: str = "SPY"):
     return out
 
 
+_so_cache = {"t": 0.0, "data": []}
+
+
+def _session_opens() -> list:
+    """Open positions of the session shadow strategies (30s cache): module, side, entry, levels."""
+    import time as _t
+    if _t.time() - _so_cache["t"] < 30:
+        return _so_cache["data"]
+    out = []
+    try:
+        from bot.strategy.asia_fade import open_position as _wf_open
+        p = _wf_open()
+        if p:
+            out.append({"module": "weekend_fade", "book": "ft", "symbol": "NQ", "side": "long",
+                        "entry": p.get("entry"), "stop": p.get("stop"), "opened": p.get("date"),
+                        "note": f"risk unit {p.get('risk')} pts · exit Mon 03:00"})
+    except Exception:
+        pass
+    try:
+        from bot.strategy.nq_composite import open_position as _nc_open
+        p = _nc_open()
+        if p:
+            out.append({"module": "nq_composite", "book": "ft", "symbol": "NQ",
+                        "side": p.get("side"), "entry": p.get("entry"), "stop": p.get("stop"),
+                        "opened": p.get("date"),
+                        "note": f"votes {p.get('votes')} {p.get('detail')} · exit 16:00 close"})
+    except Exception:
+        pass
+    try:                                             # F108 equity calendar opens (EQ shares)
+        from bot.strategy.eq_calendar import open_positions as _ec_open
+        out += _ec_open()
+    except Exception:
+        pass
+    _so_cache.update(t=_t.time(), data=out)
+    return out
+
+
 @app.get("/api/signals")
 def signals(force: int = 0):
     """LIVE SIGNALS (the product) — served from the CONTINUOUS auto-scanner (always looking, 3 futures
@@ -1126,7 +1353,17 @@ def signals(force: int = 0):
         except Exception as e:
             _latest["error"] = str(e)
     return {"signals": _latest["signals"], "ts": _latest["ts"], "scanning": _latest["scanning"],
-            "error": _latest["error"], "watchlist": _WATCH}
+            "error": _latest["error"], "watchlist": _WATCH,
+            # RESOLUTION FEED (user 2026-07-10 awareness): last ~30 first-touch outcomes so the
+            # dashboard can announce a TP2/stop the cycle it books, not when you dig for it
+            "resolutions": _latest.get("resolutions") or [],
+            # RESEARCH FEED (F98): verdict changes from the latest nightly battery run
+            "research_alerts": _latest.get("research_alerts") or [],
+            # INTRABAR TOUCHES (F102): stop/TP levels crossed between bar closes (tick watcher)
+            "intrabar": _latest.get("intrabar") or [],
+            # SESSION-STRATEGY OPENS (user 2026-07-10 "do I have to look for the confluence
+            # myself?" — NO): weekend-fade + nq-composite entries surface + alert automatically
+            "session_opens": _session_opens()}
 
 
 @app.get("/api/asset_levels")
@@ -1172,24 +1409,20 @@ def signal_decision(d: DecisionReq):
 
 @app.get("/api/decisions")
 def decisions():
-    """The journal of taken/skipped signals + their tracked outcomes (real performance of the engine)."""
-    from bot.tracker import list_decisions, track_outcomes, summary
-    try:
-        track_outcomes()
-    except Exception:
-        pass
+    """The journal of taken/skipped signals + their tracked outcomes (real performance of the engine).
+    READ-ONLY (lock fix 2026-07-10): this poll ran track_outcomes on every 12s dashboard refresh,
+    racing the scan loop's own run — concurrent writers held the SQLite lock past busy_timeout and
+    resolutions failed ('positions still open'). The scan cycle owns resolution; polls just read."""
+    from bot.tracker import list_decisions, summary
     return {"decisions": list_decisions(50), "summary": summary()}
 
 
 @app.get("/api/scorecard")
 def scorecard():
     """LIVE-vs-BACKTEST gate: do taken signals realise the backtested edge (by grade)? The check that
-    must pass before sizing up — proves the edge survives live fills, not just the backtest."""
-    from bot.tracker import scorecard as _sc, track_outcomes
-    try:
-        track_outcomes()
-    except Exception:
-        pass
+    must pass before sizing up — proves the edge survives live fills, not just the backtest.
+    READ-ONLY — the scan cycle owns track_outcomes (see /api/decisions)."""
+    from bot.tracker import scorecard as _sc
     return _sc()
 
 
@@ -1207,6 +1440,35 @@ def boss_arm(worker: str, on: bool = True, _=Depends(auth)):
     """Manually arm/disarm a worker. OBSOLETE workers refuse to arm (fresh gauntlet required)."""
     from bot.boss import arm
     return arm(worker, on)
+
+
+@app.post("/api/boss/park")
+def boss_park(worker: str, on: bool = True, _=Depends(auth)):
+    """PARK/RESUME a worker (user 2026-07-10): parked = shadow study paused, NO new journal rows,
+    history + approvals intact. Not a merge, not a delete — the garage."""
+    from bot.boss import park
+    return park(worker, on)
+
+
+_dp_cache = {"t": 0.0, "data": None}
+
+
+@app.get("/api/duel_preview")
+def duel_preview():
+    """PRE-CLOSE PREVIEW of the daily book (user 2026-07-10): what each approved daily module
+    WOULD enter if today's forming bar closed now — so manual brokers without MOC (Webull,
+    Robinhood) get their order in 15:50-15:59, not as a next-day pending order. 120s cache."""
+    import time as _t
+    if _dp_cache["data"] is not None and _t.time() - _dp_cache["t"] < 120:
+        return _dp_cache["data"]
+    from bot.strategy.duel import preview_today
+    try:
+        out = {"entries": preview_today(), "ts": _now(),
+               "note": "advisory — official shadow entry books on the completed bar (~17:10)"}
+    except Exception as e:
+        out = {"entries": [], "error": str(e)[:120]}
+    _dp_cache["t"] = _t.time(); _dp_cache["data"] = out
+    return out
 
 
 _jf_cache = {"t": 0.0, "data": None}
@@ -1781,7 +2043,8 @@ def _train_cmds(kind: str, sym: str, promote: bool = True, extra: list[str] | No
             "geometry": ([_sys.executable, str(root / "research" / "target_geometry.py")]
                          + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
             "pairs": ([_sys.executable, str(root / "research" / "dirfast_pairs.py")]
-                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root)}
+                      + (["QQQ", "SPY", "NQ", "ES"] if sym == "ALL" else [sym]), root),
+            "battery": ([_sys.executable, str(root / "research" / "nightly_battery.py")], root)}
     return cmds.get(kind)
 
 
@@ -1799,7 +2062,8 @@ def training_run(kind: str = "ml", sym: str = "QQQ", args: str = "", _=Depends(a
     hit = _train_cmds(kind, sym, extra=_safe_args(args))
     if hit is None:
         known = ["dataset", "rejects", "ml", "nn", "dataqa", "ab", "sweep", "heads", "similarity",
-                 "l2sync", "report", "parity", "gauntlet", "threshold", "geometry", "nqwr", "pairs"]
+                 "l2sync", "report", "parity", "gauntlet", "threshold", "geometry", "nqwr", "pairs",
+                 "battery"]
         return {"error": f"unknown kind {kind}" + (
                     " — this kind EXISTS in the current code: the SERVER IS RUNNING OLD CODE, "
                     "restart it (run_server.bat)" if kind in known else ""),
@@ -1917,7 +2181,11 @@ def training_status():
             "sym": _train_state["sym"], "started": _train_state["started"],
             "rc": _train_state["rc"], "log": _train_state["log"][-25:],
             "continuous": {**{k: v for k, v in _cont.items() if k != "history"},
-                           "history": _cont["history"][-10:]}}
+                           "history": _cont["history"][-10:]},
+            # SUBSYSTEM HEARTBEATS on the LAB page too (user 2026-07-10): a failing scan-loop /
+            # governance step (duel, phase78, boss, resolver...) shows red in the lab status bar
+            "beats_failing": sorted(k for k, v in _beats.items() if not v.get("ok")),
+            "beats_errors": {k: v.get("error") for k, v in _beats.items() if not v.get("ok")}}
 
 
 @app.post("/api/training/approve_model")
