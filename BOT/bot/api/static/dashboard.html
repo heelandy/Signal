@@ -453,6 +453,12 @@ async function loadQuotes(group, el){
   _prev['livemkt_'+group]=1;
 }
 // Underlying Signals — per-condition read for the top signal's symbol, else market-derived
+// DAILY BIAS block (user 2026-07-09): gap / since-open / prior-range / pivot / VWAP / daily trend
+// votes off real bars for the panel's symbol; server caches 60s so polling is free.
+let BIAS=null, BIAS_SYM='', BIAS_BUSY=false;
+async function loadBias(sym){ if(BIAS_BUSY) return; BIAS_BUSY=true;
+  try{ const b=await J('/api/bias?symbol='+sym); if(!b.error){ BIAS=b; BIAS_SYM=sym; if(window.MKT) loadUnderlying(window.MKT); } }
+  catch(e){} finally{ BIAS_BUSY=false; } }
 function loadUnderlying(m){
   // each indicator reflects its ACTUAL state (-1 bearish / 0 neutral / +1 bullish) from real data — not the signal side
   const dir=v=>`<b class="${v>0?'up':v<0?'dn':'mut'}">${v>0?'BULLISH':v<0?'BEARISH':'NEUTRAL'}</b>`;
@@ -473,8 +479,20 @@ function loadUnderlying(m){
   if(!s) html+=row('Order-Flow (SPY)', FLOW>=55?1:FLOW<=45?-1:0);
   html+=row('Volatility (VIX)', m.vix_regime==='low'?1:m.vix_regime==='high'?-1:0);
   html+=row('Regime', m.regime==='risk_on'?1:m.regime==='risk_off'?-1:0);
+  // ── DAILY BIAS: which way does TODAY lean for this symbol (gap · open control · prior range · pivot · VWAP · trend)
+  const bsym=s?s.symbol:'SPY';
+  if(bsym!==BIAS_SYM) loadBias(bsym);                 // async — re-renders when it lands
+  if(BIAS && BIAS_SYM===bsym){
+    const L={gap:'Gap (vs prior close)',since_open:'Since the open',prior_range:'Prior-day range',
+             pivot:'Daily pivot',vwap:'VWAP side',daily_trend:'Daily trend (20/50)'};
+    html+=`<div class="mut" style="font-size:9px;text-transform:uppercase;letter-spacing:.6px;margin:7px 0 2px;padding-top:5px;border-top:1px solid var(--line)">daily bias — ${BIAS.symbol}</div>`;
+    for(const [k,v] of Object.entries(BIAS.factors||{}))
+      html+=`<div class="kpi" title="${(v.detail||'').replace(/"/g,'&quot;')}"><span class="mut">${L[k]||k}</span>${dir(v.read)}</div>`;
+    const bc=BIAS.bias==='bullish'?'up':BIAS.bias==='bearish'?'dn':'yel';
+    html+=`<div class="kpi" style="border-top:1px solid #2a3a5a;margin-top:3px" title="sum of the six votes (${BIAS.score>=0?'+':''}${BIAS.score}) · PDH ${BIAS.pdh} · PDL ${BIAS.pdl} · pivot ${BIAS.pivot}${BIAS.vwap?' · vwap '+BIAS.vwap:''}"><span><b>DAY BIAS</b></span><b class="${bc}">${BIAS.bias.toUpperCase()} ${BIAS.score>=0?'+':''}${BIAS.score}</b></div>`;
+  }
   if(s) html+=`<div class="kpi" style="border-top:1px solid #2a3a5a;margin-top:3px"><span>Overall Grade</span>${gbadge(s.grade)}</div>`;
-  else html+=`<div class="mut" style="font-size:10px;margin-top:5px">no live setup — SPY/VIX market read; per-signal conditions add when a setup fires.</div>`;
+  else html+=`<div class="mut" style="font-size:10px;margin-top:5px">no live setup — market read + SPY day bias; per-signal conditions add when a setup fires.</div>`;
   setHTML('underlying', html);
 }
 

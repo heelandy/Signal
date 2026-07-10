@@ -2015,3 +2015,14 @@ trusted. Wired as a selectable structure `condor_7dte` (own spec `SPEC_7DTE`, de
 chain (`alpaca_chain_dte`). Confirmed live: QQQ 720 → shorts 738C/703P, wings 743C/698P, credit
 $1.29, max_loss $3.71, ret@max 0.35R, expiry 2026-07-15. Performance bucket is empty until it fires
 forward (correct "no data → empty" behavior).
+
+## F91 — Turn-of-Month drift (2026-07-09): REJECTED — control-dominated
+
+`research/turn_of_month.py` — Lakonishok-Smidt / McConnell-Xu calendar anomaly: MOC in at T-4 of
+month-end, MOC out at T+3 of the new month, long-only. Headline LOOKS tradeable (QQQ +0.65%/t,
+PF 1.68, 61% win) **but the control — the same ~7-day hold entered on every NON-window day —
+matches or beats it on all four symbols** (QQQ ctl +0.55%/t CI +0.127 PASS vs TOM CI −0.011 fail;
+NQ ctl +0.53%/t CI +0.246 vs TOM +0.43%/t CI +0.057). On 2018–2026 data the TOM premium is fully
+explained by ordinary drift; the 1988 anomaly is arbitraged away. **Do not wire; do not re-test
+without a new conditioning idea.** Lesson locked: any calendar/window strategy must beat its
+complement-window control, not just zero.

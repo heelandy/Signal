@@ -180,6 +180,11 @@
       <div id="duel" class="scroll">—</div></div>
     <div class="card col4"><h2>Pending models (gate-passed, awaiting approval)</h2>
       <div class="scroll" id="pending">—</div></div>
+    <div class="card col12"><h2>Live strategy performance — RANKED <span class="r">the substrate for signal prioritisation · band = WR 75-85 · PF ≥ 1.7</span></h2>
+      <div class="scroll" id="stratperf">—</div>
+      <div class="note">every active stream ranked by its OWN record (tracker intraday · duel daily · options journals).
+        Thin samples (n &lt; min) sit BELOW the line, accruing — no verdict until the sample gate clears.
+        Next step: signals from top-ranked strategies get priority in the scan ordering.</div></div>
     <div class="card col12"><h2>Historical data QA <span class="r">run 0 · Data QA to refresh</span></h2>
       <div class="scroll" id="dataqa">—</div></div>
     <div class="card col12"><h2>Entry-parameter sweep <span class="r">ranked in-sample (70%) · judged out-of-sample (30%) — run 5 · Sweep · CLICK a row for full details + gauntlet prefill</span></h2>
@@ -886,10 +891,30 @@ async function loadEvolve(mine){
   }catch(e){ document.getElementById('evolve').innerHTML = '<span class="dn">'+e+'</span>'; }
 }
 window.loadEvolve = loadEvolve;
+/* ---- LIVE STRATEGY PERFORMANCE (ranked — the prioritisation substrate) ---- */
+async function loadStratPerf(){
+  let d; try{ d=await j('/api/strategy_perf'); }catch(e){ document.getElementById('stratperf').innerHTML='<span class="dn">'+e+'</span>'; return }
+  const rows=d.strategies||[];
+  if(!rows.length){ document.getElementById('stratperf').textContent='no strategy records yet'; return }
+  const cell=(v,pos)=>v==null?'—':`<span class="${pos===true?'ok':pos===false?'no':''}">${v}</span>`;
+  const tr=(r,i)=>`<tr style="${r.rankable?'':'opacity:.55'}">`+
+    `<td>${r.rankable?('#'+(i+1)):'<span class="mut">…</span>'}</td>`+
+    `<td><b>${r.strategy}</b>${r.band_pass?' <span class="badge b-pass" title="meets the goal band">BAND ✓</span>':''}</td>`+
+    `<td class="mut">${r.source}</td><td class="mut" style="font-size:9px">${r.record||''}</td>`+
+    `<td class="num">${r.n}${r.rankable?'':' <span class="mut" style="font-size:8px">/'+d.min_sample+'</span>'}</td>`+
+    `<td class="num">${cell(r.win_pct!=null?r.win_pct+'%':null, r.win_pct>=75&&r.win_pct<=85?true:undefined)}</td>`+
+    `<td class="num">${cell(r.avg_r!=null?(r.avg_r>0?'+':'')+r.avg_r:null, r.avg_r>0)}</td>`+
+    `<td class="num">${cell(r.total_r!=null?(r.total_r>0?'+':'')+r.total_r:null, r.total_r>0)}</td>`+
+    `<td class="num">${cell(r.pf, r.pf>=1.7)}</td></tr>`;
+  let rank=0;
+  document.getElementById('stratperf').innerHTML=
+    `<table><tr class="mut"><th>rank</th><th>strategy</th><th>source</th><th>record</th><th class="num">n</th><th class="num">WR</th><th class="num">avg R</th><th class="num">tot R</th><th class="num">PF</th></tr>`+
+    rows.map(r=>tr(r, r.rankable?rank++:rank)).join('')+`</table>`;
+}
 async function loadAll(){ loadDataset(); loadLatest(); loadAB(); loadRegistry();
                           loadApprovals(); loadPending(); loadDataQA(); loadSweep(); loadPaperStat();
                           loadL2(); loadMatrix2(); loadParity(); loadAudit(); loadGauntlet(); loadDuel();
-                          loadJournalFeed(); loadEvolve(false); }
+                          loadJournalFeed(); loadEvolve(false); loadStratPerf(); }
 document.getElementById('sym').addEventListener('change', loadDataset);
 loadAll(); poll();
 </script>

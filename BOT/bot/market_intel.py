@@ -12,13 +12,21 @@ from bot.features import ema
 
 
 def _series(sym, provider="yahoo"):
-    b = get_bars(sym, "1d", period="6mo", provider=provider)
-    return b["close"].astype(float) if len(b) else pd.Series(dtype=float)
+    """NaN-safe daily closes — a provider hiccup returns EMPTY, never raises (the raise path is
+    what froze the dashboard header at 'market: unknown' for hours, D4 2026-07-09)."""
+    try:
+        b = get_bars(sym, "1d", period="6mo", provider=provider)
+        return b["close"].astype(float) if len(b) else pd.Series(dtype=float)
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+_last_good: dict = {}    # last context that actually resolved a regime — served through hiccups
 
 
 def market_context() -> dict:
-    spy = _series("SPY")
-    vix = _series("^VIX")
+    spy = _series("SPY", provider=None)     # provider CHAIN (webull covers SPY) — was yahoo-pinned,
+    vix = _series("^VIX")                   # and yahoo rate-limits at the close; ^VIX is yahoo-only
     out = {"ts": pd.Timestamp.now(tz="America/New_York").isoformat()}
     if len(spy) > 50:
         e50 = ema(spy, 50)
@@ -36,8 +44,12 @@ def market_context() -> dict:
         out["regime"] = ("risk_on" if (up and v < 20) else
                          "risk_off" if (not up and v > 22) else "neutral")
         out["note"] = f"SPY {out['spy_trend']} ({'>' if up else '<'}50EMA), VIX {v} ({out['vix_regime']}) -> {out['regime']}"
+        _last_good.clear(); _last_good.update(out)
     else:
         out["regime"] = "unknown"; out["note"] = "market context unavailable"
+        if _last_good:                          # serve the LAST GOOD read through a hiccup, marked stale
+            return {**_last_good, "ts": out["ts"], "stale": True,
+                    "note": _last_good.get("note", "") + " · provider hiccup — last good context"}
     return out
 
 

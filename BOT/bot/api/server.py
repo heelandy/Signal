@@ -620,8 +620,23 @@ def prop_eval(profile: str = "100k", equity: float = 0.0, day_pnl: float = 0.0, 
 
 @app.get("/api/market")
 def market():
+    """Market context with SELF-HEALING cache (D4 2026-07-09): a failed context ('unknown') got
+    cached at the 16:00 yahoo rate-limit and was served frozen for hours — the header sat on
+    'market: unknown' with a dead feed dot. Recompute when the cache is a failure or >15 min old."""
     from bot.market_intel import market_context
-    return _latest.get("market") or market_context()
+    m = _latest.get("market")
+    stale = True
+    if m and m.get("regime") != "unknown":
+        try:
+            import pandas as _pd
+            age = (_pd.Timestamp.now(tz="America/New_York") - _pd.Timestamp(m["ts"])).total_seconds()
+            stale = age > 900
+        except Exception:
+            pass
+    if stale:
+        m = market_context()
+        _latest["market"] = m
+    return m
 
 
 _QUOTE_GROUPS = {
@@ -977,6 +992,126 @@ def equity():
         cum = 25_000.0 + np.cumsum([float(x["result_r"]) * 100.0 for x in d])
         return {"curve": [25000.0] + [round(float(v), 2) for v in cum]}
     return {"curve": [round(float(x), 2) for x in perf.equity_curve(_journal).tolist()]}
+
+
+@app.get("/api/strategy_perf")
+def strategy_perf():
+    """LIVE STRATEGY PERFORMANCE — every active strategy stream ranked by its OWN record (user
+    2026-07-09: 'performance for live strategies... so we can make the signal prioritisation per
+    performance'). One board, three record sources:
+      tracker  — intraday lineages (ORB core, workers, trail), taken+resolved shadow/live rows
+      duel     — the daily lineages head-to-head (volbreak/swing/overnight/tsmom), shadow-daily
+      options  — per-lineage×structure journals (backtest until live fills accrue; source shown)
+    rank: avg R desc among RANKABLE rows (n >= MIN_SAMPLE); thin samples sit below, accruing.
+    band = the goal (WR 75-85 · PF >= 1.7). This board is the substrate for signal prioritisation."""
+    import numpy as np
+    from collections import defaultdict
+    from bot.tracker import MIN_SAMPLE
+    rows = []
+    g = defaultdict(list)
+    for x in _tracked_closed():
+        g[x.get("family") or "?"].append(float(x["result_r"]))
+    for fam, rs in g.items():
+        rs = np.array(rs); w = float(rs[rs > 0].sum()); l = float(-rs[rs <= 0].sum())
+        rows.append({"strategy": fam, "source": "tracker · intraday", "n": int(len(rs)),
+                     "win_pct": round(100 * float((rs > 0).mean()), 1),
+                     "avg_r": round(float(rs.mean()), 3), "total_r": round(float(rs.sum()), 1),
+                     "pf": round(w / l, 2) if l > 0 else None, "record": "live-shadow"})
+    try:
+        from bot.strategy.duel import leaderboard
+        lb = leaderboard()
+        stage = lb.get("stage") or {}
+        for m, r in (lb.get("results") or {}).items():
+            rows.append({"strategy": m, "source": "duel · daily", "n": r["n"], "win_pct": r["win_pct"],
+                         "avg_r": r["avg_r"], "total_r": r["total_r"], "pf": r.get("pf"),
+                         "record": f"shadow · {stage.get(m, 'research')}"})
+    except Exception:
+        pass
+    try:
+        from bot.options import native
+        for lin in native.OPTIONS_LINEAGES:
+            for struct, p in (native.performance_by_structure(lin) or {}).items():
+                if not p.get("n"):
+                    continue
+                rows.append({"strategy": f"{lin} · {struct}", "source": "options journal",
+                             "n": p["n"], "win_pct": p.get("win_pct"), "avg_r": p.get("avg_ret"),
+                             "total_r": round((p.get("avg_ret") or 0) * p["n"], 1), "pf": p.get("pf"),
+                             "record": p.get("source", "backtest") + (f" · live {p['live_n']}" if p.get("live_n") else "")})
+    except Exception:
+        pass
+    for r in rows:
+        r["rankable"] = r["n"] >= MIN_SAMPLE
+        wp, pf = r.get("win_pct"), r.get("pf")
+        r["band_pass"] = bool(wp is not None and pf is not None and 75 <= wp <= 85 and pf >= 1.7)
+    rows.sort(key=lambda r: (not r["rankable"], -(r.get("avg_r") if r.get("avg_r") is not None else -9)))
+    return {"strategies": rows, "min_sample": MIN_SAMPLE,
+            "band": "WR 75-85 · PF ≥ 1.7", "generated_at": _now()}
+
+
+_bias_cache: dict = {}    # per-symbol 60s cache — the panel polls but bars only change per bar
+
+
+@app.get("/api/bias")
+def daily_bias(symbol: str = "SPY"):
+    """DAILY BIAS for the Underlying-Signals panel (user 2026-07-09): six causal reads off the
+    bars answering "which way does TODAY lean?" — gap (open vs prior close), since-open control,
+    position vs the prior day's range (PDH/PDL), the classic floor pivot, session-VWAP side, and
+    the daily EMA20/50 stack. Each votes -1/0/+1; the composite labels the day."""
+    import time as _t
+    hit = _bias_cache.get(symbol)
+    if hit and _t.time() - hit[0] < 60:
+        return hit[1]
+    import pandas as pd
+    from bot.market_data.providers import get_bars
+    try:
+        b = get_bars(symbol, tf="5m", period="5d")
+    except Exception as e:
+        return {"error": f"bars unavailable: {e}"}
+    if b is None or not len(b):
+        return {"error": "no bars"}
+    b = b.copy()
+    tcol = "ts_et" if "ts_et" in b.columns else "ts"
+    b["date"] = pd.to_datetime(b[tcol]).dt.strftime("%Y-%m-%d")
+    days = sorted(b["date"].unique())
+    if len(days) < 2:
+        return {"error": "need 2 sessions of bars"}
+    T, P = b[b["date"] == days[-1]], b[b["date"] == days[-2]]
+    px, opn = float(T["close"].iloc[-1]), float(T["open"].iloc[0])
+    pdh, pdl, pdc = float(P["high"].max()), float(P["low"].min()), float(P["close"].iloc[-1])
+    piv = (pdh + pdl + pdc) / 3.0
+    vol = T["volume"].astype(float).clip(lower=0) if "volume" in T.columns else None
+    vwap = None
+    if vol is not None and float(vol.sum()) > 0:
+        tp = (T["high"].astype(float) + T["low"].astype(float) + T["close"].astype(float)) / 3.0
+        vwap = float((tp * vol).sum() / vol.sum())
+    sgn = lambda x, eps=0.0: 1 if x > eps else (-1 if x < -eps else 0)
+    gap = 100 * (opn - pdc) / pdc
+    since_open = 100 * (px - opn) / opn
+    f = {"gap": {"read": sgn(gap, 0.10), "detail": f"open {gap:+.2f}% vs prior close"},
+         "since_open": {"read": sgn(since_open, 0.05), "detail": f"{since_open:+.2f}% since the open"},
+         "prior_range": {"read": 1 if px > pdh else (-1 if px < pdl else 0),
+                         "detail": f"vs PDH {pdh:.2f} / PDL {pdl:.2f}"},
+         "pivot": {"read": sgn(px - piv), "detail": f"P {piv:.2f} (H+L+C)/3"}}
+    if vwap:
+        f["vwap"] = {"read": sgn(px - vwap), "detail": f"session VWAP {vwap:.2f}"}
+    try:                                             # daily structural trend (EMA20/50 stack)
+        dd = get_bars(symbol, tf="1d", period="6mo")
+        c = dd["close"].astype(float)
+        e20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
+        e50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
+        last = float(c.iloc[-1])
+        f["daily_trend"] = {"read": 1 if last > e20 > e50 else (-1 if last < e20 < e50 else 0),
+                            "detail": f"close vs EMA20 {e20:.2f} / EMA50 {e50:.2f}"}
+    except Exception:
+        pass
+    score = sum(v["read"] for v in f.values())
+    out = {"symbol": symbol, "factors": f, "score": score,
+           "bias": "bullish" if score >= 2 else "bearish" if score <= -2 else "neutral",
+           "price": round(px, 2), "open": round(opn, 2), "pdh": round(pdh, 2),
+           "pdl": round(pdl, 2), "pdc": round(pdc, 2), "pivot": round(piv, 2),
+           "vwap": round(vwap, 2) if vwap else None, "session_date": days[-1], "ts": _now()}
+    _bias_cache[symbol] = (_t.time(), out)
+    return out
 
 
 @app.get("/api/signals")

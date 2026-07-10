@@ -121,6 +121,34 @@ def test_t6_training_duel_shows_stage_not_blanket_badge():
     assert "(d.stage || {})" in TRAIN
 
 
+def test_d4_market_context_never_serves_frozen_failure():
+    """D4: a failed market_context ('unknown') was cached at the 16:00 yahoo rate-limit and served
+    frozen for hours (header: 'market: unknown', dead feed dot). Three guards:
+    (a) _series never raises, (b) last-good context served through hiccups (marked stale),
+    (c) /api/market recomputes when the cache is a failure or >15 min old."""
+    import bot.market_intel as mi
+    src = inspect.getsource(mi._series)
+    assert "except Exception" in src                                    # (a)
+    ctx = inspect.getsource(mi.market_context)
+    assert "_last_good" in ctx and '"stale": True' in ctx               # (b)
+    server = (BOT_DIR / "bot" / "api" / "server.py").read_text(encoding="utf-8")
+    i = server.index("def market()")
+    seg = server[i:i + 1200]
+    assert 'get("regime") != "unknown"' in seg and "900" in seg         # (c)
+    # and the last-good path actually works
+    mi._last_good.clear()
+    mi._last_good.update({"regime": "risk_on", "spy": 750.0, "note": "test"})
+    import pandas as pd
+    empty = pd.Series(dtype=float)
+    orig = mi._series
+    mi._series = lambda *a, **k: empty                                  # simulate total provider outage
+    try:
+        out = mi.market_context()
+    finally:
+        mi._series = orig
+    assert out["regime"] == "risk_on" and out.get("stale") is True
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for f in fns:
