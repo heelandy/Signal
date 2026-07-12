@@ -388,6 +388,8 @@ class JournalEntry(_Serializable):
     side: Side
     mode: Mode
     entry_price: float | None = None
+    planned_entry: float | None = None       # signal price (Phase 6 fill schema — slippage base)
+    avg_fill_price: float | None = None      # measured broker fill (Phase 5 execution record)
     exit_price: float | None = None
     qty: int = 0
     net_r: float | None = None

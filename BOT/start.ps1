@@ -1,3 +1,9 @@
+# ============================================================================
+# DEV-ONLY TOPOLOGY (remediation Phase 7, 2026-07-11): the single production
+# topology is run_all.bat (persistent worker + reloadable API) guarded by
+# watchdog.ps1. This single-process launcher stays for development/debugging;
+# do NOT point autostart at it - training and durability behave differently.
+# ============================================================================
 # HIGHSTRIKE signal engine - START (detached, survives closing the terminal)
 #   .\start.ps1            # start on :8000, scan every 60s, open dashboard
 #   .\start.ps1 -ScanSec 30 -Port 8000 -NoBrowser

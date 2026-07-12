@@ -24,6 +24,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_db, hs_harness as H, hs_backtest as B, hs_validate as V
+from hs_contracts import spec as _CS
 
 # kernel indicator defaults (match the Pine / F36)
 K_TYPE, K_LEN, K_H, K_ATRLEN, K_SMOOTH = "Gaussian", 30, 8.0, 14, 3
@@ -81,7 +82,7 @@ def cost_R(sym, atr_entry):
     if sym.upper() in ("SPY", "QQQ"):
         cost_pts = 2 * 0.01 * 1                                  # 1 tick slippage each side
     else:
-        cost_pts = 2 * B.TICK * B.SLIP_TICKS + 2 * B.COMM / B.PT_VALUE
+        cost_pts = 2 * _CS(sym).tick * _CS(sym).slip_ticks * B.SLIP_MULT + 2 * _CS(sym).commission / _CS(sym).point_value
     return cost_pts / atr_entry
 
 

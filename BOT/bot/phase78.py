@@ -43,31 +43,61 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def fills_scorecard() -> dict:
+    """MEASURED broker fills -> R outcomes, grade-tagged from the exec-order dims (reuses the
+    entry matrix's paper loader). THE phase-8 basis since the completion pass 2026-07-12 —
+    Phase 6's rule made execution QUALITY fills-based; this makes the STUDY fills-based too
+    (never shadow outcomes)."""
+    import numpy as np
+    try:
+        from bot.ml.entry_matrix import _rows_paper
+        rows, _ = _rows_paper()
+    except Exception:
+        rows = []
+
+    def _stats(rs):
+        if not rs:
+            return {"n": 0}
+        r = np.array([x["net_r"] for x in rs], float)
+        w = r[r > 0]
+        return {"n": int(len(r)), "exp_R": round(float(r.mean()), 3),
+                "total_R": round(float(r.sum()), 1),
+                "win_pct": round(100 * len(w) / len(r), 1)}
+
+    overall = _stats(rows)
+    by_grade = {g: _stats([x for x in rows if x.get("grade") == g])
+                for g in ("A+", "A", "B", "C")}
+    by_grade = {g: v for g, v in by_grade.items() if v["n"]}
+    from bot.tracker import BACKTEST_REF
+    cons = None                                    # None = not enough fills to judge
+    if overall["n"] >= 12:
+        cons = overall["exp_R"] >= 0.5 * BACKTEST_REF["exp_R"]
+    days = [x["day"] for x in rows]
+    return {"overall": overall, "by_grade": by_grade, "consistent": cons,
+            "first_fill": min(days) if days else None,
+            "backtest_ref": BACKTEST_REF,
+            "basis": "broker paper fills (execution.db) — shadow outcomes are advisory only"}
+
+
 def paper_study() -> dict:
-    """The paper-study exit gate, computed from the tracker (same store as /api/scorecard)."""
-    from bot.tracker import scorecard, track_outcomes, _con
+    """The paper-study exit gate — computed from BROKER FILLS (completion pass 2026-07-12; the
+    old basis was the tracker's theoretical shadow outcomes, which can never measure execution).
+    The shadow scorecard rides along as ADVISORY, clearly labeled, never gating."""
+    from bot.tracker import scorecard, track_outcomes
     try:
-        track_outcomes()
+        track_outcomes()                           # keeps resolving shadow (advisory + matrix)
     except Exception:
         pass
-    sc = scorecard()
-    n = sc.get("overall", {}).get("n", 0)
-    # study window: first TAKEN decision -> now (paper trading start, not calendar guesswork)
+    fs = fills_scorecard()
+    n = fs["overall"].get("n", 0)
     days = 0.0
-    try:
-        from bot.tracker import CORE_ONLY_SQL
-        con = _con()
-        first = con.execute("SELECT MIN(decided_at) FROM decisions WHERE taken=1 "
-                            f"AND {CORE_ONLY_SQL}").fetchone()[0]   # worker shadows don't start the clock
-        con.close()
-        if first:
-            t0 = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
-            if t0.tzinfo is None:
-                t0 = t0.replace(tzinfo=timezone.utc)
+    if fs.get("first_fill"):
+        try:
+            t0 = datetime.fromisoformat(fs["first_fill"]).replace(tzinfo=timezone.utc)
             days = (_utcnow() - t0).total_seconds() / 86400.0
-    except Exception:
-        pass
-    bg = sc.get("by_grade", {})
+        except Exception:
+            pass
+    bg = fs.get("by_grade", {})
     inv = None                                     # None = not enough data to judge inversion
     ap, a = bg.get("A+", {}), bg.get("A", {})
     if ap.get("n", 0) >= GRADE_MIN_N and a.get("n", 0) >= GRADE_MIN_N:
@@ -75,24 +105,38 @@ def paper_study() -> dict:
     crit = {"n_closed": n, "n_needed": PAPER_MIN_TRADES, "n_ok": n >= PAPER_MIN_TRADES,
             "window_days": round(days, 1), "days_needed": PAPER_MIN_DAYS,
             "window_ok": days >= PAPER_MIN_DAYS,
-            "scorecard_consistent": sc.get("consistent"),
-            "grade_inversion": inv}
-    done = (crit["n_ok"] and crit["window_ok"] and sc.get("consistent") is True
+            "scorecard_consistent": fs.get("consistent"),
+            "grade_inversion": inv, "basis": "broker fills"}
+    done = (crit["n_ok"] and crit["window_ok"] and fs.get("consistent") is True
             and inv is not True)
-    return {"criteria": crit, "done": bool(done), "scorecard": sc}
+    try:
+        advisory = scorecard()
+        advisory["note"] = "ADVISORY shadow outcomes — never gates phase 8"
+    except Exception:
+        advisory = None
+    return {"criteria": crit, "done": bool(done), "scorecard": fs,
+            "advisory_shadow": advisory}
 
 
-def execution_quality() -> dict:
-    """Phase-8 requirement 2: measured paper slippage vs the cost-stress assumptions. Uses the
-    journal's filled entries (avg fill vs signal entry); 'insufficient' until real fills exist —
-    the auto-advance waits for data, it never assumes."""
+def execution_quality(db_path=None) -> dict:
+    """Phase-8 requirement 2: measured paper slippage vs the cost-stress assumptions.
+    PHASE 6 FIX (2026-07-11): reads the Phase-5 PAPER-EXECUTION RECORD (execution.db broker
+    fills — avg fill price per order vs its planned entry). The old code read journal fields
+    that never existed (`fill_price`), so execution quality was structurally n=0 forever.
+    'insufficient' until real fills exist — the auto-advance waits for data, it never assumes."""
+    import sqlite3
     rows = []
     try:
-        from bot.journal import Journal
-        for r in Journal().read("JournalEntry"):
-            e, f = r.get("entry") or r.get("planned_entry"), r.get("fill_price") or r.get("avg_fill_price")
-            if e and f:
-                rows.append(abs(float(f) - float(e)))
+        from bot.execution.service import DB_PATH
+        p = str(db_path or DB_PATH)
+        con = sqlite3.connect(p)
+        for planned, fq, fpx in con.execute(
+                "SELECT o.planned_entry, sum(f.qty), sum(f.qty * f.price) "
+                "FROM exec_fills f JOIN exec_orders o ON o.order_id = f.order_id "
+                "GROUP BY f.order_id, o.planned_entry").fetchall():
+            if planned and fq:
+                rows.append(abs(fpx / fq - float(planned)))
+        con.close()
     except Exception:
         pass
     if not rows:
@@ -103,7 +147,25 @@ def execution_quality() -> dict:
     # beat the STRESS case (2x) to clear the phase-8 gate.
     ok = avg_slip <= 0.02
     return {"ok": ok, "n": len(rows), "avg_slip_usd": round(avg_slip, 4),
-            "assumption_usd": 0.01, "stress_usd": 0.02}
+            "assumption_usd": 0.01, "stress_usd": 0.02,
+            "source": "execution.db paper-execution record (broker fills)"}
+
+
+def reconciliation_clean(db_path=None) -> dict:
+    """Phase-8 requirement (Phase 6, 2026-07-11): ZERO unresolved reconciliation failures —
+    a live halt flag or any INVESTIGATION_REQUIRED order blocks phase-8 readiness."""
+    import sqlite3
+    try:
+        from bot.execution.service import DB_PATH
+        con = sqlite3.connect(str(db_path or DB_PATH))
+        halt = con.execute("SELECT v FROM exec_flags WHERE k='halt_submissions'").fetchone()
+        bad = con.execute("SELECT count(*) FROM exec_orders "
+                          "WHERE state='INVESTIGATION_REQUIRED'").fetchone()[0]
+        con.close()
+        return {"ok": halt is None and bad == 0,
+                "halt": halt[0] if halt else None, "investigation_required": int(bad)}
+    except Exception as e:
+        return {"ok": None, "note": f"execution record unreadable: {e}"}
 
 
 def phase7_checks() -> dict:
@@ -147,11 +209,13 @@ def evaluate(auto_advance: bool = True) -> dict:
     ps = paper_study()
     p7 = phase7_checks()
     eq = execution_quality()
+    rc = reconciliation_clean()
     p7_ok = all(c.get("ok") is True for c in p7.values())
-    ready = bool(ps["done"] and p7_ok and eq.get("ok") is True)
+    ready = bool(ps["done"] and p7_ok and eq.get("ok") is True and rc.get("ok") is True)
     st = approval.status(STRATEGY_VERSION)["stages"]
     out = {"generated_at": _utcnow().isoformat(), "strategy_version": STRATEGY_VERSION,
            "paper_study": ps, "phase7": p7, "execution_quality": eq,
+           "reconciliation": rc,
            "phase8_ready": ready, "live_excluded_symbols": list(LIVE_EXCLUDED),
            "live_stage": st.get("live"), "lock_note":
            "LIVE_APPROVED.lock stays MANUAL — the stage can auto-advance, the key cannot."}

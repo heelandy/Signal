@@ -73,7 +73,20 @@ def main():
 
     sym_dir = os.path.join(OUTROOT, f"sym={SYM}")
     if os.path.isdir(sym_dir):
-        shutil.rmtree(sym_dir)
+        # ROBUST RMTREE (bug hunt 2026-07-12): historical partition dirs can carry the Windows
+        # READ-ONLY attribute (git/backup artifact) -> plain rmtree fails WinError 5 (Access
+        # denied) on rmdir. Clear the bit and retry per-path. NQ resampled only because its dirs
+        # had already been rewritten; QQQ/SPY/ES/GC (untouched since the historical build) were
+        # deterministically blocked. This bit the live-persister's hive refresh.
+        import stat as _stat
+
+        def _onerr(func, path, _exc):
+            os.chmod(path, _stat.S_IWRITE)
+            func(path)
+        try:
+            shutil.rmtree(sym_dir, onexc=_onerr)          # py3.12+
+        except TypeError:
+            shutil.rmtree(sym_dir, onerror=_onerr)        # py<3.12
 
     frames = []
     for tf, freq in TFS.items():

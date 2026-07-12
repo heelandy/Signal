@@ -136,6 +136,19 @@ class AlpacaBroker(Broker):
         except Exception:
             return []
 
+    def recent_orders(self, limit: int = 100) -> list[dict]:
+        """Broker order truth for the ExecutionService (Phase 5): every order incl. closed,
+        with nested bracket legs — the fill-ingestion, recovery-adoption and bracket-integrity
+        paths all read this shape."""
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        try:
+            ords = self._client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL,
+                                                            limit=limit, nested=True))
+        except Exception:
+            return []
+        return [_map_order(o) for o in ords]
+
     def flatten(self) -> dict:
         """Close ALL positions + cancel open orders (the UI 'Flatten All' button)."""
         try:
@@ -174,6 +187,19 @@ class AlpacaBroker(Broker):
         except Exception as e:
             return {"submitted": False, "error": str(e), "play": play.name,
                     "hint": "needs options trading enabled on the account (level 2/3 for spreads)"}
+
+
+def _map_order(o) -> dict:
+    """The recent_orders() CONTRACT (P1.6 contract test target — pure, no SDK): these exact keys
+    feed ExecutionService.poll_fills / recovery / bracket-integrity. Change them WITH the
+    service and the contract test, never alone."""
+    return {"id": str(o.id), "client_order_id": str(o.client_order_id or ""),
+            "symbol": o.symbol, "status": str(o.status).split(".")[-1].lower(),
+            "filled_qty": float(o.filled_qty or 0),
+            "avg_fill_price": float(o.filled_avg_price or 0),
+            "updated_at": str(o.updated_at or ""),
+            "legs": ([{"status": str(l.status).split(".")[-1].lower()}
+                      for l in (o.legs or [])] if getattr(o, "legs", None) else None)}
 
 
 def occ_symbol(root: str, expiry: str, right: str, strike: float) -> str:

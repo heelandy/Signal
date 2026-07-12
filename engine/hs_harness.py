@@ -133,14 +133,23 @@ def compute_state(df, p: P = P()):
     h, l, c, o, vol = d["high"], d["low"], d["close"], d["open"], d["volume"]
     hlc3 = (h + l + c) / 3.0
 
+    # ROLL-ADJUSTED ANALYTICS (remediation Phase 3, 2026-07-11): momentum/trend indicators are
+    # computed on the back-adjusted series (raw x adj_factor — no roll jumps), and price-unit
+    # outputs are converted BACK to the bar's raw contract units (/ adj_factor) so stops, levels
+    # and fills stay executable. Levels (pivots / VWAP / OR) stay raw. Equities: adj_factor == 1,
+    # so nothing changes. Ratio indicators (DMI/ADX) use the adjusted series directly.
+    af = (d["adj_factor"].astype(float).fillna(1.0) if "adj_factor" in d.columns
+          else pd.Series(1.0, index=d.index))
+    ha, la, ca = h * af, l * af, c * af
+
     # --- indicators ---
-    d["atr14"] = rma(true_range(h, l, c), 14)
-    atr_fast, atr_slow = rma(true_range(h, l, c), 7), rma(true_range(h, l, c), 28)
-    _, _, d["adx"] = dmi(h, l, c, 14, 14)
-    diplus, diminus, _ = dmi(h, l, c, 14, 14)
+    d["atr14"] = rma(true_range(ha, la, ca), 14) / af
+    atr_fast, atr_slow = rma(true_range(ha, la, ca), 7), rma(true_range(ha, la, ca), 28)
+    _, _, d["adx"] = dmi(ha, la, ca, 14, 14)
+    diplus, diminus, _ = dmi(ha, la, ca, 14, 14)
     d["atr_pct"] = np.where(c > 0, d["atr14"] / c * 100.0, 0.0)
-    d["ema9"], d["ema20"], d["ema50"] = ema(c, 9), ema(c, 20), ema(c, 50)
-    trnd_f, trnd_s = ema(c, p.trend_ema_f), ema(c, p.trend_ema_s)
+    d["ema9"], d["ema20"], d["ema50"] = ema(ca, 9) / af, ema(ca, 20) / af, ema(ca, 50) / af
+    trnd_f, trnd_s = ema(ca, p.trend_ema_f) / af, ema(ca, p.trend_ema_s) / af
     d["trend_up"]   = (c > trnd_s) & (trnd_f > trnd_s)
     d["trend_down"] = (c < trnd_s) & (trnd_f < trnd_s)
     vol_ma = sma(vol, 20)
@@ -153,8 +162,8 @@ def compute_state(df, p: P = P()):
     struct_lb = pd.Series(lb_adp if p.struct_adaptive else p.struct_lb_fix, index=d.index)
     d["struct_lb"] = struct_lb
 
-    # momentum veto
-    momo = np.where(d["atr14"] > 0, (c - c.shift(5)) / d["atr14"], 0.0)
+    # momentum veto (adjusted numerator over adjusted-unit ATR — a roll jump is not momentum)
+    momo = np.where(d["atr14"] > 0, (ca - ca.shift(5)) / (d["atr14"] * af), 0.0)
     momo_long_ok  = (~np.bool_(p.momo_en)) | (momo > p.momo_thresh)
     momo_short_ok = (~np.bool_(p.momo_en)) | (momo < -p.momo_thresh)
 

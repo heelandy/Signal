@@ -11,7 +11,14 @@ in-sample doesn't ship.
 
 ---
 
-## Validated results (current — stop-entry, all-day window, EOD-accurate)
+## Historical results (PRE-REMEDIATION lineage — superseded, not evidence)
+
+> **⚠ 2026-07-11:** the figures below predate the remediation and carry the audited defects
+> (same-day daily-data lookahead, simulator exit/excursion errors, MNQ-only futures economics —
+> see `docs/REMEDIATION_PLAN.md`). They are **indicative only and NOT approval evidence**. They
+> also describe an older rule variant (stop-entry, all-day window); the **active rule is
+> `orb-standard-2026.07.7`** (close-confirm / watch-state). Corrected numbers land with Phase R.
+> Current project truth: `docs/STATUS.md`.
 
 Per-TF config, stop-entry, 4R scale exit, 90% bootstrap CI, costs modeled (equities: $0.01 tick /
 commission-free; futures: MNQ 0.52/order + 2-tick slip):

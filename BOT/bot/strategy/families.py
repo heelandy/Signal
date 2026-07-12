@@ -109,11 +109,19 @@ def prepare(bars: pd.DataFrame, sym: str = "") -> pd.DataFrame:
     df["volume"] = df.get("volume", 0).astype("float64")
     # STACK-IDENTITY (user 2026-07-03): merge live SPY/VIX daily externals so compute_state produces the
     # REAL macro regime gates (regime D block + SPY stand-down), matching the STACK Pine's Regime group.
+    # PIT PARITY (remediation Phase 1, 2026-07-11): join the most recent COMPLETED daily row strictly
+    # BEFORE the bar's date (merge_asof, no exact match). yfinance includes TODAY'S partial row during
+    # RTH — the old exact-date merge fed intraday-drifting values the replay could never reproduce.
+    # Live and the engine's _externals now share the same prior-session rule.
     m = _macro_daily()
     if m is not None:
-        df["date"] = df["ts"].dt.tz_convert("America/New_York").dt.normalize().dt.tz_localize(None)
-        df = df.merge(m[["date", "spy_close", "spy_e20", "spy_e50", "spy_adx", "vix_sma5", "vix_prev5"]],
-                      on="date", how="left")
+        df["date"] = (df["ts"].dt.tz_convert("America/New_York").dt.normalize()
+                      .dt.tz_localize(None).astype("datetime64[ns]"))
+        cols = ["spy_close", "spy_e20", "spy_e50", "spy_adx", "vix_sma5", "vix_prev5"]
+        m2 = m.dropna(subset=["date"]).sort_values("date")[["date"] + cols].copy()
+        m2["date"] = m2["date"].astype("datetime64[ns]")   # merge_asof needs exact dtype match
+        df = pd.merge_asof(df.sort_values("ts").reset_index(drop=True), m2, on="date",
+                           allow_exact_matches=False)
     d = H.compute_state(df, H.P(struct_lb_fix=struct_lb(sym)) if sym else H.P())   # futures lb=3 / equity lb=5
     # feed unavailable -> permissive gates (previous behavior; breakout core doesn't need them)
     for c, v in {"macro_allow_trades": True, "macro_long_ok": True, "macro_short_ok": True,

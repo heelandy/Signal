@@ -51,7 +51,7 @@ def line(tag, tr):
 
 def main():
     syms = [s.upper() for s in (sys.argv[1:] or ["NQ", "QQQ", "SPY", "ES"])]
-    bslip = B.SLIP_TICKS
+    bslip = B.SLIP_MULT
     for sym in syms:
         d = state(sym, "5m")
         print(f"\n######## {sym} 5m STACK — stop walk-forward ########")
@@ -59,11 +59,11 @@ def main():
         line("STRUCTURE swing", run(d, "struct"))
         line("OR 1.5ATR cap", run(d, "or", 1.5))
         for mult in (2,):                                  # slippage stress on the structure candidate
-            B.SLIP_TICKS = bslip * mult
+            B.SLIP_MULT = bslip * mult
             tr = run(d, "struct"); r = tr["net_R"].to_numpy()
             print(f"    {'STRUCT 2x-slip':20} n={len(r):>4} exp {r.mean():+.3f} PF {V.pf(r):>4.2f}  "
                   f"{'still +' if r.mean() > 0 else 'NEGATIVE'}")
-        B.SLIP_TICKS = bslip
+        B.SLIP_MULT = bslip
 
 
 if __name__ == "__main__":

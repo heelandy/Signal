@@ -135,3 +135,23 @@ Remaining caveats: the historical replay uses chart-TF structure for context (li
 feed — forward-verify); Pine edits still need a **TradingView compile-check** + a forward paper
 session. OPTIONS/V1/MTF scripts are intentionally NOT updated (user scope rule 2026-07-04) — on a
 futures chart, toggle OPTIONS' `ctx_gate` OFF manually until told to update it.
+
+## Feature availability — point-in-time rule (remediation Phase 1, 2026-07-11)
+
+**Daily-derived features are available from the NEXT session's first bar, never their own day's.**
+A bar dated D carries the most recent daily values from a session strictly BEFORE D — VIX sma5,
+the ES close/EMA/ADX macro proxy, and the symbol's daily EMA50/200 HTF alignment all lag one
+completed session. Enforced in `engine/hs_backtest._externals` and live in
+`bot/strategy/families.prepare` (both use `merge_asof(allow_exact_matches=False)`; live previously
+merged yfinance's same-day *partial* row — intraday-drifting values the replay could never
+reproduce). Pinned by `BOT/tests/test_pit_no_lookahead.py` (T1.1 poison canary · T1.2 strict-prior
+property · T1.3 regime flips gate next-day). Every backtest number produced before this fix is
+`pre-remediation` lineage (see `docs/REMEDIATION_PLAN.md`).
+
+~~Known residual parity gap~~ **CLOSED with a verdict (2026-07-11, deferred-items pass):** the
+htf_bull/htf_bear columns are consumed ONLY by (a) the non-canonical `strict` research mode
+(`hs_backtest.py:492`, never the ORB path) and (b) the harness `dir_bias` weight whose derived
+scores the canonical ORB neither gates on nor feeds into the 59-column PIT feature set (verified
+by grep: zero consumers in `features_pit.py`, `families.py`, `live.py`). Live defaulting them to
+False therefore has NO effect on canonical signals, grades, or training features — benign; no
+fix needed. Re-open only if a strategy starts consuming HTF columns on the canonical path.

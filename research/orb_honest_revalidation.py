@@ -125,9 +125,9 @@ def main():
     hdr("D) 2x SLIPPAGE STRESS (futures NQ/ES; slip 2 -> 4 ticks/fill)")
     fut = [s for s in syms if s in ("NQ", "ES", "MNQ", "GC")]
     if fut:
-        orig = B.SLIP_TICKS
+        orig = B.SLIP_MULT
         for slip in (orig, orig * 2):
-            B.SLIP_TICKS = slip
+            B.SLIP_MULT = slip
             print(f"  -- slip = {slip} ticks/fill --")
             for sym in fut:
                 bars = B._externals(con, hs_db.bars(con, "5m", "rth", sym=sym), sym)
@@ -138,7 +138,7 @@ def main():
                     e = f"{r.mean():+.3f}" if len(r) else "  -  "
                     print(f"     {sym:>4} {cfg:>8}  n={len(r):>4}  exp {e}  PF {V.pf(r):.2f}")
                 del d; gc.collect()
-        B.SLIP_TICKS = orig
+        B.SLIP_MULT = orig
     else:
         print("  (no futures in symbol list)")
 

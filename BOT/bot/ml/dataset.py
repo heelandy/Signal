@@ -59,6 +59,19 @@ def attach_live_journal(seed: pd.DataFrame, sym: str, tf: str) -> pd.DataFrame:
     if not len(lj):
         return seed
     from bot.strategy.orb_candidates import STRATEGY_VERSION, T2
+    # P1.1 LABEL LINEAGE (2026-07-11): each row keeps ITS OWN recorded strategy version — the
+    # audited defect stamped every historical journal row with the CURRENT version, so labels
+    # from retired rules trained today's models. Rows without a recorded version ('unknown')
+    # or from a DIFFERENT version are EXCLUDED from this dataset (version-pure training).
+    if "strategy_version" in lj.columns:
+        own = lj["strategy_version"].astype(str)
+        dropped = int((own != STRATEGY_VERSION).sum())
+        if dropped:
+            print(f"  lineage: {dropped} journal row(s) from other/unknown rule versions "
+                  f"excluded (version-pure {STRATEGY_VERSION})")
+        lj = lj[own == STRATEGY_VERSION]
+        if not len(lj):
+            return seed
     rows = []
     for _, r in lj.iterrows():
         net = float(r["net_r"])

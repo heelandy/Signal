@@ -29,11 +29,11 @@ def main():
         report("full sample", tr)
         report("IS 2010-21", tr[yr <= 2021])
         report("OOS 2022+", tr[yr >= 2022], min_n=20)
-        B.SLIP_TICKS = 4
+        B.SLIP_MULT = 2.0
         report("2x slip", run(d, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 6
+        B.SLIP_MULT = 3.0
         report("3x slip", run(d, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 2
+        B.SLIP_MULT = 1.0
 
 
 if __name__ == "__main__":

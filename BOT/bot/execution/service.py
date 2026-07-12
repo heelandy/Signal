@@ -1,0 +1,469 @@
+"""ONE EXECUTION PATH — ExecutionService (remediation Phase 5).
+
+Every order source (paper autotrade, manual ticket, TV webhook, future live) submits through
+`ExecutionService.submit()`. There is no other door to a broker: the audited defect was
+`_paper_autotrade` calling Alpaca directly — no risk gate, no OMS, no journal fills, no
+reconciliation, an undated dedup key marked "placed" even on broker errors.
+
+The flow, transactional per step:
+  candidate → approval re-check (submit time) → dated idempotency claim → ACCOUNT TRUTH from
+  broker + fills (unprovable → reject ACCOUNT_STATE_UNPROVEN, fail closed) → risk.decide() with
+  the REAL account → persistent order row (PENDING_SUBMIT before the broker sees it) → broker →
+  event/fill ingestion → bracket-integrity check → reconciliation (mismatch → halt_submissions).
+
+Persistence: BOT/data/execution.db (SQLite WAL) — exec_orders / exec_events / exec_fills /
+exec_flags. Restart recovery converges rows to broker truth by client_order_id; a broker timeout
+leaves the row SUBMIT_UNKNOWN and the key CLAIMED (never resubmit blind — reconciliation
+resolves it), while a clean broker ERROR releases the key for a bounded retry.
+
+Every response carries a correlation id + one final action:
+  submitted | rejected | duplicate | shadowed | halted
+"""
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+import time
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from bot.config import BOT_ROOT
+from bot.contracts import (Mode, OrderRequest, OrderState, OrderType, Side, TimeInForce,
+                           TradeCandidate, utcnow_iso)
+from bot.risk import Account, decide
+
+DB_PATH = BOT_ROOT / "data" / "execution.db"
+ET = ZoneInfo("America/New_York")
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS exec_orders(
+  order_id TEXT PRIMARY KEY, correlation_id TEXT, idem_key TEXT UNIQUE, source TEXT,
+  symbol TEXT, side TEXT, qty INTEGER, planned_entry REAL, stop REAL, tp REAL,
+  strategy_version TEXT, state TEXT, broker_order_id TEXT, reason TEXT,
+  created_at TEXT, updated_at TEXT, created_epoch REAL);
+CREATE TABLE IF NOT EXISTS exec_events(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT, state TEXT, message TEXT, at TEXT);
+CREATE TABLE IF NOT EXISTS exec_fills(
+  fill_id TEXT PRIMARY KEY, order_id TEXT, broker_order_id TEXT, symbol TEXT, side TEXT,
+  qty INTEGER, price REAL, at TEXT);
+CREATE TABLE IF NOT EXISTS exec_flags(k TEXT PRIMARY KEY, v TEXT);
+"""
+
+TERMINAL = ("FILLED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED", "INVESTIGATION_REQUIRED")
+SCHEMA_V = 3                     # P1.5: bump WITH a migration below, never without
+
+
+class AccountUnproven(RuntimeError):
+    """A required piece of account state could not be proven — the order is refused.
+    An unprovable limit is a breached limit (fail closed)."""
+
+
+@dataclass
+class ExecutionResult:
+    action: str                      # submitted | rejected | duplicate | shadowed | halted
+    correlation_id: str
+    reason: str = ""
+    order_id: str | None = None
+    broker_order_id: str | None = None
+    qty: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _alert(msg: str, level: str = "critical") -> None:
+    try:
+        from bot.alerts import alert
+        alert(msg, level=level, source="execution")
+    except Exception:
+        pass
+
+
+class ExecutionService:
+    STALE_SEC = 300                  # non-terminal order untouched this long -> investigation
+
+    def __init__(self, broker, db_path: Path | str = DB_PATH, journal=None,
+                 mode: Mode = Mode.PAPER, now=None):
+        self.broker = broker
+        self.mode = Mode(mode)
+        if self.mode is not Mode.LIVE and not getattr(broker, "is_paper", True):
+            raise ValueError("non-live mode with a live broker — refused (fail closed)")
+        self.now = now or time.time
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=5000")
+        self.db.executescript(_SCHEMA)
+        # P1.5 schema versioning (ENFORCED): 1=base · 2=+session/family/grade · 3=+candidate_id.
+        # A store written by NEWER code refuses to run under older code (fail loud, never corrupt).
+        cur_v = self.db.execute("PRAGMA user_version").fetchone()[0]
+        if cur_v > SCHEMA_V:
+            raise RuntimeError(f"execution.db is schema v{cur_v}, this code understands v{SCHEMA_V} "
+                               f"— refusing to run OLD code on a NEWER store (P1.5)")
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(exec_orders)")}
+        for c in ("session", "family", "grade",                # Phase E.1: classification dims
+                  "candidate_id"):                             # P1.1 linkage: tracker <-> fills
+            if c not in cols:
+                self.db.execute(f"ALTER TABLE exec_orders ADD COLUMN {c} TEXT")
+        self.db.execute(f"PRAGMA user_version={SCHEMA_V}")
+        self.db.commit()
+        if journal is None:
+            from bot.journal import Journal
+            journal = Journal()
+        self.journal = journal
+
+    # ── flags / halt ─────────────────────────────────────────────────────────
+    def _flag(self, k: str):
+        row = self.db.execute("SELECT v FROM exec_flags WHERE k=?", (k,)).fetchone()
+        return row[0] if row else None
+
+    def _set_flag(self, k: str, v) -> None:
+        self.db.execute("INSERT INTO exec_flags(k, v) VALUES(?,?) "
+                        "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v)))
+        self.db.commit()
+
+    def halted(self) -> str | None:
+        return self._flag("halt_submissions")
+
+    def set_halt(self, why: str) -> None:
+        self._set_flag("halt_submissions", why)
+        _alert(f"SUBMISSIONS HALTED: {why}")
+
+    def clear_halt(self) -> None:
+        self.db.execute("DELETE FROM exec_flags WHERE k='halt_submissions'")
+        self.db.commit()
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _trade_date(self) -> str:
+        return datetime.fromtimestamp(self.now(), tz=ET).date().isoformat()
+
+    def idem_key(self, c: TradeCandidate, session: str = "") -> str:
+        raw = (f"{c.symbol}|{c.side.value}|{round(float(c.entry), 4)}|{session}|"
+               f"{self._trade_date()}|{c.strategy_version}")
+        return hashlib.sha1(raw.encode()).hexdigest()[:20]
+
+    def _event(self, oid: str, state: str, message: str = "") -> None:
+        self.db.execute("INSERT INTO exec_events(order_id, state, message, at) VALUES(?,?,?,?)",
+                        (oid, state, message[:300], utcnow_iso()))
+        self.db.commit()
+
+    def _update(self, oid: str, state: str, reason: str = "", broker_order_id: str | None = None):
+        self.db.execute(
+            "UPDATE exec_orders SET state=?, reason=?, updated_at=?, "
+            "broker_order_id=COALESCE(?, broker_order_id) WHERE order_id=?",
+            (state, reason[:300], utcnow_iso(), broker_order_id, oid))
+        self.db.commit()
+        self._event(oid, state, reason)
+
+    def _fail_release(self, oid: str, reason: str) -> None:
+        """FAILED releases the idempotency key (suffix it away) so a bounded retry can re-claim —
+        but only for CLEAN failures; SUBMIT_UNKNOWN never releases (T5.4 timeout-but-accepted)."""
+        self.db.execute("UPDATE exec_orders SET state='FAILED', reason=?, updated_at=?, "
+                        "idem_key = idem_key || ':failed:' || order_id WHERE order_id=?",
+                        (reason[:300], utcnow_iso(), oid))
+        self.db.commit()
+        self._event(oid, "FAILED", reason)
+
+    # ── account truth ────────────────────────────────────────────────────────
+    def _replay_fills(self):
+        """Replay exec_fills chronologically → per-symbol net/avg + realized P&L events.
+        Deterministic and cheap (paper fills are few); the same math the tests seed."""
+        from bot.risk import POINT_VALUE
+        rows = self.db.execute(
+            "SELECT symbol, side, qty, price, at FROM exec_fills ORDER BY at, fill_id").fetchall()
+        book: dict[str, dict] = {}
+        realized: list[tuple[str, float]] = []          # (at, pnl$)
+        for sym, side, qty, price, at in rows:
+            pv = POINT_VALUE.get(str(sym).upper(), 1.0)
+            b = book.setdefault(sym, {"net": 0, "avg": 0.0})
+            signed = qty if side == "long" else -qty
+            if b["net"] * signed >= 0:                  # extend / open
+                tot = abs(b["net"]) + qty
+                b["avg"] = (b["avg"] * abs(b["net"]) + price * qty) / tot if tot else 0.0
+                b["net"] += signed
+            else:                                       # reduce / close -> realize
+                closed = min(abs(signed), abs(b["net"]))
+                direction = 1 if b["net"] > 0 else -1
+                realized.append((at, (price - b["avg"]) * closed * direction * pv))
+                b["net"] += signed
+                if b["net"] == 0:
+                    b["avg"] = 0.0
+        return book, realized
+
+    def account_truth(self, feed_healthy: bool | None = True,
+                      kill_switch: bool = False) -> Account:
+        if feed_healthy is not True:
+            raise AccountUnproven("market-data feed health not proven")
+        try:
+            ai = self.broker.account()
+            positions = self.broker.positions()
+        except Exception as e:
+            raise AccountUnproven(f"broker unreachable: {e}") from None
+        if ai is None or ai.equity is None:
+            raise AccountUnproven("broker returned no equity")
+        today = self._trade_date()
+        monday = (datetime.fromisoformat(today) -
+                  timedelta(days=datetime.fromisoformat(today).weekday())).date().isoformat()
+        _, realized = self._replay_fills()
+        daily = sum(p for at, p in realized if str(at)[:10] == today)
+        weekly = sum(p for at, p in realized if str(at)[:10] >= monday)
+        streak = 0
+        for _, p in reversed(realized):
+            if p < 0:
+                streak += 1
+            else:
+                break
+        trades_today = self.db.execute(
+            "SELECT count(*) FROM exec_orders WHERE substr(created_at,1,10)=? "
+            "AND state NOT IN ('FAILED','REJECTED')", (today,)).fetchone()[0]
+        hw = max(float(self._flag("equity_high_water") or 0.0), float(ai.equity))
+        self._set_flag("equity_high_water", hw)
+        open_syms = [p.symbol for p in positions if getattr(p, "qty", 0)]
+        return Account(equity=float(ai.equity), peak_equity=hw, daily_pnl=daily,
+                       weekly_pnl=weekly, open_positions=len(open_syms),
+                       open_symbols=open_syms, trades_today=int(trades_today),
+                       consecutive_losses=streak, kill_switch=kill_switch,
+                       source_healthy=True, mode=self.mode)
+
+    # ── THE door ─────────────────────────────────────────────────────────────
+    def submit(self, c: TradeCandidate, source: str, session: str = "",
+               feed_healthy: bool | None = True, kill_switch: bool = False,
+               qty_mult: float = 1.0, qty_cap: int | None = None,
+               grade: str = "") -> ExecutionResult:
+        corr = uuid.uuid4().hex[:12]
+        why = self.halted()
+        if why:
+            return ExecutionResult("halted", corr, reason=f"submissions halted: {why}")
+        # ENTRY-GROUP REMOVALS (Phase E.3): an adopted removal cannot submit — shadow keeps
+        # accruing elsewhere, but no order for a group the cohort test retired.
+        from bot.strategy.removals import is_removed
+        rm = is_removed(c.symbol, getattr(c, "setup", ""), c.side.value, session)
+        if rm:
+            return ExecutionResult("rejected", corr,
+                                   reason=f"entry group REMOVED ({rm.get('reason', '')}) — "
+                                          f"adopted {str(rm.get('adopted_at', ''))[:10]}; "
+                                          f"shadow journal keeps accruing")
+        # approval at SUBMIT time (multi-tab / cached-page safe): a revoked approval takes
+        # effect on the next order, not the next page reload
+        from bot.approval import paper_approved
+        if self.mode is Mode.PAPER and not paper_approved(c.strategy_version):
+            return ExecutionResult("rejected", corr,
+                                   reason=f"no paper approval for {c.strategy_version}")
+        key = self.idem_key(c, session)
+        oid = uuid.uuid4().hex[:16]
+        try:
+            self.db.execute(
+                "INSERT INTO exec_orders(order_id, correlation_id, idem_key, source, symbol, "
+                "side, qty, planned_entry, stop, tp, strategy_version, state, created_at, "
+                "updated_at, created_epoch, session, family, grade, candidate_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,'PENDING_SUBMIT',?,?,?,?,?,?,?)",
+                (oid, corr, key, source, c.symbol, c.side.value, 0, float(c.entry),
+                 float(c.stop), float(c.tp2), c.strategy_version, utcnow_iso(), utcnow_iso(),
+                 self.now(), session, getattr(c, "setup", "") or "", grade,
+                 getattr(c, "candidate_id", "") or ""))
+            self.db.commit()
+        except sqlite3.IntegrityError:
+            return ExecutionResult("duplicate", corr, reason=f"idempotency key {key} already "
+                                   f"claimed (same setup, same trade date) — no new order")
+        try:
+            acct = self.account_truth(feed_healthy, kill_switch)
+        except AccountUnproven as e:
+            self._fail_release(oid, f"ACCOUNT_STATE_UNPROVEN: {e}")
+            return ExecutionResult("rejected", corr, order_id=oid,
+                                   reason=f"ACCOUNT_STATE_UNPROVEN: {e}")
+        rd = decide(c, acct)
+        try:
+            self.journal.record(rd)
+        except Exception:
+            pass
+        if not rd.approved:
+            self._fail_release(oid, f"risk {rd.reason_code.value}: {rd.notes}")
+            return ExecutionResult("rejected", corr, order_id=oid,
+                                   reason=f"risk {rd.reason_code.value}: {rd.notes}")
+        qty = int(rd.max_qty if qty_mult == 1.0 else max(1, round(rd.max_qty * qty_mult)))
+        qty = min(qty, rd.max_qty)                     # hints size DOWN, never past the risk gate
+        if qty_cap:
+            qty = min(qty, int(qty_cap))
+        self.db.execute("UPDATE exec_orders SET qty=? WHERE order_id=?", (qty, oid))
+        self.db.commit()
+        order = OrderRequest(candidate_id=c.candidate_id, symbol=c.symbol, side=c.side, qty=qty,
+                             order_type=OrderType.MARKET, stop_price=c.stop, take_profit=c.tp2,
+                             tif=TimeInForce.DAY, idempotency_key=key)
+        try:
+            ev = self.broker.submit(order)
+        except Exception as e:                         # transport timeout: state UNKNOWN — the
+            self._update(oid, "SUBMIT_UNKNOWN", str(e))  # key stays claimed; recovery resolves it
+            _alert(f"SUBMISSION STATUS UNKNOWN {c.symbol} {c.side.value}: {e}", level="warn")
+            return ExecutionResult("rejected", corr, order_id=oid,
+                                   reason=f"SUBMISSION STATUS UNKNOWN — do not resubmit; "
+                                          f"broker reconciliation in progress ({e})")
+        if ev.state is OrderState.ERROR:
+            self._fail_release(oid, f"broker error: {ev.message}")
+            return ExecutionResult("rejected", corr, order_id=oid,
+                                   reason=f"broker error: {ev.message}")
+        self._update(oid, "SUBMITTED", f"src={source}", broker_order_id=ev.broker_order_id)
+        try:
+            self.journal.record(ev)
+        except Exception:
+            pass
+        return ExecutionResult("submitted", corr, order_id=oid,
+                               broker_order_id=ev.broker_order_id, qty=qty)
+
+    # ── broker-truth ingestion ───────────────────────────────────────────────
+    def poll_fills(self) -> dict:
+        """Pull broker order states; upsert events/fills idempotently; verify bracket legs on
+        entry fills; resolve SUBMIT_UNKNOWN rows by client_order_id (timeout-but-accepted)."""
+        fn = getattr(self.broker, "recent_orders", None)
+        if fn is None:
+            return {"error": "broker has no recent_orders()"}
+        try:
+            brk = fn()
+        except Exception as e:
+            return {"error": f"poll failed: {e}"}
+        seen = ingested = 0
+        for o in brk:
+            seen += 1
+            coid = str(o.get("client_order_id") or "")
+            row = self.db.execute(
+                "SELECT order_id, state, symbol, side, qty FROM exec_orders WHERE "
+                "broker_order_id=? OR idem_key=?", (str(o.get("id")), coid)).fetchone()
+            if not row:
+                continue
+            oid, state, sym, side, qty = row
+            status = str(o.get("status") or "").lower()
+            if state in ("SUBMIT_UNKNOWN", "PENDING_SUBMIT"):   # recovery adoption: broker truth
+                self._update(oid, "SUBMITTED", "adopted from broker after unknown/crash",
+                             broker_order_id=str(o.get("id")))
+            filled = int(float(o.get("filled_qty") or 0))
+            price = float(o.get("avg_fill_price") or 0.0)
+            if filled > 0 and price > 0:
+                fid = f"{o.get('id')}:{filled}"
+                cur = self.db.execute("SELECT 1 FROM exec_fills WHERE fill_id=?", (fid,)).fetchone()
+                if not cur:
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO exec_fills(fill_id, order_id, broker_order_id, "
+                        "symbol, side, qty, price, at) VALUES(?,?,?,?,?,?,?,?)",
+                        (fid, oid, str(o.get("id")), sym, side, filled, price,
+                         str(o.get("updated_at") or utcnow_iso())))
+                    self.db.commit()
+                    ingested += 1
+                    self._mark_tracker_filled(oid)             # P1.1 linkage: shadow -> paper_filled
+                    if status in ("filled", "partially_filled"):
+                        self._bracket_check(oid, sym, o)
+            if status == "filled":
+                self._update(oid, "FILLED", f"avg {price}")
+            elif status in ("canceled", "cancelled"):
+                self._update(oid, "CANCELLED", "broker cancelled")
+            elif status in ("rejected", "expired"):
+                self._update(oid, status.upper(), str(o.get("reason") or ""))
+        return {"orders_seen": seen, "fills_ingested": ingested}
+
+    def _mark_tracker_filled(self, oid: str) -> None:
+        """Label-lifecycle linkage (P1.1 completion, 2026-07-12): a broker fill upgrades the
+        originating tracker decision's state to 'paper_filled' — a filled row can never be
+        confused with a shadow row in training or the matrix."""
+        try:
+            row = self.db.execute("SELECT candidate_id FROM exec_orders WHERE order_id=?",
+                                  (oid,)).fetchone()
+            if not row or not row[0]:
+                return
+            from bot.tracker import _con
+            con = _con()
+            con.execute("UPDATE decisions SET state='paper_filled' WHERE candidate_id=?", (row[0],))
+            con.commit(); con.close()
+        except Exception:
+            pass
+
+    def _bracket_check(self, oid: str, sym: str, o: dict) -> None:
+        """An entry fill without WORKING protective legs is a CRITICAL halt (T5.7):
+        'bracket active' is asserted from broker truth, never assumed from the submit call."""
+        legs = o.get("legs")
+        if legs is None:
+            return                                       # broker payload has no leg info: skip
+        working = [l for l in legs
+                   if str(l.get("status", "")).lower() in ("new", "accepted", "held", "open",
+                                                           "pending_new", "working")]
+        if not working:
+            self._event(oid, "BRACKET_MISSING", f"{sym}: entry filled but no working "
+                                                f"protective leg (legs={legs})")
+            self.set_halt(f"bracket missing on {sym} (order {oid}) — entry filled, "
+                          f"stop/target not working")
+
+    # ── reconciliation with teeth ────────────────────────────────────────────
+    def reconcile(self) -> dict:
+        """Broker positions vs the fills-derived internal book. Mismatch → halt + alert;
+        a clean pass clears a reconcile-scoped halt."""
+        try:
+            broker_pos = self.broker.positions()
+        except Exception as e:
+            return {"_error": f"broker poll failed: {e}"}
+        book, _ = self._replay_fills()
+        bmap = {}
+        for p in broker_pos:
+            sgn = 1 if (getattr(p, "side", None) and p.side is Side.LONG) else -1
+            bmap[p.symbol] = sgn * int(getattr(p, "qty", 0) or 0)
+        out = {}
+        bad = []
+        for sym in set(book) | set(bmap):
+            iq = int(book.get(sym, {}).get("net", 0))
+            bq = int(bmap.get(sym, 0))
+            if iq != bq:
+                out[sym] = f"MISMATCH internal={iq} broker={bq}"
+                bad.append(sym)
+            else:
+                out[sym] = "ok"
+        if bad:
+            self.set_halt(f"reconcile mismatch: {', '.join(sorted(bad))}")
+        else:
+            why = self.halted() or ""
+            if why.startswith("reconcile mismatch"):
+                self.clear_halt()                        # cleared by a clean pass; other halts stay
+        return out
+
+    # ── hygiene ──────────────────────────────────────────────────────────────
+    def staleness_sweep(self) -> list[str]:
+        """Non-terminal orders untouched past the budget flip to INVESTIGATION_REQUIRED —
+        nothing sits looking normally 'Pending' forever."""
+        cutoff = self.now() - self.STALE_SEC
+        rows = self.db.execute(
+            "SELECT order_id, state FROM exec_orders WHERE state NOT IN "
+            f"({','.join('?' * len(TERMINAL))}) AND created_epoch < ?",
+            (*TERMINAL, cutoff)).fetchall()
+        flagged = []
+        for oid, state in rows:
+            self._update(oid, "INVESTIGATION_REQUIRED", f"stale in {state} past "
+                                                        f"{self.STALE_SEC}s")
+            flagged.append(oid)
+        if flagged:
+            _alert(f"{len(flagged)} order(s) stale -> INVESTIGATION_REQUIRED", level="warn")
+        return flagged
+
+    def recover(self) -> dict:
+        """Boot recovery: converge non-terminal rows to broker truth by client_order_id.
+        PENDING_SUBMIT with no broker order = crash-before-submit → FAILED (key released).
+        SUBMIT_UNKNOWN / SUBMITTED are resolved by poll_fills' adoption path."""
+        fn = getattr(self.broker, "recent_orders", None)
+        known = {}
+        if fn is not None:
+            try:
+                known = {str(o.get("client_order_id") or ""): o for o in fn()}
+            except Exception:
+                known = None                             # broker down: leave rows for next pass
+        resolved = failed = 0
+        if known is not None:
+            for oid, key in self.db.execute(
+                    "SELECT order_id, idem_key FROM exec_orders WHERE "
+                    "state='PENDING_SUBMIT'").fetchall():
+                if key in known:
+                    self._update(oid, "SUBMITTED", "adopted at recovery",
+                                 broker_order_id=str(known[key].get("id")))
+                    resolved += 1
+                else:
+                    self._fail_release(oid, "crash before submit — never reached the broker")
+                    failed += 1
+        out = self.poll_fills()
+        rec = self.reconcile()
+        return {"adopted": resolved, "failed_pre_submit": failed, "poll": out, "reconcile": rec}

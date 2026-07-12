@@ -18,13 +18,14 @@ import sys, os, gc
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 import numpy as np, pandas as pd
 import hs_db, hs_harness as H, hs_backtest as B, hs_validate as V
+from hs_contracts import spec as _CS
 
 rng = np.random.default_rng(7)
 EQ = {"QQQ", "SPY"}
 
 
 def cost_pts(sym):
-    return (2 * 0.01) if sym in EQ else (2 * B.TICK * B.SLIP_TICKS + 2 * B.COMM / B.PT_VALUE)
+    return (2 * 0.01) if sym in EQ else (2 * _CS(sym).tick * _CS(sym).slip_ticks * B.SLIP_MULT + 2 * _CS(sym).commission / _CS(sym).point_value)
 
 
 def fade(d, k=1.5, m=1.5, win=(600, 870), eod=955):

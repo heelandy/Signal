@@ -84,9 +84,14 @@ def metrics(tr: pd.DataFrame) -> dict:
 
 
 def main(syms: list[str]) -> dict:
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
     out = {"generated_at": pd.Timestamp.now("UTC").isoformat(), "symbols": {},
+           # PHASE R (2026-07-11): the version is stamped LIVE (the old hardcoded "2026.07"
+           # made ab_strategy_version_match false forever) + remediation lineage with the
+           # frozen-span waiver (user decision: no historical refresh; QA documents staleness)
+           "lineage": "remediation-2026-07-11 · corrected engine (Phases 1-3) · frozen-span waiver",
            "config": {"cooldown_bars": ES.cooldown_bars, "stale_bars": ES.stale_bars,
-                      "retest_atr": ES.retest_atr, "strategy_version": "orb-standard-2026.07"}}
+                      "retest_atr": ES.retest_atr, "strategy_version": STRATEGY_VERSION}}
     for sym in syms:
         print(f"\n=== {sym} ===", flush=True)
         try:

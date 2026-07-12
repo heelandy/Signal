@@ -101,12 +101,12 @@ def main():
         # FINAL-config gauntlet line + slip stress
         line(sym, run(d))
         if sym in ("NQ", "ES", "MNQ", "GC", "MGC"):
-            orig = B.SLIP_TICKS; parts = []
+            orig = B.SLIP_MULT; parts = []
             for mult in (1, 2, 3):
-                B.SLIP_TICKS = orig * mult
+                B.SLIP_MULT = orig * mult
                 r = run(d)["net_R"].to_numpy()
                 parts.append(f"{mult}x={r.mean():+.3f}(PF{V.pf(r):.2f})")
-            B.SLIP_TICKS = orig
+            B.SLIP_MULT = orig
             print(f"      slip stress (futures): " + "  ".join(parts))
         del d; gc.collect()
     con.close()

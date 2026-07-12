@@ -1,4 +1,9 @@
-# BOT — Remaining & Missing Implementation (current, 2026-06-29)
+# BOT — Remaining & Missing Implementation (historical snapshot, 2026-06-29)
+
+> **⚠ HISTORICAL SNAPSHOT — DO NOT USE FOR STATUS.** This document froze on 2026-06-29 and
+> contradicts the current code (several items below are long done; some claims here are stale).
+> Current truth: `docs/STATUS.md` · living checklist: `docs/TASKS_INCOMPLETE.md` · fix plan:
+> `docs/REMEDIATION_PLAN.md`. *(Deprecated 2026-07-11, remediation Phase 0.)*
 
 What's built is the auditable signal-provider: 4-family scan (per-asset config) → risk → P(win) →
 order-flow → 0DTE options (naked/debit/credit, TP1 1.5R / TP2 4R) → journal + SQLite → dashboard +

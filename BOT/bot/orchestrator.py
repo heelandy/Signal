@@ -1,5 +1,10 @@
 """Orchestrator — the live/paper decision loop that ties the pieces together with hard mode gating.
 
+NOT ON THE LIVE PATH (remediation Phase 5, 2026-07-11): every real order source now submits
+through bot.execution.service.ExecutionService — the ONE execution path with persistent OMS,
+account truth and reconciliation. This module has no runtime callers and stays as replay/reference
+only; do not wire it to a broker.
+
 Per candidate:  market-truth (upstream) → risk.decide → [shadow: log only | paper/live: broker.submit]
 → journal everything. Mode is fail-closed: LIVE requires `settings.live_allowed`; SHADOW builds the
 order but never transmits (Evidence stage-4 shadow mode); PAPER/LIVE submit through the broker.

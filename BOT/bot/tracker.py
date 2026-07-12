@@ -40,11 +40,34 @@ def _con():
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA busy_timeout=5000")
     c.executescript(_SCHEMA); c.commit()
+    # P1.5 schema versioning (ENFORCED): 1=base+mfe/mae · 2=+strategy_version/state.
+    cur_v = c.execute("PRAGMA user_version").fetchone()[0]
+    if cur_v > 2:
+        raise RuntimeError(f"tracker DB is schema v{cur_v}, this code understands v2 — "
+                           f"refusing to run OLD code on a NEWER store (P1.5)")
+    c.execute("PRAGMA user_version=2")
     for col in ("mfe_r", "mae_r"):                    # study: max favorable / adverse excursion (R) — best-effort migrate
         try:
             c.execute(f"ALTER TABLE decisions ADD COLUMN {col} REAL"); c.commit()
         except Exception:
             pass
+    for col in ("strategy_version", "state"):         # P1.1 LABEL LINEAGE (2026-07-11): every row
+        try:                                          # carries the rule version that generated it
+            c.execute(f"ALTER TABLE decisions ADD COLUMN {col} TEXT"); c.commit()
+        except Exception:
+            pass
+    try:
+        # one-time backfill (idempotent — touches NULLs only): recover the version from the
+        # persisted signal JSON where it exists; rows without one are 'unknown' and the dataset
+        # builder EXCLUDES them from training (the audit: old rows were silently stamped with
+        # the CURRENT version — labels from retired rules trained today's models)
+        c.execute("UPDATE decisions SET strategy_version = COALESCE("
+                  "json_extract(json, '$.strategy_version'), 'unknown') "
+                  "WHERE strategy_version IS NULL")
+        c.execute("UPDATE decisions SET state = 'legacy' WHERE state IS NULL")
+        c.commit()
+    except Exception:
+        pass
     return c
 
 
@@ -110,14 +133,27 @@ def record_decision(sig: dict, taken: bool, auto: bool = False) -> dict:
             con.commit(); con.close()
             return {"id": row[0], "taken": taken, "symbol": sig.get("symbol"), "updated": True}
     rid = str(uuid.uuid4())
+    # P1.1 LABEL LINEAGE: the version is IMMUTABLE at record time (the signal's own, else the
+    # rules that are live right now); state = the lifecycle the plan names — shadow rows are
+    # never confusable with taken/skipped human decisions (or, later, broker fills).
+    sv = sig.get("strategy_version")
+    if not sv:
+        try:
+            from bot.strategy.orb_candidates import STRATEGY_VERSION as _SV
+            sv = _SV
+        except Exception:
+            sv = "unknown"
+    state = "shadow" if auto else ("manually_accepted" if taken else "manually_skipped")
     con.execute(
         "INSERT OR REPLACE INTO decisions(id,candidate_id,symbol,side,family,session,entry,stop,tp1,tp2,"
-        "taken,decided_at,signal_at,outcome,json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "taken,decided_at,signal_at,outcome,json,strategy_version,state) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [rid, sig.get("candidate_id") or sig.get("id") or rid, sig["symbol"], sig["side"],
          sig.get("family"), sig.get("session"), sig["entry"], sig["stop"], sig.get("tp1"), sig.get("tp2"),
-         1 if taken else 0, utcnow_iso(), sig.get("generated_at") or sig.get("signal_at"), "open", json.dumps(sig)])
+         1 if taken else 0, utcnow_iso(), sig.get("generated_at") or sig.get("signal_at"), "open",
+         json.dumps(sig), sv, state])
     con.commit(); con.close()
-    return {"id": rid, "taken": taken, "symbol": sig["symbol"]}
+    return {"id": rid, "taken": taken, "symbol": sig["symbol"], "strategy_version": sv, "state": state}
 
 
 def _walk(bars: pd.DataFrame, signal_at: str, side: str, entry, stop, tp1, tp2, close_hm=None) -> tuple[str, float, float, float]:
@@ -410,12 +446,16 @@ def study() -> dict:
             "win_pct": round(100 * sum(1 for r in rows if r[1] and r[1] > 0) / n), "hints": hints}
 
 
-# Backtested reference for the CORE breakout under honest fills (F64, 2026-06-29). It MUST describe the
-# model _walk actually scores: full position, fixed structure stop, first-touch — stop and tp1_then_stop
-# both = -1R (NO breakeven move), tp2 = +4R. That is F64's "full-to-4R cap, no scale" (QQQ +0.264, ~42%
-# reach TP2). This is what live GRADE-A signals should reproduce — the live==backtest gate before sizing up.
-BACKTEST_REF = {"exp_R": 0.24, "win_pct": 42.0,
-                "note": "F64 full position -> 4R cap, no scale / no BE (QQQ +0.26R, NQ/SPY similar)"}
+# Backtested reference for the CORE breakout under honest fills. It MUST describe the model _walk
+# actually scores: full position, fixed structure stop, first-touch — stop and tp1_then_stop both
+# = -1R (NO breakeven move), tp2 = +4R.
+# PHASE R (2026-07-11): re-baselined on the CORRECTED engine (Phases 1-3: PIT joins, last-bar
+# EOD flatten, gap-aware stops, registry economics) over the frozen span — the old F64 reference
+# (QQQ +0.264R / 42%) carried the audited lookahead + overnight-leak flattery. The live==backtest
+# gate now judges live signals against honest math (see docs/REMEDIATION_DELTA.md).
+BACKTEST_REF = {"exp_R": 0.335, "win_pct": 39.4,
+                "note": "corrected engine 2026-07-11 (Phase R) — QQQ@5m canonical, full->4R cap, "
+                        "no scale/BE; frozen-span lineage"}
 MIN_SAMPLE = 12
 # CORE-ONLY filter (user 2026-07-07: worker entries live in the journal lab but must NOT corrupt
 # the paper-trade analytics): worker/emergent shadow lineages trade a DIFFERENT geometry, so the

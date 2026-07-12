@@ -60,9 +60,9 @@ def main():
         report("B slice — OOS 2022+", trB[yr >= 2022])
         report("prod (B+D blocked)", run(d, ors, ore, cut, tdy, eod))
         report("unblock B (keep D off)", run(d3, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 4
+        B.SLIP_MULT = 2.0
         report("unblock B @ 2x slip", run(d3, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 2
+        B.SLIP_MULT = 1.0
 
 
 if __name__ == "__main__":

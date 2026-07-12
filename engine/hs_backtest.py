@@ -20,10 +20,13 @@ Output: data/bt_<sym>_<tf>.csv  (one row per trade) + summary.
 import sys
 import numpy as np, pandas as pd
 import hs_harness as H
+import hs_contracts
 import hs_db
 
-# --- MNQ economics / exit params (V44 defaults) ---
-PT_VALUE, TICK, SLIP_TICKS, COMM = 2.0, 0.25, 2, 0.52
+# --- economics: PER-SYMBOL from engine/hs_contracts.py (remediation Phase 3 — the old module
+# constants priced EVERY future as MNQ). SLIP_MULT is the research 2x-slip stress hook (the old
+# scripts monkeypatched SLIP_TICKS; the multiplier scales every symbol's registry slip instead).
+SLIP_MULT = 1.0
 CONTRACTS = 2
 TP1_RR, TP2_RR = 1.0, 2.0
 SL_BUF_ATR, MIN_STOP_ATR, SL_MAX_ATR = 0.3, 0.5, 2.5
@@ -31,22 +34,35 @@ TRAIL_MULT = 2.0   # ATR chandelier trail for exit mode "trail"
 
 
 def _externals(con, bars, sym):
+    """Daily context columns (VIX / ES proxy / own-symbol HTF) for the intraday frame.
+    PIT RULE (remediation Phase 1, 2026-07-11): every daily-derived value joins via merge_asof
+    with allow_exact_matches=False — a bar dated D sees the most recent session STRICTLY BEFORE D,
+    never day D's own not-yet-closed daily candle. The previous exact-date merge was the audit's
+    headline lookahead (a 09:35 signal read that day's 16:00 close). Asof on the daily table's own
+    dates is exchange-calendar-aware by construction: holiday gaps resolve to the last completed
+    session instead of NaN."""
     et = pd.to_datetime(bars["ts"]).dt.tz_convert("America/New_York")
-    bars["date"] = et.dt.normalize().dt.tz_localize(None)
-    # VIX (sma5 + close[5])
+    bars["date"] = et.dt.normalize().dt.tz_localize(None).astype("datetime64[ns]")
+
+    def _asof(left, daily, cols):
+        d = daily.dropna(subset=["date"]).sort_values("date")[["date"] + cols].copy()
+        d["date"] = d["date"].astype("datetime64[ns]")     # merge_asof needs exact dtype match
+        return pd.merge_asof(left, d, on="date", allow_exact_matches=False)
+
+    # VIX (sma5 + close[5]) — both legs lagged to the prior completed session
     vix = con.execute("SELECT date, sma5, close FROM vix_daily ORDER BY date").df()
     vix["date"] = pd.to_datetime(vix["date"]); vix["prev5"] = vix["close"].shift(5)
-    bars = bars.merge(vix[["date", "sma5", "prev5"]].rename(
-        columns={"sma5": "vix_sma5", "prev5": "vix_prev5"}), on="date", how="left")
+    bars = _asof(bars, vix.rename(columns={"sma5": "vix_sma5", "prev5": "vix_prev5"}),
+                 ["vix_sma5", "vix_prev5"])
     # SPY proxy = ES daily (full session)
     es = hs_db.bars(con, "1d", "full", sym="ES")
     es["date"] = pd.to_datetime(es["ts"]).dt.tz_convert("America/New_York").dt.normalize().dt.tz_localize(None)
     es = es.sort_values("date")
     es["e20"], es["e50"] = H.ema(es["close"], 20), H.ema(es["close"], 50)
     _, _, es["adx"] = H.dmi(es["high"], es["low"], es["close"], 14, 14)
-    bars = bars.merge(es[["date", "close", "e20", "e50", "adx"]].rename(columns={
-        "close": "spy_close", "e20": "spy_e20", "e50": "spy_e50", "adx": "spy_adx"}),
-        on="date", how="left")
+    bars = _asof(bars, es.rename(columns={"close": "spy_close", "e20": "spy_e20",
+                                          "e50": "spy_e50", "adx": "spy_adx"}),
+                 ["spy_close", "spy_e20", "spy_e50", "spy_adx"])
     # HTF = this symbol's DAILY ema50/200 alignment (proxy for the Pine HTF spine)
     dd = hs_db.bars(con, "1d", "full", sym=sym)
     dd["date"] = pd.to_datetime(dd["ts"]).dt.tz_convert("America/New_York").dt.normalize().dt.tz_localize(None)
@@ -54,8 +70,9 @@ def _externals(con, bars, sym):
     e50, e200 = H.ema(dd["close"], 50), H.ema(dd["close"], 200)
     dd["htf_bull"] = (dd["close"] > e50) & (e50 > e200)
     dd["htf_bear"] = (dd["close"] < e50) & (e50 < e200)
-    bars = bars.merge(dd[["date", "htf_bull", "htf_bear"]], on="date", how="left")
-    bars["htf_bull"] = bars["htf_bull"].fillna(False); bars["htf_bear"] = bars["htf_bear"].fillna(False)
+    bars = _asof(bars, dd, ["htf_bull", "htf_bear"])
+    bars["htf_bull"] = bars["htf_bull"].fillna(False).astype(bool)
+    bars["htf_bear"] = bars["htf_bear"].fillna(False).astype(bool)
     return bars
 
 
@@ -178,11 +195,16 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
             continue
         buf = (atr[i] * brk_buf_atr) if not np.isnan(atr[i]) else 0.0
         lh, ll = orh[i] + buf, orl[i] - buf
-        if hp[i] >= lh: broke_l = True            # price has cleared the breakout level today
-        if lp[i] <= ll: broke_s = True
-        if reentry:                                # re-arm after price falls back INSIDE the OR (fresh break)
-            if c[i] < orh[i]: armed_l = True
-            if c[i] > orl[i]: armed_s = True
+        touch_exec = execm in ("stop", "retest", "sweepgo", "rebreak")
+        if not touch_exec:
+            # close-exec: gate state may update at this bar's close — the fill is at the same close
+            if hp[i] >= lh: broke_l = True        # price has cleared the breakout level today
+            if lp[i] <= ll: broke_s = True
+            if reentry:                            # re-arm after price falls back INSIDE the OR (fresh break)
+                if c[i] < orh[i]: armed_l = True
+                if c[i] > orl[i]: armed_s = True
+        # touch-exec: break memory / re-arm are PRIOR-bar state (S7, Phase 2) — a same-bar close
+        # may not authorize a level fill that printed earlier in the bar; updates run post-fire below
         if execm == "retest":                      # require break THEN pullback to the OR edge
             l_cross, ll_lvl = (broke_l and lp[i] <= orh[i]), orh[i]   # enter at OR high on the retest
             s_cross, ls_lvl = (broke_s and hp[i] >= orl[i]), orl[i]
@@ -310,6 +332,12 @@ def _orb_signals(d, or_s=570, or_e=600, brk_buf_atr=0.0, tod_end=960, execm="clo
             lsig[i] = True; lvl_l[i] = ll_lvl; done_l = True; armed_l = False; n_l += 1
         if ok_s and s_cross and near_s and seq_s and wide_ok and gap_day_ok[i] and bias_s and canon_s and vcx_ok and tdn[i] and (ob_s is None or ob_s[i]) and vok:
             ssig[i] = True; lvl_s[i] = ls_lvl; done_s = True; armed_s = False; n_s += 1
+        if touch_exec:                             # S7: state becomes visible from the NEXT bar on
+            if hp[i] >= lh: broke_l = True
+            if lp[i] <= ll: broke_s = True
+            if reentry:
+                if c[i] < orh[i]: armed_l = True
+                if c[i] > orl[i]: armed_s = True
         # update reclaim state AFTER firing (so a re-break must come on a LATER bar than the reclaim)
         if broke_l and c[i] < orh[i]: reclaimed_l = True
         if broke_s and c[i] > orl[i]: reclaimed_s = True
@@ -379,11 +407,32 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
              retest_mode="edge", min_pullback_atr=0.0, pullback_timeout=0, vol_confirm_x=0.0,
              instant_aligned=False, block_range=True,
              min_pullback_or=0.0, retest_reclaim=False, gap_max_atr=0.0, side_budget_r=0.0):
-    """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame.
+    """Event-driven sim over harness-state DataFrame d. Returns trades DataFrame
+    (df.attrs: ambiguous_bars = same-bar stop+target collisions, eod_leak = day-boundary safety exits).
     mode: scale_be = 50% at TP1 then runner->BE->TP2 (V44 default);
           tp2_full = full position to TP2 with original stop (2R/-1R);
           trail    = full position, ATR chandelier trail (ride momentum, no TP cap).
-    side: both | long | short (isolate a directional edge)."""
+    side: both | long | short (isolate a directional edge).
+
+    BAR-EVENT ORDERING POLICY (remediation Phase 2, 2026-07-11 — asserted by
+    BOT/tests/test_simulator_semantics.py; change the tests WITH the policy, never silently):
+      0. ENTRY BAR — close-exec entries fill at the bar close; a close-exec signal on the entry
+         day's LAST bar is skipped (no time to trade it live). Touch-exec entries (stop/retest/
+         sweepgo/rebreak) evaluate the entry bar's REMAINDER: the favorable side is provable
+         (any price beyond the level post-dates the first touch), the adverse side counts only on
+         a beyond-stop CLOSE; excursion stats start on the next bar.
+      1. DAY BOUNDARY FIRST — a position must never see a new trade day. Day trades flatten on
+         the entry day's final bar at its close (the eod_min check still fires earlier where the
+         store has late bars). If a position somehow reaches the next day (safety), it exits at
+         that bar's OPEN and is counted in attrs['eod_leak'].
+      2. INTRABAR EXITS, stop wins — when stop and target are both touched in one bar the STOP
+         fills (uniform, before AND after TP1); each collision increments attrs['ambiguous_bars'].
+      3. GAP-AWARE STOP FILLS — long stop fills at min(open, stop), short at max(open, stop);
+         targets never fill better than the target.
+      4. SIDE-AWARE EXCURSIONS — MFE uses the favorable extreme (high for longs, low for shorts),
+         MAE the adverse one.
+      5. TRAIL MODE — exits are checked against the stop as of the PRIOR close; the chandelier
+         update moves the stop for the NEXT bar (a same-bar close may not tighten the same bar)."""
     h, l, c, o = d["high"].to_numpy(), d["low"].to_numpy(), d["close"].to_numpy(), d["open"].to_numpy()
     atr = d["atr14"].to_numpy()
     vs, vw = d["vwap_sess"].to_numpy(), d["vwap_wk"].to_numpy()
@@ -392,11 +441,13 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     ts = d["ts"].to_numpy(); reg = d["macro_regime"].to_numpy()
     spl_arr = d["spl"].to_numpy() if "spl" in d.columns else None    # structure-anchored stop (stop_mode="struct")
     sph_arr = d["sph"].to_numpy() if "sph" in d.columns else None
-    # asset-aware economics: equities/ETFs trade in $0.01 ticks, commission-free; futures use MNQ costs
+    # asset-aware economics from the CONTRACT REGISTRY (remediation Phase 3): per-symbol point
+    # value / tick / commission / slippage — NQ is not MNQ, ES is not NQ, GC ticks in 0.10s.
     sym_ = str(d.attrs.get("sym", "NQ")).upper()
-    EQ = sym_ in ("SPY", "QQQ", "NVDA", "TSLA", "AVGO", "ORCL", "AAPL", "MSFT", "AMZN", "META",
-                  "GOOGL", "DIA", "IWM", "AMD", "NFLX")
-    pt_val_, tick_, comm_, slip_ = (1.0, 0.01, 0.0, 1) if EQ else (PT_VALUE, TICK, COMM, SLIP_TICKS)
+    spec_ = hs_contracts.spec(sym_)
+    EQ = spec_.kind == "equity"
+    pt_val_, tick_, comm_ = spec_.point_value, spec_.tick, spec_.commission
+    slip_ = spec_.slip_ticks * SLIP_MULT               # SLIP_MULT = research stress hook
     min_stop_atr_ = 0.75 if EQ else MIN_STOP_ATR    # F51: ticker-adaptive min-stop floor (0.5 ATR is noise-tight on equities) — matches the STACK Pine
     sl_max_atr_ = 1.5 if EQ else SL_MAX_ATR         # reversal cap: equities take a tight 1.5-ATR max stop (arm-timing test); futures need 2.5 (tight whipsaws)
     _et = pd.to_datetime(d["ts"]).dt.tz_convert("America/New_York")        # for EOD-flat (match Pine)
@@ -447,6 +498,11 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
     pos = 0  # 0 flat, +1 long, -1 short
     last_day = -1; day_n = 0   # per-day taken-entry count (re-entry cap)
     day_rl = day_rs = 0.0      # per-day realized R per SIDE (side risk budget — PULLBACK deep-research)
+    ambig = eod_leak = 0       # policy 2/1 telemetry (df.attrs)
+    TOUCH = entry_type == "orb" and execm in ("stop", "retest", "sweepgo", "rebreak")
+
+    def _last_of_day(j):       # bar j is its trade day's final bar
+        return j + 1 >= n or daykey[j + 1] != daykey[j]
     while i < n:
         if pos == 0:
             sig = 1 if long_ok[i] else (-1 if short_ok[i] else 0)
@@ -491,67 +547,112 @@ def backtest(d, mode="scale_be", side="both", strict=False, entry_type="vwap_ema
             risk = abs(entry - stop)
             if risk <= 0:
                 i += 1; continue
+            if not TOUCH and (_last_of_day(i) or tod_[i] >= eod_min):
+                i += 1; continue                # policy 0: no close-exec entry on the day's final bar
             day_n += 1                          # committed to an entry this day
             tp1 = entry + sig * risk * t1
             tp2 = entry + sig * risk * t2
             entry_i, entry_ts, entry_reg = i, ts[i], reg[i]
             entry_day = daykey[i]
             tp1_done = False; cur_stop = stop; mfe = mae = 0.0
-            pos = sig; i += 1
-            while i < n:
-                mfe = max(mfe, sig * (h[i] - entry) / risk); mae = min(mae, sig * (l[i] - entry) / risk)
+            pos = sig
+            gross_R = None; orders = 2; exitpx = np.nan
+            if TOUCH:
+                # policy 0: entry-bar REMAINDER — the favorable side is provable (any price beyond
+                # the level post-dates the first touch); the adverse side counts only on a
+                # beyond-stop CLOSE; stop wins a collision (policy 2). Excursions start next bar.
+                eb_stop = (c[i] < cur_stop) if sig == 1 else (c[i] > cur_stop)
+                eb_tp1 = (h[i] >= tp1) if sig == 1 else (l[i] <= tp1)
+                eb_tp2 = (h[i] >= tp2) if sig == 1 else (l[i] <= tp2)
+                if eb_stop:
+                    if (eb_tp2 if mode in ("trail", "tp2_full") else eb_tp1): ambig += 1
+                    gross_R = -1.0; orders = 2; exitpx = cur_stop
+                elif mode == "tp2_full" and eb_tp2:
+                    gross_R = t2; orders = 2; exitpx = tp2
+                elif mode not in ("trail", "tp2_full") and eb_tp1:
+                    tp1_done = True; cur_stop = entry              # BE on runner, same bar
+                    if eb_tp2:
+                        gross_R = sf * t1 + (1 - sf) * t2; orders = 3; exitpx = tp2
+            if gross_R is None and (_last_of_day(i) or tod_[i] >= eod_min):
+                rem = sig * (c[i] - entry) / risk                  # policy 1: entry day's last bar
+                gross_R = (sf * t1 + (1 - sf) * rem) if tp1_done else rem
+                orders = 3 if tp1_done else 2; exitpx = c[i]
+            exit_i = i if gross_R is not None else None            # entry-bar exit keeps its own bar
+            i += 1
+            while gross_R is None and i < n:
+                # policy 1 SAFETY: a position must never see a new trade day (the last-bar flatten
+                # makes this unreachable; if it fires, exit at the OPEN — no overnight stop/target fills)
+                if daykey[i] != entry_day:
+                    rem = sig * (o[i] - entry) / risk
+                    gross_R = (sf * t1 + (1 - sf) * rem) if tp1_done else rem
+                    orders = 3 if tp1_done else 2; exitpx = o[i]; eod_leak += 1; break
+                mfe = max(mfe, sig * ((h[i] if sig == 1 else l[i]) - entry) / risk)   # policy 4:
+                mae = min(mae, sig * ((l[i] if sig == 1 else h[i]) - entry) / risk)   # side-aware
                 hit_stop = (l[i] <= cur_stop) if sig == 1 else (h[i] >= cur_stop)
                 hit_tp1  = (h[i] >= tp1) if sig == 1 else (l[i] <= tp1)
                 hit_tp2  = (h[i] >= tp2) if sig == 1 else (l[i] <= tp2)
+                stop_fill = min(o[i], cur_stop) if sig == 1 else max(o[i], cur_stop)  # policy 3: gap-aware
                 if mode == "trail":                               # full position, ATR chandelier trail
-                    if not np.isnan(atr[i]):
+                    if hit_stop:                                  # policy 5: prior-close stop first
+                        gross_R = sig * (stop_fill - entry) / risk; orders = 2; exitpx = stop_fill; break
+                    if not np.isnan(atr[i]):                      # the trail moves the stop for the NEXT bar
                         cur_stop = (max(cur_stop, c[i] - TRAIL_MULT * atr[i]) if sig == 1
                                     else min(cur_stop, c[i] + TRAIL_MULT * atr[i]))
-                    if hit_stop or (l[i] <= cur_stop if sig == 1 else h[i] >= cur_stop):
-                        gross_R = sig * (cur_stop - entry) / risk; orders = 2; exitpx = cur_stop; break
                 elif mode == "tp2_full":                          # 2R / -1R, full position
-                    if hit_stop: gross_R = -1.0; orders = 2; exitpx = cur_stop; break
+                    if hit_stop:                                  # policy 2: stop wins the collision
+                        if hit_tp2: ambig += 1
+                        gross_R = sig * (stop_fill - entry) / risk; orders = 2; exitpx = stop_fill; break
                     if hit_tp2:  gross_R = t2; orders = 2; exitpx = tp2; break
                 elif not tp1_done:
-                    if hit_stop:                                  # full loss before TP1
-                        gross_R = -1.0; orders = 2; exitpx = cur_stop; break
+                    if hit_stop:                                  # full loss before TP1 (policies 2+3)
+                        if hit_tp1: ambig += 1
+                        gross_R = sig * (stop_fill - entry) / risk; orders = 2; exitpx = stop_fill; break
                     if hit_tp1:
                         tp1_done = True; cur_stop = entry          # BE on runner
                         if hit_tp2:
                             gross_R = sf * t1 + (1 - sf) * t2; orders = 3; exitpx = tp2; break
                 else:
+                    if hit_stop:                                   # policy 2: stop wins (was TP2-first)
+                        if hit_tp2: ambig += 1
+                        rem = sig * (stop_fill - entry) / risk     # BE runner, gap-aware
+                        gross_R = sf * t1 + (1 - sf) * rem; orders = 3; exitpx = stop_fill; break
                     if hit_tp2:
                         gross_R = sf * t1 + (1 - sf) * t2; orders = 3; exitpx = tp2; break
-                    if hit_stop:                                   # runner stopped at BE
-                        gross_R = sf * t1; orders = 3; exitpx = cur_stop; break
-                if (daykey[i] != entry_day or tod_[i] >= eod_min or
-                        (time_stop and (i - entry_i) >= time_stop)):   # EOD flat (~15:58) or time-stop (research)
+                # policy 1: EOD flat — explicit eod_min bar, the entry day's LAST bar, or time-stop
+                if (tod_[i] >= eod_min or _last_of_day(i) or
+                        (time_stop and (i - entry_i) >= time_stop)):
                     rem = sig * (c[i] - entry) / risk
                     gross_R = (sf * t1 + (1 - sf) * rem) if tp1_done else rem
                     orders = 3 if tp1_done else 2; exitpx = c[i]; break
                 i += 1
-            else:
-                gross_R = sig * (c[n-1] - entry) / risk; orders = 2 if (mode == "tp2_full" or not tp1_done) else 3; exitpx = c[n-1]
+            if gross_R is None:                                    # unreachable safety (last bar flattens)
+                gross_R = sig * (c[n-1] - entry) / risk
+                orders = 2 if (mode == "tp2_full" or not tp1_done) else 3; exitpx = c[n-1]
+            if exit_i is None:
+                exit_i = min(i, n - 1)                             # break left i at the exit bar
             # slippage per CONTRACT-fill: entry fills CONTRACTS, exits fill CONTRACTS total -> ~2x position
             slip_d = slip_ * tick_ * pt_val_ * (2 * CONTRACTS)
             cost_d = comm_ * orders + slip_d
             cost_R = cost_d / (risk * pt_val_ * CONTRACTS)
             trades.append({
-                "entry_time": entry_ts, "exit_time": ts[min(i, n-1)],
+                "entry_time": entry_ts, "exit_time": ts[exit_i],
                 "direction": "long" if sig == 1 else "short",
                 "entry_price": round(entry, 2), "exit_price": round(float(exitpx), 2),
                 "symbol": d.attrs.get("sym", "NQ"), "contracts": CONTRACTS,
                 "gross_R": round(gross_R, 4), "net_R": round(gross_R - cost_R, 4),
                 "mfe_R": round(mfe, 3), "mae_R": round(mae, 3),
-                "risk_pts": round(risk, 2), "regime": entry_reg, "hold_bars": i - entry_i})
+                "risk_pts": round(risk, 2), "regime": entry_reg, "hold_bars": exit_i - entry_i})
             if sig == 1:
                 day_rl += trades[-1]["net_R"]
             else:
                 day_rs += trades[-1]["net_R"]
-            pos = 0; i += 1
+            pos = 0; i = exit_i + 1                       # scan resumes on the bar after the exit
         else:
             i += 1
-    return pd.DataFrame(trades)
+    tr = pd.DataFrame(trades)
+    tr.attrs["ambiguous_bars"] = ambig                    # policy 2 telemetry: same-bar stop+target
+    tr.attrs["eod_leak"] = eod_leak                       # policy 1 safety exits (should stay 0)
+    return tr
 
 
 def main():

@@ -1,4 +1,9 @@
-# BOT — Implementation Status
+# BOT — Implementation Status (historical snapshot, 2026-06-29)
+
+> **⚠ HISTORICAL SNAPSHOT — DO NOT USE FOR STATUS.** Frozen 2026-06-29; several modules listed as
+> "documentation" below (brokers, order-flow, journal/DB) exist in code today. Current truth:
+> `docs/STATUS.md` · living checklist: `docs/TASKS_INCOMPLETE.md` · fix plan:
+> `docs/REMEDIATION_PLAN.md`. *(Deprecated 2026-07-11, remediation Phase 0.)*
 
 Maturity per module. `documentation` = spec only · `coded` = exists, untested · `tested` =
 has tests / validated · `replay` / `paper` / `live` = proven at that stage. Updated 2026-06-29.

@@ -172,12 +172,33 @@ def _schema_ok(meta) -> bool:
     return meta is None or meta.features is None or list(meta.features) == list(FEATURE_COLUMNS)
 
 
+_version_warned: set = set()
+
+
+def version_ok(meta) -> bool:
+    """STRATEGY-VERSION GUARD (remediation Phase 6, 2026-07-11): a champion labeled under a
+    DIFFERENT rule version never serves — advisory stays advisory, but never version-crossed
+    (the audit found the 07.4-labeled champion serving under 07.7). Models without a recorded
+    strategy_version are refused the same way (unproven = mismatched)."""
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    sv = getattr(meta, "strategy_version", None)
+    ok = sv == STRATEGY_VERSION
+    if not ok and sv not in _version_warned:
+        _version_warned.add(sv)
+        try:
+            from bot.audit import log as _audit
+            _audit("model_version_blocked", model_version=str(sv), current=STRATEGY_VERSION)
+        except Exception:
+            pass
+    return ok
+
+
 def predict_candidate(c, feats: dict | None = None) -> float:
     """PREDICT: calibrated P(win) from the champion (or the prior). `feats` = the PIT snapshot the
     scan computed at the signal bar (train/live parity); without it a thin candidate-only vector
     is used. Attaches the confidence to the candidate."""
     model, meta = _reg.champion(MODEL_NAME)
-    if model is None or not _schema_ok(meta):
+    if model is None or not _schema_ok(meta) or not version_ok(meta):
         return _PRIOR
     try:
         x = to_vector(feats) if feats else np.array(feat(c), float)

@@ -239,9 +239,19 @@ def test_symbol_features_one_hot():
 # ---- approval workflow (AITP governance) ----
 
 def test_approval_ladder_and_paper_gate(tmp_path, monkeypatch):
+    import json as _json
     import bot.approval as ap
     monkeypatch.setattr(ap, "FILE", tmp_path / "approvals.json")
+    # Phase 6: paper approval now REQUIRES green evidence — give this ladder test its own
+    # green reports (the real store is honestly red until Phase R)
+    monkeypatch.setattr(ap, "REPORTS", tmp_path / "reports")
+    (tmp_path / "reports").mkdir()
     v = "test-ver-1.0"
+    (tmp_path / "reports" / "dataqa.json").write_text(_json.dumps(
+        {"symbols": {"QQQ": {"ok": True, "issues": []}, "SPY": {"ok": True, "issues": []}},
+         "all_ok": True, "store_fingerprint": "fp-test"}), encoding="utf-8")
+    (tmp_path / "reports" / "ab_entry_standard.json").write_text(_json.dumps(
+        {"config": {"strategy_version": v}}), encoding="utf-8")
     assert not ap.paper_approved(v)
     with pytest.raises(ValueError):
         ap.approve(v, "paper")                               # needs replay first

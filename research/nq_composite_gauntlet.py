@@ -21,9 +21,9 @@ import numpy as np
 import pandas as pd
 import hs_db
 
-rng = np.random.default_rng(31)
-TICK, SLIP_TICKS, COMM, PT = 0.25, 2, 0.52, 2.0
+from hs_contracts import spec as _CS
 
+rng = np.random.default_rng(31)
 
 EQ = {"QQQ", "SPY"}
 _COST_SYM = {"sym": "NQ"}                # set per-run; equities pay ticks, not futures slippage
@@ -32,9 +32,12 @@ _COST_SYM = {"sym": "NQ"}                # set per-run; equities pay ticks, not 
 def cost_pct(price, slip_mult=1.0):
     # COST-MODEL FIX (2026-07-10): the futures model (~30-40bps on a $500 ETF!) was applied to
     # QQQ/SPY and poisoned every equity verdict; equities pay ~1 tick/side (strat_daily model).
-    if _COST_SYM["sym"] in EQ:
-        return (2 * 0.01 * slip_mult) / price
-    return (2 * TICK * SLIP_TICKS * slip_mult + 2 * COMM / PT) / price
+    # PHASE 3 (2026-07-11): economics from the contract registry — this study previously charged
+    # NQ the MNQ constants (point value 10x off).
+    s = _CS(_COST_SYM["sym"])
+    if s.kind == "equity":
+        return (2 * s.tick * s.slip_ticks * slip_mult) / price
+    return (2 * s.tick * s.slip_ticks * slip_mult + 2 * s.commission / s.point_value) / price
 
 
 def day_frames(con, sym="NQ"):

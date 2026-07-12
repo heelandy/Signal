@@ -47,17 +47,17 @@ def line(tag, tr, slip2=None):
 
 def main():
     syms = [s.upper() for s in (sys.argv[1:] or ["NQ", "QQQ", "SPY", "ES", "GC"])]
-    bslip = B.SLIP_TICKS
+    bslip = B.SLIP_MULT
     for sym in syms:
         d = state(sym, "5m")
         print(f"\n######## {sym} 5m STACK — capped-target walk-forward ########")
         line("trail (PROD ref)", run(d, "trail"))
         for cap in (2.0, 3.0, 4.0):
-            B.SLIP_TICKS = bslip * 2
+            B.SLIP_MULT = bslip * 2
             tr2 = run(d, "tp2_full", cap); s2 = tr2["net_R"].mean()
-            B.SLIP_TICKS = bslip
+            B.SLIP_MULT = bslip
             line(f"cap {cap:.0f}R", run(d, "tp2_full", cap), slip2=s2)
-    B.SLIP_TICKS = bslip
+    B.SLIP_MULT = bslip
 
 
 if __name__ == "__main__":

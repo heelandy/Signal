@@ -247,6 +247,16 @@
 </div>
 
 <script>
+/* P1.4 (2026-07-11): esc() for backend/operator strings entering innerHTML (stored-XSS guard:
+   approval notes were rendered raw), and an X-API-Token attach for EVERY request so enabling
+   API_REQUIRE_AUTH cannot brick the console into silent 401s.
+   Set the token once: localStorage.setItem('api_token', '<WEBHOOK_TOKEN>') */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const _API_TOK = localStorage.getItem('api_token') || '';
+if (_API_TOK) { const _f = window.fetch.bind(window);
+  window.fetch = (u, o={}) => _f(u, {...o, headers: {...(o.headers||{}), 'X-API-Token': _API_TOK}}); }
+</script>
+<script>
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const S = [css('--s1'), css('--s2'), css('--s3'), css('--s4'), css('--s5')];   // fixed slot order
 const INK = css('--txt'), MUT = css('--mut'), GRID = css('--grid');
@@ -307,7 +317,7 @@ async function poll(force){
   // SUBSYSTEM HEARTBEATS (D5 prevention, lab surface): failing scan-loop/governance steps go RED here
   const bf = st.beats_failing || [];
   if (bf.length){ dot.className = 'dot off';
-    txt.innerHTML += ` · <span class="no" title="${Object.entries(st.beats_errors||{}).map(([k,v])=>k+': '+(v||'')).join(' | ').replaceAll('"','&quot;')}">⚠ FAILING: ${bf.join(', ')}</span>`; }
+    txt.innerHTML += ` · <span class="no" title="${esc(Object.entries(st.beats_errors||{}).map(([k,v])=>k+': '+(v||'')).join(' | '))}">⚠ FAILING: ${bf.join(', ')}</span>`; }
   if (st.log && st.log.length) document.getElementById('runlog').textContent = st.log.join('\n');
   renderCont(c);
   const busy = st.running || (c.on && c.current);
@@ -359,7 +369,7 @@ async function loadApprovals(){
     const done = !!rec;
     return `<tr><td style="white-space:normal;max-width:260px"><b>${stage}</b>
         <div class="note" style="margin:2px 0 0">${meaning[stage] || ''}</div></td>
-      <td>${done ? `<span class="badge b-pass">APPROVED</span> <span class="mut">${fmtET(rec.at, true)} ${rec.notes||''}</span>` : '<span class="mut">pending</span>'}</td>
+      <td>${done ? `<span class="badge b-pass">APPROVED</span> <span class="mut">${fmtET(rec.at, true)} ${esc(rec.notes||'')}</span>` : '<span class="mut">pending</span>'}</td>
       <td>${done ? `<button onclick="appr('revoke','${stage}')">Revoke</button>` : `<button onclick="appr('approve','${stage}')">Approve</button>`}</td></tr>`;
   }).join('');
   // WHAT YOU ARE APPROVING — the strategy, its rules, and the evidence (user 2026-07-05)
@@ -370,7 +380,7 @@ async function loadApprovals(){
   const gRuns = Object.entries(ab.gauntlet_runs || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
   document.getElementById('approvals').innerHTML =
     `<details style="margin-bottom:8px"><summary class="mut" style="cursor:pointer"><b>WHAT you are approving</b> — ${st.strategy_version} (click)</summary>
-      <div class="note" style="margin:6px 0">${ab.what_it_is || ''}</div>
+      <div class="note" style="margin:6px 0">${esc(ab.what_it_is || '')}</div>
       <div class="note">stages: ${Object.entries(meaning).map(([s, m]) => `<b>${s}</b> = ${m}`).join('<br>')}</div>
       <div class="note">evidence — backtest: ${btLine || 'run 8·Report'} | parity: ${parLine || 'run 9·Parity'}
         ${ab.cost_stress_warning && ab.cost_stress_warning.length ? ` | <span class="no">⚠ negative at 2x slip: ${ab.cost_stress_warning.join(', ')}</span>` : ''}
@@ -436,7 +446,7 @@ async function approveAndPaper(){
   const st = await (await fetch(`/api/approval/approve_paper_all?notes=${encodeURIComponent(notes)}&version=${encodeURIComponent(_apprVer)}`, {method: 'POST'})).json();
   const p = await (await fetch('/api/control/paper_autotrade?on=1', {method: 'POST'})).json();
   document.getElementById('paperstat').innerHTML = (p.error
-    ? `<span class="no">approved, but paper autotrade NOT armed: ${p.error}</span>`
+    ? `<span class="no">approved, but paper autotrade NOT armed: ${esc(p.error)}</span>`
     : `<span class="ok">approved · PAPER AUTOTRADE ON (${p.placed||0} orders so far)</span>`)
     + ` · <span class="ok">continuous training ${st.continuous_training||''}</span>`;
   loadApprovals(); loadDuel();
@@ -490,13 +500,13 @@ async function loadSweep(){
   const d = await j('/api/training/sweep');
   _sweepData = d;
   const el = document.getElementById('sweep');
-  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  if (d.error){ el.innerHTML = `<span class="mut">${esc(d.error)}</span>`; return; }
   const pfmt = p => `ctx ${p.ctx ? 'ON' : 'off'} · cd ${p.cooldown} · stale ${p.stale} · retest ${p.retest}` +
     (p.mode ? ` · ${p.mode}` : '');
   let html = `<table><tr><th>sym</th><th>config</th><th>params</th><th class="num">IS avg R (n)</th>
     <th class="num">OOS avg R (n)</th><th>verdict</th></tr>`;
   for (const [s, r] of Object.entries(d.symbols || {})){
-    if (r.error){ html += `<tr><td>${s}</td><td colspan="5" class="no">${r.error}</td></tr>`; continue; }
+    if (r.error){ html += `<tr><td>${s}</td><td colspan="5" class="no">${esc(r.error)}</td></tr>`; continue; }
     const rows = [['default (adopted)', r.default], ['best in-sample', r.best_is]];
     for (const [label, x] of rows){
       if (!x) continue;
@@ -547,7 +557,7 @@ window.runGauntlet = runGauntlet;
 async function loadGauntlet(){
   const d = await j('/api/training/gauntlet');
   const el = document.getElementById('gauntlet');
-  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  if (d.error){ el.innerHTML = `<span class="mut">${esc(d.error)}</span>`; return; }
   let html = '';
   for (const [key, r] of Object.entries(d.runs || {})){
     const ok = r.verdict === 'ADOPT_CANDIDATE';
@@ -588,9 +598,9 @@ window.approveModel = approveModel;
 async function loadDataQA(){
   const d = await j('/api/training/dataqa');
   const el = document.getElementById('dataqa');
-  if (d.error){ el.innerHTML = `<span class="mut">${d.error}</span>`; return; }
+  if (d.error){ el.innerHTML = `<span class="mut">${esc(d.error)}</span>`; return; }
   const rows = Object.entries(d.symbols || {}).map(([s, r]) => r.error
-    ? `<tr><td>${s}</td><td colspan="7" class="no">${r.error}</td></tr>`
+    ? `<tr><td>${s}</td><td colspan="7" class="no">${esc(r.error)}</td></tr>`
     : `<tr><td>${s} ${r.ok ? '<span class="badge b-pass">OK</span>' : '<span class="badge b-fail">ISSUES</span>'}</td>
        <td class="num">${r.rows.toLocaleString()}</td><td>${r.span[0].slice(0,10)} → ${r.span[1].slice(0,10)}</td>
        <td class="num">${r.dupe_ts}</td><td class="num">${r.high_lt_low + r.bad_wick_geometry}</td>
@@ -606,7 +616,7 @@ async function loadDataset(){
   const sym = document.getElementById('sym').value;
   const d = await j('/api/training/dataset?sym=' + sym);
   const t = document.getElementById('dstiles');
-  if (d.error){ t.innerHTML = `<div class="mut">${d.sym}: ${d.error}</div>`; document.getElementById('dsnote').textContent=''; return; }
+  if (d.error){ t.innerHTML = `<div class="mut">${d.sym}: ${esc(d.error)}</div>`; document.getElementById('dsnote').textContent=''; return; }
   const tile = (v, l, cls='') => `<div class="tile"><div class="v ${cls}">${v}</div><div class="l">${l}</div></div>`;
   t.innerHTML = tile(d.rows, d.sym + ' candidates') + tile((100*d.win_rate).toFixed(1)+'%', 'win rate')
     + tile((100*d.tp2_rate).toFixed(1)+'%', 'hit 4R cap') + tile((100*d.stop_rate).toFixed(1)+'%', 'full stop')
@@ -656,7 +666,7 @@ function renderReport(rep){
   if (base !== null) rows.push(['OOS Brier vs base', `${fmt(rep.oos_brier,4)} / ${base.toFixed(4)} ${rep.oos_brier < base ? '<span class="badge b-pass">PASS</span>' : '<span class="badge b-fail">FAIL</span>'}`]);
   if (rep.buckets) rows.push(['bucket monotone', rep.buckets.monotone_ok ? '<span class="badge b-pass">PASS</span>' : '<span class="badge b-fail">FAIL</span>']);
   rows.push(['PROMOTED', rep.promote ? '<span class="badge b-pass">YES — champion updated</span>' : '<span class="badge b-fail">NO — prior stays live</span>']);
-  if (rep.reason) rows.push(['reason', `<span class="mut">${rep.reason}</span>`]);
+  if (rep.reason) rows.push(['reason', `<span class="mut">${esc(rep.reason)}</span>`]);
   if (rep.version) rows.push(['version', rep.version]);
   g.innerHTML = '<table>' + rows.map(r => `<tr><th>${r[0]}</th><td>${r[1]}</td></tr>`).join('') + '</table>';
   // buckets
@@ -693,7 +703,7 @@ window.loadLatest = loadLatest;
 async function loadAB(){
   const ab = await j('/api/training/ab');
   const box = document.getElementById('abtab');
-  if (ab.error){ box.innerHTML = `<span class="mut">${ab.error}</span>`; return; }
+  if (ab.error){ box.innerHTML = `<span class="mut">${esc(ab.error)}</span>`; return; }
   const syms = Object.keys(ab.symbols || {});
   const variants = ['baseline', 'layer3_only', 'standard'];
   const vcolor = { baseline: S[3], layer3_only: S[1], standard: S[0] };
@@ -735,7 +745,7 @@ async function l2register(){
   const r = await (await fetch(`/api/data/register?path=${encodeURIComponent(path)}`, {method:'POST'})).json();
   // folder registrations return {folder, registered, sources[]}; single files return {kind, size_mb, id};
   // multi-symbol files return {path, registered, sources[]}
-  document.getElementById('l2msg').innerHTML = r.error ? `<span class="no">${r.error}</span>`
+  document.getElementById('l2msg').innerHTML = r.error ? `<span class="no">${esc(r.error)}</span>`
     : r.registered !== undefined
       ? `<span class="ok">${r.registered} source(s) registered (symbols auto-detected${r.sources?': '+[...new Set(r.sources.map(s=>s.symbol))].join(', '):''}) — click SYNC ALL to synthesize</span>`
       : `<span class="ok">registered ${r.kind} as <b>${r.symbol}</b> (auto, ${r.size_mb} MB) — id ${r.id}; click Sync to synthesize</span>`;
@@ -816,7 +826,7 @@ dz.addEventListener('drop', async e => {
   dz.textContent = `synthesizing ${f.name} (${(f.size/1e6).toFixed(1)} MB) in memory — symbol auto-detect…`;
   const r = await (await fetch(`/api/data/synthesize_upload`,
       {method: 'POST', body: f, headers: {'x-filename': f.name}})).json();
-  dz.textContent = r.error ? `error: ${r.error}`
+  dz.textContent = r.error ? `error: ${esc(r.error)}`
     : r.detected_symbols
       ? `done: ${r.detected_symbols.join(', ')} — ${r.results.map(x=>`${x.symbol} ${x.feature_rows||0} min`).join(' · ')} — raw not saved`
       : `done: ${r.feature_rows} feature minutes for ${r.symbol} (auto) (${r.span[0]} → ${r.span[1]}) — raw not saved`;
@@ -828,7 +838,7 @@ async function loadMatrix2(){
   try{
     const r = await j('/api/training/report_matrix');
     const el = document.getElementById('matrix');
-    if (r.error){ el.innerHTML = `<span class="mut">${r.error}</span>`; return; }
+    if (r.error){ el.innerHTML = `<span class="mut">${esc(r.error)}</span>`; return; }
     let html = '<table><tr><th>sym</th><th class="num">n</th><th class="num">avg R</th><th class="num">PF</th><th class="num">2x slip</th><th class="num">lat 2t</th><th class="num">fill 90%</th></tr>';
     for (const [s, v] of Object.entries(r.symbols || {})){
       if (v.error) continue;
@@ -846,10 +856,10 @@ async function loadParity(){
   try{
     const r = await j('/api/training/parity');
     const el = document.getElementById('parity');
-    if (r.error){ el.innerHTML = `<span class="mut">${r.error}</span>`; return; }
+    if (r.error){ el.innerHTML = `<span class="mut">${esc(r.error)}</span>`; return; }
     el.innerHTML = '<table><tr><th>sym</th><th class="num">trades</th><th class="num">match</th><th></th></tr>' +
       Object.entries(r.symbols || {}).map(([s, v]) => v.error
-        ? `<tr><td>${s}</td><td colspan="3" class="no">${v.error}</td></tr>`
+        ? `<tr><td>${s}</td><td colspan="3" class="no">${esc(v.error)}</td></tr>`
         : `<tr><td>${s}</td><td class="num">${v.checked}</td><td class="num">${v.match_pct}%</td>
            <td>${v.ok ? '<span class="badge b-pass">EXACT</span>' : '<span class="badge b-fail">DRIFT</span>'}</td></tr>`).join('') + '</table>';
   }catch(e){}
@@ -938,6 +948,156 @@ async function loadAll(){ loadDataset(); loadLatest(); loadAB(); loadRegistry();
                           loadJournalFeed(); loadEvolve(false); loadStratPerf(); }
 document.getElementById('sym').addEventListener('change', loadDataset);
 loadAll(); poll();
+</script>
+<!-- ═══ PHASE U — GOVERN bundle (docs/UI_PLAN.md steps 3,6,7,8) ═══ -->
+<style>
+  .g-card{border:1px solid #2a2f3a;border-radius:8px;padding:10px 12px;margin:10px 0;background:rgba(20,24,32,.6)}
+  .g-h{font-weight:700;margin:0 0 6px;font-size:14px}
+  .g-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;margin-right:6px}
+  .g-ok{background:#123d1e;color:#5fdc82}.g-bad{background:#43151a;color:#ff7a86}
+  .g-unk{background:#3a3320;color:#e8c15a}.g-deg{background:#3a2a12;color:#f0a95a}
+  .g-mut{color:#8a93a5;font-size:12px}.g-mono{font-family:ui-monospace,Consolas,monospace}
+  .g-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .g-tbl th,.g-tbl td{padding:3px 6px;border-bottom:1px solid #232838;text-align:left}
+  .g-tbl th{color:#8a93a5}.g-num{text-align:right}
+  .g-evbtn{cursor:pointer;padding:2px 10px;border:1px solid #2a2f3a;border-radius:6px;margin-right:6px;background:#151a24;color:#c9d4e8}
+  .g-evbtn.on{border-color:#5fdc82;color:#5fdc82}
+</style>
+<section id="u-govern">
+  <div class="g-card" id="g-lab"><div class="g-h">📊 PROFITABILITY LAB — has this exact entry type made net money?</div>
+    <div id="g-lab-ev"></div><div id="g-lab-body" class="g-mut">loading…</div></div>
+  <div class="g-card" id="g-evidence"><div class="g-h">🧾 STRATEGY EVIDENCE + APPROVAL PREDICATES</div><div id="g-evidence-body" class="g-mut">loading…</div></div>
+  <div class="g-card" id="g-models"><div class="g-h">🤖 MODELS — lineage + serving guard</div><div id="g-models-body" class="g-mut">loading…</div></div>
+  <div class="g-card" id="g-datatrust"><div class="g-h">🗄 DATA TRUST — per-symbol store truth</div><div id="g-dt-body" class="g-mut">loading…</div></div>
+  <div class="g-card" id="g-incidents"><div class="g-h">🚨 INCIDENTS &amp; OPS</div><div id="g-inc-body" class="g-mut">loading…</div></div>
+</section>
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+/* LAYOUT (2026-07-12): live inside the page's content wrapper for consistent margins */
+(function(){const host=document.querySelector(".wrap");
+  const sec=document.getElementById("u-govern");
+  if(host&&sec) host.appendChild(sec);})();
+const chip=(s,t)=>`<span class="g-chip g-${s}">${esc(t)}</span>`;
+const J=async u=>{const r=await fetch(u);return r.json();};
+const num=(v,d=3)=>(v===null||v===undefined)?"—":(+v).toFixed(d);
+
+/* ── PROFITABILITY LAB (step 3): ONE evidence type at a time; n<floor is never a verdict ── */
+let gEv="backtest";
+function gEvBar(){
+  $("g-lab-ev").innerHTML=["backtest","shadow","paper","live"].map(e=>
+    `<button class="g-evbtn${e===gEv?" on":""}" data-ev="${e}">${e}</button>`).join("")+
+    '<span class="g-mut"> one evidence type per view — backtest, shadow, paper fills and live fills are different truths and are NEVER mixed</span>';
+  $("g-lab-ev").querySelectorAll("button").forEach(b=>b.onclick=()=>{gEv=b.dataset.ev;gLab();});
+}
+async function gLab(){
+  gEvBar();
+  try{
+    const [m,rm]=await Promise.all([J("/api/entry_matrix?evidence="+gEv),J("/api/removals")]);
+    if(m.error){$("g-lab-body").innerHTML=chip("bad","REFUSED")+esc(m.error);return;}
+    const rows=(m.cells||[]).map(c=>{
+      const dims=`${esc(c.symbol)} ${esc(c.side)} ${esc(c.session)} ${esc(c.family)} g:${esc(c.grade)} r:${esc(c.regime)}`;
+      const rmb=c.removed?chip("bad","REMOVED")+`<span class="g-mut">${esc(c.removed.reason||"")}</span>`:"";
+      if(c.verdict==="INSUFFICIENT SAMPLE")
+        return `<tr><td>${dims} ${rmb}</td><td colspan="6">${chip("unk","INSUFFICIENT SAMPLE")}<span class="g-mut">n=${c.n} — not a verdict either way</span></td></tr>`;
+      return `<tr><td>${dims} ${rmb}</td><td class="g-num">${c.n}</td><td class="g-num">${num(c.win_pct,1)}%</td>
+        <td class="g-num"><b>${num(c.exp_R,4)}R</b></td><td class="g-num">${num(c.pf,2)}</td>
+        <td class="g-num">${num(c.total_R,1)}</td><td class="g-num g-mut">${c.ci90?("["+num(c.ci90[0],3)+", "+num(c.ci90[1],3)+"]"):"—"}</td></tr>`;
+    }).join("");
+    const noms=(rm.nominations||[]).filter(n=>!n.error).map(n=>
+      `<div class="g-mut">→ nominated: <b>${esc(n.symbol)} ${esc(n.side)} ${esc(n.family)}</b> (n=${n.n}, ${num(n.exp_R,3)}R) — ${esc(n.next_step)}</div>`).join("")||'<div class="g-mut">no nominations</div>';
+    $("g-lab-body").innerHTML=
+      `<div class="g-mut">lineage: ${esc(m.lineage)} · floor n≥${m.floor}</div>
+       <table class="g-tbl"><tr><th>cell (symbol · side · session · family · grade · regime)</th>
+       <th class="g-num">n</th><th class="g-num">WR</th><th class="g-num">net exp</th><th class="g-num">PF</th>
+       <th class="g-num">total R</th><th class="g-num">CI90</th></tr>${rows||'<tr><td class="g-mut">no cells yet for this evidence type — honest empty (paper fills start Monday)</td></tr>'}</table>
+       <div style="margin-top:6px"><b>Removal pipeline</b> (the matrix NOMINATES; the cohort test decides — F78):${noms}
+       ${(rm.active||[]).map(r=>chip("bad","ADOPTED: "+r.symbol+" "+(r.family||""))+`<span class="g-mut">${esc(r.reason)} · ${esc(String(r.adopted_at||"").slice(0,10))}</span>`).join("<br>")||'<div class="g-mut">zero adopted removals (ES nomination was REJECTED by the cohort test — OOS positive)</div>'}</div>`;
+  }catch(e){$("g-lab-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── STRATEGY EVIDENCE + LADDER PREDICATES (step 7a): overrides visible FOREVER ── */
+async function gEvidence(){
+  try{
+    const st=await J("/api/approval/status");
+    const ev=st.evidence||{};
+    const P=(k,label)=>`<div>${ev[k]===true?"✓":(ev[k]===false?"✕":"?")} <b>${esc(label)}</b> <span class="g-mut">(${esc(k)}=${esc(String(ev[k]))})</span></div>`;
+    const stages=Object.entries(st.stages||{}).map(([s,rec])=>{
+      if(!rec) return `<tr><td>${esc(s)}</td><td>${chip("deg","LOCKED")}</td><td class="g-mut">requirements below must be green (or a recorded override)</td></tr>`;
+      const ov=rec.override?chip("bad","OVERRIDE — recorded forever"):"";
+      const leg=(s==="paper"&&st.legacy)?chip("unk","LEGACY (pre-predicate)"):"";
+      const fp=rec.evidence&&rec.evidence.store_fingerprint?`fp ${esc(rec.evidence.store_fingerprint)}`:"no snapshot";
+      return `<tr><td>${esc(s)}</td><td>${chip("ok","APPROVED")} ${ov} ${leg}</td>
+        <td class="g-mut">${esc(rec.approved_by||"")} ${esc(String(rec.at||"").slice(0,16))} · ${fp} · ${esc(rec.notes||"")}</td></tr>`;
+    }).join("");
+    $("g-evidence-body").innerHTML=
+      `<div><b>${esc(st.strategy_version)}</b> ${st.stale?chip("bad","STALE — store fingerprint drifted"):""}</div>
+       <table class="g-tbl"><tr><th>stage</th><th>status</th><th>record</th></tr>${stages}</table>
+       <div style="margin-top:6px"><b>PAPER predicates</b>${P("data_qa_all_ok","data QA all green")}${P("ab_strategy_version_match","A/B report matches this version")}</div>
+       <div style="margin-top:6px"><b>LIVE predicates</b> (enforced inside approve — no visual bypass)
+       ${P("paper_fills_min_ok","≥60 measured broker fills")}${P("forward_paper_ok","forward paper consistency vs corrected backtest")}
+       ${P("reconciliation_clean","zero unresolved reconciliation failures")}${P("parity_tv_green","TV parity marker green (bar-replay diff)")}</div>
+       <div class="g-mut" style="margin-top:4px">evidence types are never combined: historical backtest · replay · shadow · paper fills · live fills stay separate series.</div>`;
+  }catch(e){$("g-evidence-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── MODELS (step 7b): version guard rendered, never a silent fallback ── */
+async function gModels(){
+  try{
+    const st=await J("/api/approval/status");
+    const cur=st.strategy_version;
+    const d=await J("/api/training/registry");
+    const models=(d.models||d||[]);
+    const rows=(Array.isArray(models)?models:[]).map(m=>{
+      const mismatch=m.strategy_version&&m.strategy_version!==cur;
+      const guard=m.champion?(mismatch?chip("bad","MODEL BLOCKED — serving refused"):chip("ok","serving")):chip("deg","challenger");
+      return `<tr><td class="g-mono">${esc(m.name)}__${esc(m.version)}</td><td>${guard}${mismatch?`<div class="g-mut">model ${esc(m.strategy_version)} ≠ current ${esc(cur)}</div>`:""}</td>
+        <td>${(m.metrics&&m.metrics.gates_passed)?chip("ok","gates passed"):chip("bad","gates NOT passed")}</td>
+        <td class="g-mut">${esc(m.strategy_version||"unversioned")} · ${esc(String(m.created_at||"").slice(0,10))}</td></tr>`;
+    }).join("");
+    $("g-models-body").innerHTML=rows?`<table class="g-tbl"><tr><th>model</th><th>serving</th><th>gates</th><th>lineage</th></tr>${rows}</table>`
+      :'<span class="g-mut">no registered models visible</span>';
+  }catch(e){$("g-models-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── DATA TRUST (step 6): the QA card per symbol, with the consequence spelled out ── */
+async function gDataTrust(){
+  try{
+    const d=await J("/api/training/dataqa");
+    const syms=Object.entries(d.symbols||{});
+    $("g-dt-body").innerHTML=
+      `<div class="g-mut">store fingerprint <span class="g-mono">${esc(d.store_fingerprint||"—")}</span> · all_ok=${esc(String(d.all_ok))} · thresholds ${esc(JSON.stringify(d.thresholds||{}))}</div>`+
+      syms.map(([s,r])=>{
+        if(r.error) return `<div>${chip("bad",s)} ${esc(r.error)}</div>`;
+        const bad=!r.ok;
+        return `<div class="g-card" style="margin:6px 0">${chip(bad?"bad":"ok",s+(bad?" FAIL":" OK"))}
+          <span class="g-mono">${esc((r.span||[])[0]||"?")} → ${esc((r.span||[])[1]||"?")}</span>
+          <span class="g-mut">· ${r.rows} rows · bars/day ${esc(r.bars_per_day?r.bars_per_day.avg:"?")} (exp ${esc(r.bars_per_day?r.bars_per_day.expected:"?")}, short ${esc(r.short_day_pct)}%) · stale ${esc(r.stale_trading_days)}d · fp ${esc(r.fingerprint||"—")}</span>
+          ${(r.issues||[]).map(i=>`<div class="g-mut">— ${esc(i)}</div>`).join("")}
+          ${bad?`<div class="g-mut"><b>Consequence:</b> used by ORB ${""}canonical + A/B + ML datasets → new approvals require a recorded override (frozen-span waiver)</div>`:""}</div>`;
+      }).join("");
+  }catch(e){$("g-dt-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── INCIDENTS (step 8): silence must be provable, not assumed ── */
+async function gIncidents(){
+  try{
+    const i=await J("/api/incidents");
+    const g1=i.gate1||{};
+    $("g-inc-body").innerHTML=
+      `<div>${chip(g1.crash_records?"bad":"ok",`GATE 1: day ${g1.day??"?"}/${g1.of??7} — ${g1.crash_records??"?"} crash record(s)`)}<span class="g-mut">${esc(g1.note||"")}</span></div>`+
+      `<div style="margin-top:6px"><b>crash records</b>${(i.crashes||[]).map(c=>`<div class="g-mono g-mut">${esc(c.file)}: ${esc(c.head.split("\\n").slice(0,3).join(" | "))}</div>`).join("")||'<span class="g-mut"> none — every python death would leave one</span>'}</div>`+
+      `<div style="margin-top:6px"><b>watchdog</b>${(i.watchdog||[]).map(l=>`<div class="g-mono g-mut">${esc(l)}</div>`).join("")||'<span class="g-mut"> no events</span>'}</div>`+
+      `<div style="margin-top:6px"><b>last backup</b> ${i.last_backup?((i.last_backup.verify&&i.last_backup.verify.ok?chip("ok","verified"):chip("bad","VERIFY FAILED"))+`<span class="g-mono g-mut">${esc(i.last_backup.snapshot)}</span>`):chip("unk","none yet (daily beat)")}</div>`+
+      `<div style="margin-top:6px"><b>log growth</b> <span class="g-mono g-mut">${esc(Object.entries(i.log_bytes||{}).map(([k,v])=>k+" "+(v/1024).toFixed(0)+"KB").join(" · "))}</span></div>`+
+      `<div style="margin-top:6px"><b>alerts tail</b>${(i.alerts_tail||[]).map(a=>`<div class="g-mono g-mut">${esc(a)}</div>`).join("")||'<span class="g-mut"> quiet</span>'}</div>`;
+  }catch(e){$("g-inc-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+function gTick(){gLab();gEvidence();gModels();gDataTrust();gIncidents();}
+gTick();setInterval(gTick,60000);
+})();
 </script>
 </body>
 </html>

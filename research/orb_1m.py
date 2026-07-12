@@ -76,10 +76,10 @@ def main():
         print(f"\n  {name}")
         for tag, ors, ore in windows:
             report(tag, run(d, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 4
+        B.SLIP_MULT = 2.0
         tag, ors, ore = windows[0]
         report("std window @ 2x slip", run(d, ors, ore, cut, tdy, eod))
-        B.SLIP_TICKS = 2
+        B.SLIP_MULT = 1.0
 
 
 if __name__ == "__main__":

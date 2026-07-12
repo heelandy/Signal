@@ -1,4 +1,9 @@
-# BOT — Remaining Features (full development checklist)
+# BOT — Remaining Features (historical snapshot — full development checklist)
+
+> **⚠ HISTORICAL SNAPSHOT — DO NOT USE FOR STATUS.** This is the oldest checklist era; most of
+> §A/§I below (brokers, OMS, pytest suite, CI) has long been built. Current truth:
+> `docs/STATUS.md` · living checklist: `docs/TASKS_INCOMPLETE.md` · fix plan:
+> `docs/REMEDIATION_PLAN.md`. *(Deprecated 2026-07-11, remediation Phase 0.)*
 
 What's left to make the BOT complete. Live execution stays **lockable** (fail-closed default), but
 it is no longer a development blocker — the user takes discretion on going live. Ordered by the build

@@ -51,20 +51,20 @@ def line(tag, tr):
 
 
 def main():
-    base_slip = B.SLIP_TICKS
+    base_slip = B.SLIP_MULT
     for sym in ("NQ", "ES"):
         d = state(sym, "5m")
         print(f"\n################  {sym} 5m STACK — Asia walk-forward  ################")
         for name, ors, ore, cut in WINDOWS:
             print(f"\n  Asia {name} ET")
-            B.SLIP_TICKS = base_slip
+            B.SLIP_MULT = base_slip
             line("full (2-tick slip)", stack(d, ors, ore, cut))
             for mult in (2, 3):
-                B.SLIP_TICKS = base_slip * mult
+                B.SLIP_MULT = base_slip * mult
                 tr = stack(d, ors, ore, cut); r = tr["net_R"].to_numpy()
                 print(f"    {f'stress {mult}x slip':20} n={len(r):>4} exp {r.mean():+.3f} PF {V.pf(r):>4.2f}  "
                       f"{'still +' if r.mean() > 0 else 'NEGATIVE'}")
-            B.SLIP_TICKS = base_slip
+            B.SLIP_MULT = base_slip
 
 
 if __name__ == "__main__":

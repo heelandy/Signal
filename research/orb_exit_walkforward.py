@@ -51,7 +51,7 @@ def line(tag, tr):
 
 def main():
     syms = [s.upper() for s in (sys.argv[1:] or ["NQ", "QQQ", "SPY", "ES"])]
-    bslip = B.SLIP_TICKS
+    bslip = B.SLIP_MULT
     for sym in syms:
         d = state(sym, "5m")
         print(f"\n######## {sym} 5m STACK — exit walk-forward (OR-edge stop baseline) ########")
@@ -61,11 +61,11 @@ def main():
         line("run-more 33/1.5/6", run(d, "scale_be", 1.5, 6.0, 0.33))
         for tag, kw in (("trail2 2x-slip", dict(mode="trail", trailm=2.0)),
                         ("run-more 2x-slip", dict(mode="scale_be", tp1=1.5, tp2=6.0, sf=0.33))):
-            B.SLIP_TICKS = bslip * 2
+            B.SLIP_MULT = bslip * 2
             tr = run(d, **kw); r = tr["net_R"].to_numpy()
             print(f"    {tag:20} n={len(r):>4} exp {r.mean():+.3f} PF {V.pf(r):>4.2f}  "
                   f"{'still +' if r.mean() > 0 else 'NEGATIVE'}")
-            B.SLIP_TICKS = bslip
+            B.SLIP_MULT = bslip
 
 
 if __name__ == "__main__":

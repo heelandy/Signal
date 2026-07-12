@@ -13,13 +13,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import numpy as np
 import pandas as pd
 
+from hs_contracts import spec as _CS
+
 rng = np.random.default_rng(37)
-TICK, SLIP_TICKS, COMM, PT = 0.25, 2, 0.52, 2.0
+_SPEC = _CS("NQ")     # PHASE 3 (2026-07-11): registry economics — this study priced NQ as MNQ
 K = 0.3
 
 
 def cost_r(price, risk):
-    return ((2 * TICK * SLIP_TICKS + 2 * COMM / PT)) / risk if risk > 0 else 0.0
+    return ((2 * _SPEC.tick * _SPEC.slip_ticks + 2 * _SPEC.commission / _SPEC.point_value)) / risk \
+        if risk > 0 else 0.0
 
 
 def load(sym="nq"):

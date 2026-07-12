@@ -84,14 +84,57 @@ def _wh(client, **over):
     return client.post("/webhook/tradingview", json=body).json()
 
 
-def test_repeated_webhook_creates_one_order(client):
-    r1 = _wh(client)
-    assert r1["action"] in ("shadow", "submitted")             # first one processes
-    r2 = _wh(client)                                           # identical retry
+@pytest.fixture()
+def svc_client(client, monkeypatch, tmp_path):
+    """Paper-mode client wired to a real ExecutionService on a scratch DB + mock broker —
+    the dedup invariant now lives in the ONE execution path (remediation Phase 5)."""
+    import bot.api.server as srv
+    from bot.brokers.base import AccountInfo
+    from bot.contracts import OrderEvent, OrderState
+    from bot.execution.service import ExecutionService
+
+    class _MB:
+        is_paper = True
+        _n = 0
+
+        def account(self):
+            return AccountInfo(equity=25_000.0, buying_power=50_000.0, cash=25_000.0,
+                               open_position_count=0, is_paper=True)
+
+        def positions(self):
+            return []
+
+        def submit(self, order):
+            _MB._n += 1
+            return OrderEvent(order_id=order.order_id, state=OrderState.SUBMITTED,
+                              broker_order_id=f"B{_MB._n}")
+
+        def cancel(self, oid):
+            return OrderEvent(order_id=oid, state=OrderState.CANCELLED)
+
+        def recent_orders(self):
+            return []
+
+    mb = _MB()
+    svc = ExecutionService(mb, db_path=tmp_path / "exec.db")
+    monkeypatch.setattr(srv, "_exec_service", lambda: svc)
+    monkeypatch.setattr(srv, "_broker", lambda: mb)
+    monkeypatch.setattr("bot.approval.paper_approved", lambda v: True)
+    srv._state["mode"] = "paper"
+    yield client
+    srv._state["mode"] = "replay"
+
+
+def test_repeated_webhook_creates_one_order(svc_client):
+    r1 = _wh(svc_client)
+    assert r1["action"] == "submitted", r1                     # first one transmits
+    r2 = _wh(svc_client)                                       # identical TV retry
     assert r2["action"] == "duplicate"
-    r3 = _wh(client, signalId="sig-9")                         # explicit unique id -> processes
-    assert r3["action"] in ("shadow", "submitted")
-    assert _wh(client, signalId="sig-9")["action"] == "duplicate"
+    # SAME geometry with a new signalId is STILL the same trade on the same day (Phase 5: the
+    # dated idempotency key is geometry-based — a re-alert must not restack the order)
+    assert _wh(svc_client, signalId="sig-9")["action"] == "duplicate"
+    r4 = _wh(svc_client, entry=101.0)                          # genuinely different setup passes
+    assert r4["action"] == "submitted", r4
 
 
 def test_webhook_bad_token_rejected(client):
@@ -99,14 +142,19 @@ def test_webhook_bad_token_rejected(client):
     assert r["action"] == "rejected" and "token" in r["reason"]
 
 
-def test_manual_ticket_dedup_and_distinct_orders_pass(client):
+def test_manual_ticket_dedup_and_distinct_orders_pass(svc_client):
     t = {"symbol": "QQQ", "side": "long", "entry": 100.0, "stop": 99.0, "tp2": 104.0}
-    r1 = client.post("/api/order", json=t).json()
-    assert r1["action"] == "shadow"
-    r2 = client.post("/api/order", json=t).json()              # double-click / retry
+    r1 = svc_client.post("/api/order", json=t).json()
+    assert r1["action"] == "submitted", r1
+    r2 = svc_client.post("/api/order", json=t).json()          # double-click / retry
     assert r2["action"] == "duplicate"
     t2 = dict(t, entry=101.0)                                  # genuinely different ticket passes
-    assert client.post("/api/order", json=t2).json()["action"] == "shadow"
+    assert svc_client.post("/api/order", json=t2).json()["action"] == "submitted"
+
+
+def test_replay_mode_shadows_without_transmitting(client):
+    t = {"symbol": "QQQ", "side": "long", "entry": 100.0, "stop": 99.0, "tp2": 104.0}
+    assert client.post("/api/order", json=t).json()["action"] == "shadow"
 
 
 def test_kill_switch_blocks_webhook(client):

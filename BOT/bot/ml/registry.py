@@ -161,14 +161,34 @@ class ModelRegistry:
         return None, None
 
     def promote(self, name: str, version: str) -> bool:
-        """MANUAL promotion (AITP governance): make a registered pending model the champion."""
+        """MANUAL promotion (AITP governance): make a registered pending model the champion.
+        PHASE 6 (2026-07-11): promotion REQUIRES the model's own validation gates to have
+        passed (metrics.gates_passed) — the manual click is a decision, never a bypass — and
+        records the store fingerprint the promotion was made against."""
         _, js = self._paths(name, version)
         if not js.exists():
             return False
+        meta = json.loads(js.read_text(encoding="utf-8"))
+        if not (meta.get("metrics") or {}).get("gates_passed"):
+            try:
+                from bot.audit import log as _audit
+                _audit("model_promotion_refused", name=name, version=version,
+                       reason="gates_passed is not True")
+            except Exception:
+                pass
+            return False
+        fp = None
+        try:
+            qa = json.loads((REPORTS_DIR / "dataqa.json").read_text(encoding="utf-8"))
+            fp = qa.get("store_fingerprint")
+        except Exception:
+            pass
+        meta.setdefault("metrics", {})["promoted_against_fingerprint"] = fp
+        js.write_text(json.dumps(meta), encoding="utf-8")
         self._set_champion(name, version)
         try:
             from bot.audit import log as _audit
-            _audit("model_promoted", name=name, version=version, by="user")
+            _audit("model_promoted", name=name, version=version, by="user", fingerprint=fp)
         except Exception:
             pass
         return True

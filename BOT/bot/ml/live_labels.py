@@ -29,10 +29,11 @@ def build_live_labels(save: bool = True) -> pd.DataFrame:
     con = _con()
     rows = con.execute(
         "SELECT symbol, side, family, session, taken, outcome, result_r, mfe_r, mae_r,"
-        " signal_at, decided_at, json FROM decisions WHERE outcome NOT IN ('open')").fetchall()
+        " signal_at, decided_at, json, strategy_version FROM decisions "
+        "WHERE outcome NOT IN ('open')").fetchall()
     con.close()
     out = []
-    for sym, side, fam, sess, taken, outcome, result_r, mfe_r, mae_r, sig_at, dec_at, raw in rows:
+    for sym, side, fam, sess, taken, outcome, result_r, mfe_r, mae_r, sig_at, dec_at, raw, sv in rows:
         try:
             sig = json.loads(raw or "{}")
         except Exception:
@@ -40,6 +41,8 @@ def build_live_labels(save: bool = True) -> pd.DataFrame:
         pit = sig.get("pit_features") or {}
         r = float(result_r) if result_r is not None else np.nan
         rec = {"ts": sig_at or dec_at, "symbol": sym, "side": side, "family": fam,
+               # P1.1: the row's OWN immutable version rides into training (never back-stamped)
+               "strategy_version": sv or sig.get("strategy_version") or "unknown",
                "session": sess, "taken": int(taken or 0), "outcome": outcome,
                "tf": sig.get("tf") or sig.get("timeframe") or "5m",   # capture timeframe (journal->training-lab tf match)
                **{k: pit.get(k, np.nan) for k in FEATURE_COLUMNS},

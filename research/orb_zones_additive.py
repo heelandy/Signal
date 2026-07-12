@@ -77,8 +77,8 @@ def main():
     args = [a for a in sys.argv[1:]]
     if "--slip2" in args:
         args.remove("--slip2")
-        B.SLIP_TICKS *= 2                                        # futures slip stress (2x ticks per side)
-        print(f"[slip stress: SLIP_TICKS doubled -> {B.SLIP_TICKS}]")
+        B.SLIP_MULT *= 2                                        # futures slip stress (2x ticks per side)
+        print(f"[slip stress: SLIP_TICKS doubled -> {B.SLIP_MULT}]")
     syms = [s.upper() for s in (args or ["NQ", "ES"])]
     for sym in syms:
         b1 = load_1m(sym)

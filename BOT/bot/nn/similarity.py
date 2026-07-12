@@ -110,9 +110,14 @@ def train_similarity(sym: str = "ALL", window: int = 64) -> dict:
 
 
 def similarity_score(seq: np.ndarray) -> dict | None:
-    """Nearest-cluster read for one [window x channels] sequence (None = no fitted clusters)."""
-    model, _ = _reg.champion("nn_similarity")
+    """Nearest-cluster read for one [window x channels] sequence (None = no fitted clusters).
+    STRATEGY-VERSION GUARD (remediation Phase 6): a champion clustered under a different rule
+    version never serves — its winner/loser clusters describe trades the current rules don't take."""
+    model, meta = _reg.champion("nn_similarity")
     if model is None:
+        return None
+    from bot.ml.pipeline import version_ok
+    if not version_ok(meta):
         return None
     try:
         c = int(model.assign(seq[None, ...])[0])

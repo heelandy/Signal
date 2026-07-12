@@ -323,6 +323,16 @@
 </div>
 
 <script>
+/* P1.4 (2026-07-11): esc() for backend/operator strings entering innerHTML (stored-XSS guard:
+   approval notes were rendered raw), and an X-API-Token attach for EVERY request so enabling
+   API_REQUIRE_AUTH cannot brick the console into silent 401s.
+   Set the token once: localStorage.setItem('api_token', '<WEBHOOK_TOKEN>') */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const _API_TOK = localStorage.getItem('api_token') || '';
+if (_API_TOK) { const _f = window.fetch.bind(window);
+  window.fetch = (u, o={}) => _f(u, {...o, headers: {...(o.headers||{}), 'X-API-Token': _API_TOK}}); }
+</script>
+<script>
 const $=s=>document.querySelector(s), col=v=>v>=0?'up':'dn';
 async function J(u,o){const r=await fetch(u,o);return r.json()}
 // change-detection: only touch the DOM when a panel's HTML actually changed (no whole-page churn/flicker)
@@ -767,7 +777,7 @@ async function scanSignals(force){
     const soKey=x=>`${x.module}|${x.opened}`;
     if(!window._SOSEEN){ window._SOSEEN=new Set(so.map(soKey)); }
     else so.filter(x=>!window._SOSEEN.has(soKey(x))).forEach(x=>{ window._SOSEEN.add(soKey(x));
-      pushAlert(`${aic('target')} SESSION ENTRY — ${x.module.replace(/_/g,' ')} [${(x.book||'').toUpperCase()}] ${x.symbol} ${x.side} @ ${x.entry}${x.stop?' · stop '+x.stop:''} · ${x.note||''}`,'up');
+      pushAlert(`${aic('target')} SESSION ENTRY — ${x.module.replace(/_/g,' ')} [${(x.book||'').toUpperCase()}] ${x.symbol} ${x.side} @ ${x.entry}${x.stop?' · stop '+x.stop:''} · ${esc(x.note||'')}`,'up');
       if($('#alerton')&&$('#alerton').checked){beep();
         if('Notification' in window && Notification.permission==='granted')
           new Notification(`HIGHSTRIKE: ${x.module.replace(/_/g,' ')}`,{body:`${x.symbol} ${x.side} @ ${x.entry}`});} });
@@ -787,7 +797,7 @@ async function scanSignals(force){
                 x.kind==='NEW_PASS'?'up':x.kind==='LOST_PASS'?'dn':'yel'); });
     const s0=sigs.find(s=>s.tradeable); if(s0 && !CTR_MANUAL && !isOptLin(CTR.sym)){CTR={sym:s0.symbol,spot:s0.last_price||s0.entry,side:s0.side,iv:s0.iv_est||0.20,tp1:s0.tp1,tp2:s0.tp2,stop:s0.stop}; loadContract();}
     const when=d.ts?new Date(d.ts).toLocaleTimeString():'—';
-    $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${d.error?' · '+d.error:''}`;
+    $('#scanmsg').textContent=`auto-scan ${when} · ${sigs.length} signal(s)${d.scanning?' · scanning…':''}${esc(d.error?' · '+d.error:'')}`;
     if(!sigs.length){$('#signals').innerHTML='<div class="mut">No active setups on the latest bars. (No signal = nothing to trade.)</div>';}
     else $('#signals').innerHTML=`<table><tr><th>asset</th><th>sess</th><th>family</th><th title="A+ = HH/HL structure aligned; A = slope aligned; B = neither; C = info-only/unverified. Structure & slope GRADE the setup — arming comes from the context pair (futures MID+VWAP · equities STRUCT+VWAP).">grade</th><th>side</th><th class="num">entry</th><th class="num">now</th><th class="num">stop</th>`+
       `<th class="num">TP1</th><th class="num">TP2</th><th class="num">R:R</th><th class="num">P(win)</th><th title="ensemble verdict: rules emitted it, risk decided, AI grades confidence (ML P(win) + heads + similarity + grade). Hover a badge for the reasons.">AI</th><th class="num" title="grade-weighted units: base 0.25%-risk × A+1.5/A1.0/B0.4, skip B on ES/SPY & C">size</th><th class="num" title="quarter-Kelly multiple of the risk budget (P(win) + realized payoff)">¼K</th><th>option</th><th>action</th></tr>`+
@@ -839,7 +849,7 @@ function selDailyOp(mo,sym){const lin=LIN_OF[mo]; if(!lin) return;
 window.selDailyOp=selDailyOp;
 async function parkWorker(id,on){   // PARK = pause the shadow study (no new rows), keep everything
   const d=await (await fetch(`/api/boss/park?worker=${id}&on=${on}`,{method:'POST'})).json();
-  pushAlert(d.error?`park failed: ${d.error}`:`${id} ${d.parked?'PARKED — no new journal rows':'RESUMED — study running'}`, d.error?'dn':d.parked?'yel':'up');
+  pushAlert(d.error?`park failed: ${esc(d.error)}`:`${id} ${d.parked?'PARKED — no new journal rows':'RESUMED — study running'}`, d.error?'dn':d.parked?'yel':'up');
   loadStrategies();
 }
 window.parkWorker=parkWorker;
@@ -882,7 +892,7 @@ async function loadScorecard(){
     `<table style="margin-top:5px"><tr><th>cohort</th><th class="num">n</th><th class="num">exp R</th><th class="num">win</th><th class="num">total</th></tr>`+
       row('A · faithful',g.A)+row('B · unaligned',g.B)+row('C · info',g.C)+
       `<tr style="border-top:1px solid #2a3a5a"><td class="mut">all taken</td><td class="num">${d.overall.n||0}</td><td class="num ${col(d.overall.exp_R||0)}">${d.overall.n?((d.overall.exp_R>=0?'+':'')+d.overall.exp_R+'R'):'—'}</td><td class="num">${d.overall.win_pct||'—'}${d.overall.n?'%':''}</td><td class="num ${col(d.overall.total_R||0)}">${d.overall.n?((d.overall.total_R>=0?'+':'')+d.overall.total_R+'R'):'—'}</td></tr></table>`+
-    `<div class="mut" style="font-size:10px;margin-top:5px">backtest ref: <b>+${ref.exp_R}R</b> · ${ref.win_pct}% — ${ref.note}. ${d.min_sample}+ closed for a verdict.</div>`);
+    `<div class="mut" style="font-size:10px;margin-top:5px">backtest ref: <b>+${ref.exp_R}R</b> · ${ref.win_pct}% — ${esc(ref.note)}. ${d.min_sample}+ closed for a verdict.</div>`);
 }
 function drawRiskGauge(pct,cls){const C=251,off=C*(1-Math.max(0,Math.min(100,pct))/100);
   const arc=$('#riskarc'); arc.style.strokeDashoffset=off; arc.setAttribute('stroke',cls==='dn'?'var(--red)':cls==='yel'?'var(--yel)':'var(--grn)');
@@ -951,7 +961,7 @@ async function optionsPlay(note){
   const iv=parseFloat($('#o_iv').value)||0.20;
   const body={symbol:$('#o_sym').value,side:$('#o_side').value,entry:parseFloat($('#o_entry').value),stop:parseFloat($('#o_stop').value),tp1:parseFloat($('#o_tp1').value)||0,tp2:parseFloat($('#o_tp').value),iv:iv,dte:0,sel_n:1};
   const r=await fetch('/api/options',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json();
-  if(d.error){$('#o_opts').innerHTML=`<span class="dn">${d.error}</span>`;return}
+  if(d.error){$('#o_opts').innerHTML=`<span class="dn">${esc(d.error)}</span>`;return}
   const o=d.options;const g=d.gates||{};
   const row=(k,p)=>{const gt=g[k]||'';const pass=gt.startsWith('PASS');
     return `<tr><td><b>${k}</b>${k===d.recommended?' <span class="up">◄ VALIDATED</span>':''}</td><td>${p.legs.join(' / ')}</td><td class="num">$${p.cost_or_credit_usd}</td><td class="num">${p.max_profit_usd==='unlimited'?'∞':'$'+p.max_profit_usd}</td><td class="num">$${p.max_loss_usd}</td><td class="num">${p.rr}</td><td class="${pass?'up':'dn'}" style="font-size:9px" title="payoff replay 2026-07-06">${gt}</td></tr>`;};
@@ -966,7 +976,7 @@ async function setMode(m){await J('/api/control/mode?mode='+m,{method:'POST'});r
 async function togglePaper(){const on=$('#paper_at').checked?1:0;const d=await J('/api/control/paper_autotrade?on='+on,{method:'POST'});
   if(d.error){$('#paper_at').checked=false;$('#paperlog').innerHTML='<span class="dn">'+d.error+'</span>';return} loadPaperLog();}
 async function loadPaperLog(){let d;try{d=await J('/api/paper_log');}catch(e){return} $('#paper_at').checked=!!d.on;
-  const rows=(d.log||[]).slice(-6).reverse().map(x=>x.error?`<div class="dn">${(x.ts||'').slice(11,19)} · ${x.symbol||''} err: ${x.error}</div>`:`<div><span class="up">${x.grade}</span> ${x.symbol} ${x.side} ×${x.qty} @${x.entry} → stop ${x.stop}/tp ${x.tp2} <span class="mut">${(x.ts||'').slice(11,19)}</span></div>`).join('');
+  const rows=(d.log||[]).slice(-6).reverse().map(x=>x.error?`<div class="dn">${(x.ts||'').slice(11,19)} · ${x.symbol||''} err: ${esc(x.error)}</div>`:`<div><span class="up">${x.grade}</span> ${x.symbol} ${x.side} ×${x.qty} @${x.entry} → stop ${x.stop}/tp ${x.tp2} <span class="mut">${(x.ts||'').slice(11,19)}</span></div>`).join('');
   $('#paperlog').innerHTML=`<div class="mut">status: <b class="${d.on?'up':'mut'}">${d.on?'ON':'off'}</b> · placed ${d.placed} · ${d.alpaca_paper?'paper acct ✓':'no paper keys ✗'}</div>`+
     `<div class="${d.on&&d.why&&d.why.startsWith('trading')?'up':'dn'}" style="margin:2px 0">${d.why||''}</div>`+rows;}
 function tape(){const ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/tape');
@@ -989,4 +999,161 @@ loadQuotes('indices'); setInterval(()=>loadQuotes(MKTGROUP), 30000);
 loadOrbManager(); setInterval(loadOrbManager, 60000);
 loadContract(); checkProp();
 </script>
-</div></body></html>
+</div><!-- ═══ PHASE U — OPERATE bundle (docs/UI_PLAN.md steps 1,2,4,5,6) ═══ -->
+<style>
+  .u-card{border:1px solid #2a2f3a;border-radius:8px;padding:10px 12px;margin:10px 0;background:rgba(20,24,32,.6)}
+  .u-h{font-weight:700;margin:0 0 6px;font-size:14px;letter-spacing:.4px}
+  .u-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;margin-right:6px}
+  .u-ok{background:#123d1e;color:#5fdc82}.u-bad{background:#43151a;color:#ff7a86}
+  .u-unk{background:#3a3320;color:#e8c15a}.u-deg{background:#3a2a12;color:#f0a95a}
+  .u-mut{color:#8a93a5;font-size:12px}.u-mono{font-family:ui-monospace,Consolas,monospace}
+  .u-row{display:flex;flex-wrap:wrap;gap:10px}.u-col{flex:1 1 320px;min-width:300px}
+  #u-mission{position:sticky;top:0;z-index:50;border-bottom:2px solid #2a2f3a;background:#0d1117;padding:8px 14px}
+  .u-gate{font-size:12px;margin:2px 0}.u-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .u-tbl th,.u-tbl td{padding:4px 8px;border-bottom:1px solid #232838;text-align:left;font-size:12.5px}
+  .u-tbl th{color:#8a93a5;font-weight:600}
+  .u-tbl td:first-child{white-space:nowrap;color:#c9d4e8;font-weight:600;min-width:110px}
+  details.u-d summary{cursor:pointer;color:#9fb0cc}
+</style>
+<section id="u-operate">
+  <div class="u-card" id="u-entry"><div class="u-h">🎯 ENTRY CONSOLE — should I enter now, and why?</div><div id="u-entry-body" class="u-mut">loading…</div></div>
+  <div class="u-row">
+    <div class="u-col"><div class="u-card" id="u-risk"><div class="u-h">🛡 RISK COCKPIT (backend-authoritative)</div><div id="u-risk-body" class="u-mut">loading…</div></div></div>
+    <div class="u-col"><div class="u-card" id="u-recon"><div class="u-h">⚖ RECONCILIATION CENTER</div><div id="u-recon-body" class="u-mut">loading…</div></div></div>
+  </div>
+  <div class="u-card" id="u-orders"><div class="u-h">📋 ORDERS &amp; FILLS — one traceable lifecycle per order</div><div id="u-orders-body" class="u-mut">loading…</div></div>
+</section>
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+/* LAYOUT FIX (user 2026-07-12): the section must live INSIDE the app content wrapper —
+   appended at body-end it spans from x=0 and slides UNDER the fixed sidebar (left column
+   clipped/unreadable). Relocate on init; the mission strip stays body-level (full-width). */
+(function(){const host=document.querySelector(".app .wrap")||document.querySelector(".app");
+  const sec=document.getElementById("u-operate");
+  if(host&&sec) host.appendChild(sec);})();
+const chip=(state,txt)=>`<span class="u-chip u-${state}">${esc(txt)}</span>`;
+const four=v=>v===true?chip("ok","HEALTHY"):v===false?chip("bad","BLOCKED"):chip("unk","UNKNOWN");
+const J=async u=>{const r=await fetch(u);return r.json();};
+
+/* ── MISSION CONTROL (step 1): prepended sticky strip; renders /api/readiness VERBATIM ── */
+const mis=document.createElement("div");mis.id="u-mission";mis.innerHTML='<span class="u-mut">mission control loading…</span>';
+document.body.prepend(mis);
+async function uMission(){
+  try{
+    const r=await J("/api/readiness"), h=await J("/api/live");
+    const gates=r.gates.map(g=>`<div class="u-gate">${g.ok===true?"✓":(g.ok===false?"✕":"?")} <b>${esc(g.name)}</b> <span class="u-mut">— ${esc(g.reason)}</span>${g.blocking?"":' <span class="u-mut">(non-blocking)</span>'}</div>`).join("");
+    mis.innerHTML=
+      `<div>${chip(r.overall==="OK"?"ok":"bad","READINESS: "+r.overall)}`+
+      `${chip("unk","MODE: "+String(r.mode).toUpperCase())}`+
+      `${r.kill_switch?chip("bad","KILL SWITCH ARMED"):chip("ok","kill switch off")}`+
+      `${chip("deg","LIVE LOCKED")}`+
+      `<span class="u-mut u-mono">${esc(h.role)} pid ${esc(h.pid)} · scan ${h.scan_age_sec==null?"?":h.scan_age_sec+"s"} · gate1 day ${window.__u_gate1??"?"}/7</span>`+
+      `<details class="u-d" style="display:inline-block;margin-left:10px"><summary>gates</summary>${gates}</details></div>`;
+  }catch(e){mis.innerHTML=chip("unk","READINESS UNKNOWN")+`<span class="u-mut">${esc(String(e))}</span>`;}
+}
+
+/* ── ENTRY CONSOLE (step 2): the honest state machine + WHY, from /api/signals ── */
+function entryState(s){                       /* documented priority — truth over optimism */
+  if(s.removed) return ["bad","REMOVED — "+ (s.removed.reason||"cohort-retired") + " (shadow keeps accruing)"];
+  if(s.already_traded) return ["deg","ALREADY TRADED today (idempotency will refuse a repeat)"];
+  if(s.signal_state==="invalid") return ["bad","INVALIDATED — structure broke against the signal"];
+  if(s.signal_state==="unknown") return ["unk","UNKNOWN — OR levels missing (never treated as valid)"];
+  if(s.signal_state==="watch")  return ["deg","WAITING — price on the wrong side of OR mid (do not chase)"];
+  if(!s.tradeable) return ["deg","INFO-ONLY — "+(s.asset_status && s.asset_status!=="validated" ? "asset "+s.asset_status : "not tradeable")];
+  return ["ok","FIRED — conditions met"+(s.bars_ago?` (${s.bars_ago} bar(s) ago)`:"")];
+}
+function whyLine(s){
+  const y=[];
+  y.push((s.struct_aligned?"✓":"✕")+" structure aligned");
+  if(s.clean_air!==undefined) y.push((s.clean_air?"✓":"✕")+" clean air"+(s.air_atr!=null?` (${s.air_atr} ATR)`:""));
+  if(s.or_width_atr!=null) y.push("OR width "+s.or_width_atr+" ATR");
+  if(s.dir_fast) y.push("1m dir: "+esc(String(s.dir_fast.state??s.dir_fast)));
+  if(s.tick_dir) y.push("tick dir: "+esc(String(s.tick_dir.state??s.tick_dir)));
+  if(s.ai_decision&&s.ai_decision.verdict) y.push("AI: "+esc(s.ai_decision.verdict));
+  return y.join(" · ");
+}
+async function uEntry(){
+  try{
+    const d=await J("/api/signals");
+    const sigs=d.signals||[];
+    if(!sigs.length){$("u-entry-body").innerHTML='<span class="u-mut">no live signals — the scan is looking (states render the moment one fires; off-hours = none is correct)</span>';return;}
+    $("u-entry-body").innerHTML=sigs.map(s=>{
+      const [st,label]=entryState(s);
+      const act=st==="ok"?chip("ok","ACTION: ENTER — grade "+esc(s.grade||"?")):chip(st,"ACTION: DO NOT ENTER YET");
+      return `<div class="u-card" style="margin:6px 0">
+        <b>${esc(s.symbol)} — ${esc(String(s.side).toUpperCase())}</b> ${chip(st,label)} ${act}
+        <div class="u-mono" style="font-size:12px;margin:4px 0">
+          OR ${esc(s.or_low??"?")}–${esc(s.or_high??"?")} · entry ${esc(s.entry)} · stop ${esc(s.stop)} · TP1 ${esc(s.tp1??"—")} · TP2 ${esc(s.tp2)}
+          · R:R ${esc(s.rr??"?")} · grade ${esc(s.grade??"?")} · session ${esc(s.session??"—")} · P(win) ${esc(s.confidence??"—")}</div>
+        <div class="u-mut">WHY: ${whyLine(s)}</div></div>`;}).join("");
+  }catch(e){$("u-entry-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── RISK COCKPIT (step 5): per-field value + PROVENANCE; UNKNOWN blocks (rules 2/5/6) ── */
+async function uRisk(){
+  try{
+    const r=await J("/api/risk/state");
+    if(r.blocked){$("u-risk-body").innerHTML=chip("bad","BLOCKED")+`<div class="u-mut">${esc(r.reason)}<br>${esc(r.note)}</div>`;return;}
+    const L=r.limits;
+    const row=(k,v,used,lim)=>`<tr><td>${esc(k)}</td><td class="u-mono">${esc(v.value)}</td><td class="u-mut">${esc(v.source)}</td><td class="u-mono">${used!=null?esc(used)+" of "+esc(lim)+" limit":"—"}</td></tr>`;
+    const buckets=Object.entries(r.correlation_buckets||{}).map(([b,ss])=>`<b>${esc(b)}</b>: ${esc(ss.join("+"))} = ONE bet`).join(" · ")||"flat";
+    $("u-risk-body").innerHTML=`<table class="u-tbl"><tr><th>field</th><th>value</th><th>source</th><th>used / limit</th></tr>
+      ${row("equity",r.equity)}${row("peak equity",r.peak_equity)}
+      ${row("daily P&L $",r.daily_pnl,r.daily_pnl.value,"−"+L.daily_loss_usd)}
+      ${row("weekly P&L $",r.weekly_pnl,r.weekly_pnl.value,"−"+L.weekly_loss_usd)}
+      ${row("trades today",r.trades_today,r.trades_today.value,L.max_trades_per_day)}
+      ${row("loss streak",r.consecutive_losses,r.consecutive_losses.value,L.max_consecutive_losses)}
+      ${row("open positions",r.open_positions,r.open_positions.value,L.max_open_positions)}</table>
+      <div class="u-mut" style="margin-top:4px">correlated exposure (buckets, never symbols): ${buckets}
+      · risk/trade $${esc(L.risk_per_trade_usd)} · as of ${esc(r.as_of)}</div>`;
+  }catch(e){$("u-risk-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── RECONCILIATION CENTER (step 4b): halt = system-wide CRITICAL; no continue-anyway ── */
+async function uRecon(){
+  try{
+    const [o,f]=await Promise.all([J("/api/exec/orders?limit=50"),J("/api/exec/fills")]);
+    let html="";
+    if(o.halt){
+      html+=`<div class="u-card" style="border-color:#ff5560">${chip("bad","CRITICAL — SUBMISSIONS HALTED")}
+        <div>${esc(o.halt)}</div><div class="u-mut">Recovery: resolve the mismatch at the broker (flatten the orphan
+        or reconcile the missing position); a CLEAN reconcile pass clears this automatically.
+        There is deliberately no override button here.</div></div>`;
+      document.title="⛔ HALTED — HIGHSTRIKE";
+    } else html+=chip("ok","clean — no unresolved mismatch");
+    const book=Object.entries(f.open_book||{});
+    html+=`<table class="u-tbl"><tr><th>symbol</th><th>internal (fills-derived)</th></tr>`+
+      (book.length?book.map(([s,b])=>`<tr><td>${esc(s)}</td><td class="u-mono">net ${esc(b.net)} @ ${esc((b.avg||0).toFixed? b.avg.toFixed(2):b.avg)}</td></tr>`).join(""):`<tr><td colspan="2" class="u-mut">flat</td></tr>`)+"</table>";
+    $("u-recon-body").innerHTML=html;
+  }catch(e){$("u-recon-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+/* ── ORDERS & FILLS (step 4a): lifecycle timeline + quantity breakdown ── */
+async function uOrders(){
+  try{
+    const d=await J("/api/exec/orders?limit=25");
+    const os=d.orders||[];
+    if(!os.length){$("u-orders-body").innerHTML='<span class="u-mut">no orders yet — the paper-execution record fills from the next armed session (fills expected from Monday’s open)</span>';return;}
+    $("u-orders-body").innerHTML=os.map(o=>{
+      const st=o.state==="FILLED"?"ok":(["FAILED","REJECTED","INVESTIGATION_REQUIRED"].includes(o.state)?"bad":(["SUBMIT_UNKNOWN"].includes(o.state)?"unk":"deg"));
+      const qb=o.qty_breakdown;
+      const unknownBanner=o.state==="SUBMIT_UNKNOWN"?`<div>${chip("unk","SUBMISSION STATUS UNKNOWN")} <b>Do not resubmit.</b> Broker reconciliation in progress.</div>`:"";
+      const protWarn=(qb.filled>0&&qb.protected<qb.filled)?chip("bad",`UNPROTECTED ${qb.filled-qb.protected}`):"";
+      const tl=o.timeline.map(t=>`<div class="u-gate u-mono">${esc(String(t.at).slice(11,19))} ${esc(t.state)} <span class="u-mut">${esc(t.message)}</span></div>`).join("");
+      return `<details class="u-d u-card" style="margin:6px 0"><summary>
+        ${chip(st,o.state)} <b>${esc(o.symbol)} ${esc(o.side)}</b> ×${esc(o.qty)} @${esc(o.planned_entry)}
+        <span class="u-mut">src ${esc(o.source)} · grade ${esc(o.grade||"—")} · corr ${esc(o.correlation_id)}</span>
+        · req ${qb.requested} / fill ${qb.filled} / rem ${qb.remaining} / cxl ${qb.cancelled} / prot ${qb.protected} ${protWarn}</summary>
+        ${unknownBanner}${o.reason?`<div class="u-mut">reason: ${esc(o.reason)}</div>`:""}${tl}</details>`;}).join("");
+  }catch(e){$("u-orders-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
+}
+
+async function uIncGate(){try{const i=await J("/api/incidents");window.__u_gate1=i.gate1&&i.gate1.day;}catch(e){}}
+function uTick(){uMission();uEntry();uRisk();uRecon();uOrders();}
+uIncGate().then(uTick);
+setInterval(uTick,30000);setInterval(uIncGate,120000);
+})();
+</script>
+</body></html>

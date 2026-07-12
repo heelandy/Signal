@@ -236,6 +236,9 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                         ("A" if (vwap_ok and aligned) else ("B" if vwap_ok else "C"))
             else:
                 grade = "C"
+            from bot.strategy.removals import is_removed as _is_removed
+            _rm_rec = _is_removed(sym, str(s.get("family", "")), c.side.value,
+                                  str(s.get("session") or ""), tf)
             # GRADE-WEIGHTED SIZING: scale the base qty by conviction; skip B where its edge is negative.
             size_mult = GRADE_MULT.get(grade, 0.4)
             skip_reco = (grade == "B" and sym in B_SKIP_SYMBOLS) or grade == "C"
@@ -290,7 +293,14 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 # agreement study decides the swap); grade-layer input only, never an entry gate.
                 "tick_dir": _tick_direction(sym),
                 "family": s["family"], "status": s["status"],
-                "tradeable": s["tradeable"], "asset_status": s.get("asset_status", "?"),
+                # ENTRY-GROUP REMOVALS (Phase E.3): an adopted removal cannot FIRE as tradeable —
+                # the signal stays visible (flagged) and its shadow journal keeps accruing, so a
+                # wrong removal is detectable and reversible. The ExecutionService enforces too.
+                "tradeable": s["tradeable"] and not _rm_rec,
+                "removed": ({"reason": _rm_rec.get("reason"),
+                             "adopted_at": str(_rm_rec.get("adopted_at", ""))[:10]}
+                            if _rm_rec else None),
+                "asset_status": s.get("asset_status", "?"),
                 "grade": grade, "struct_aligned": aligned, "vol_expansion": wide, "tranche": tranche,
                 "air_atr": (None if air_atr is None else (999.0 if air_atr == float("inf") else round(air_atr, 1))),
                 "clean_air": air_ok,

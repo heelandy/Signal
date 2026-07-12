@@ -47,21 +47,21 @@ def line(tag, tr):
 
 
 def main():
-    base_slip = B.SLIP_TICKS
+    base_slip = B.SLIP_MULT
     d = state("GC", "5m")
     print(f"\n################  GC 5m STACK — gold walk-forward  ################")
     trs = {}
     for name, ors, ore, cut in WINDOWS:
         print(f"\n  {name} ET")
-        B.SLIP_TICKS = base_slip
+        B.SLIP_MULT = base_slip
         tr = stack(d, ors, ore, cut); trs[name] = tr
         line("full (2-tick slip)", tr)
         for mult in (2, 3):
-            B.SLIP_TICKS = base_slip * mult
+            B.SLIP_MULT = base_slip * mult
             t2 = stack(d, ors, ore, cut); r = t2["net_R"].to_numpy()
             print(f"    {f'stress {mult}x slip':20} n={len(r):>4} exp {r.mean():+.3f} PF {V.pf(r):>4.2f}  "
                   f"{'still +' if r.mean() > 0 else 'NEGATIVE'}")
-        B.SLIP_TICKS = base_slip
+        B.SLIP_MULT = base_slip
     # combined + correlation (overlapping windows -> expect HIGH corr; this is a robustness read, not diversification)
     a, b = trs[WINDOWS[0][0]], trs[WINDOWS[1][0]]
     both = pd.concat([a, b]).sort_values("entry_time").reset_index(drop=True)

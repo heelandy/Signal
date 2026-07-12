@@ -43,27 +43,37 @@ _RUNTIME_STATE = Path(__file__).resolve().parents[2] / "data" / "runtime_state.j
 
 def _persist_runtime():
     try:
-        _RUNTIME_STATE.parent.mkdir(parents=True, exist_ok=True)
-        _RUNTIME_STATE.write_text(json.dumps(
-            {"kill_switch": _state.get("kill_switch", False),
-             "paper_autotrade": _state.get("paper_autotrade", False),
-             "paper_placed": sorted(_paper["placed"])[-500:],
-             "last_scan_at": _latest.get("ts"),   # phase-7 health-heartbeat check reads this
-             "saved_at": _now()}), encoding="utf-8")
+        from bot.config import write_json                      # ATOMIC (tmp+replace, Phase 7):
+        write_json(_RUNTIME_STATE, {                           # a power cut can't half-write the
+            "kill_switch": _state.get("kill_switch", False),   # safety state
+            "paper_autotrade": _state.get("paper_autotrade", False),
+            "paper_placed": sorted(_paper["placed"])[-500:],
+            "last_scan_at": _latest.get("ts"),   # phase-7 health-heartbeat check reads this
+            "saved_at": _now()})
     except Exception:
         pass
 
 
 def _restore_runtime():
+    """FAIL-CLOSED (remediation Phase 7, 2026-07-11): a missing file is a clean first boot; a
+    file that EXISTS but cannot be parsed is corrupt safety state — boot with the kill switch ON
+    and page the operator. The audited defect silently restored kill_switch=false."""
+    if not _RUNTIME_STATE.exists():
+        return
     try:
-        if not _RUNTIME_STATE.exists():
-            return
         st = json.loads(_RUNTIME_STATE.read_text(encoding="utf-8"))
-        _state["kill_switch"] = bool(st.get("kill_switch", False))
-        _state["paper_autotrade"] = bool(st.get("paper_autotrade", False))
-        _paper["placed"].update(st.get("paper_placed") or [])
-    except Exception:
-        pass
+    except Exception as e:
+        _state["kill_switch"] = True
+        try:
+            from bot.alerts import alert
+            alert(f"runtime_state.json CORRUPT ({str(e)[:80]}) — booting with the KILL SWITCH ON; "
+                  f"inspect and disarm manually", level="critical", source="boot")
+        except Exception:
+            pass
+        return
+    _state["kill_switch"] = bool(st.get("kill_switch", False))
+    _state["paper_autotrade"] = bool(st.get("paper_autotrade", False))
+    _paper["placed"].update(st.get("paper_placed") or [])
 
 
 _REQUIRE_AUTH = os.environ.get("API_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
@@ -158,29 +168,54 @@ def _paper_broker():
     return _broker_cache["pb"]
 
 
+def _sync_controls():
+    """CROSS-PROCESS CONTROLS (2026-07-11, forward-gate boot finding): the API and the WORKER
+    are different processes — a toggle POSTed to the API must reach the worker's scan loop, and
+    the worker's own persist beat must never overwrite it back. exec_flags (SQLite WAL) is the
+    single writer-safe channel: control POSTs write ctl_*, every process syncs from them."""
+    try:
+        svc = _exec_service()
+        for k, key in (("kill_switch", "ctl_kill_switch"),
+                       ("paper_autotrade", "ctl_paper_autotrade")):
+            v = svc._flag(key)
+            if v is not None:
+                _state[k] = (v == "1")
+    except Exception:
+        pass
+
+
+def _set_control(name: str, on: bool) -> None:
+    try:
+        _exec_service()._set_flag(f"ctl_{name}", "1" if on else "0")
+    except Exception:
+        pass
+
+
+def _exec_service():
+    """THE one execution path (remediation Phase 5): every order source — autotrade, manual,
+    webhook — submits through this service (risk on real account state → persistent OMS →
+    broker → fills → reconciliation). There is no other door to a broker."""
+    if "exec" not in _broker_cache:
+        from bot.execution.service import ExecutionService
+        _broker_cache["exec"] = ExecutionService(_paper_broker())
+    return _broker_cache["exec"]
+
+
 def _paper_autotrade():
-    """When the toggle is ON: for EVERY NEW breakout signal (grade B → A → A+), place a grade-sized
-    bracket order on the PAPER account, simultaneously as the scan detects them. Study ALL grades (incl.
-    B) to confirm the live exp-by-grade — B is kept a small NON-zero size so it collects data. Equities
-    only (Alpaca can't trade futures). Dedup'd. PAPER only — for study/data collection."""
+    """When the toggle is ON: for EVERY NEW breakout signal (grade B → A → A+), submit a
+    grade-sized bracket through the EXECUTION SERVICE (remediation Phase 5) — risk on real
+    account state → persistent OMS → broker → fills → reconciliation. This function only picks
+    WHICH signals to trade (strategy-level selection); everything execution-shaped (approval,
+    idempotency, account truth, sizing authority, dedup, journaling) lives in the service.
+    Equities only (Alpaca can't trade futures). PAPER only — for study/data collection."""
     if not _state.get("paper_autotrade") or not settings.alpaca_paper:
         return
-    # APPROVAL GATE (AITP): the strategy version must carry a MANUAL 'paper' approval to trade
-    # paper. Re-checked every cycle so a revoke takes effect immediately.
-    try:
-        from bot.approval import paper_approved
-        from bot.strategy.orb_candidates import STRATEGY_VERSION
-        if not paper_approved(STRATEGY_VERSION):
-            _state["paper_autotrade"] = False
-            _paper["log"].append({"ts": _now(), "error": f"paper approval missing for {STRATEGY_VERSION} — autotrade disarmed"})
-            return
-    except Exception:
-        return
-    from bot.contracts import OrderRequest, OrderType, Side, TimeInForce
+    from bot.contracts import TradeCandidate
     from bot.live import GRADE_MULT
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
     try:
-        b = _paper_broker()
-        mkt_open = b.is_market_open()
+        svc = _exec_service()
+        mkt_open = _paper_broker().is_market_open()
         _paper["last_err"] = None                 # broker reachable — clear any prior error state
     except Exception as e:
         msg = "broker: " + str(e)[:100]
@@ -198,30 +233,35 @@ def _paper_autotrade():
         if str(s.get("boss", "")).startswith("stand_down"):       # BOSS one-macro-bet rule (review fix
             continue                                              # 2026-07-07): correlated same-direction
                                                                   # fires — only the bucket LEAD places
-        if s.get("source_healthy") is False:      # STALE-DATA GATE: never place an order off a stale/dirty feed
-            continue
         if s.get("signal_state") == "invalid":    # ZONE GATE: structure already broke against the signal
             continue
-        e_, st_ = s.get("entry"), s.get("stop")   # GEOMETRY GUARD (2026-07-08): never place a broken
-        sgn_ = 1 if s.get("side") == "long" else -1   # order — a wrong-side stop that the journal rejects
-        if e_ is None or st_ is None or sgn_ * (float(e_) - float(st_)) <= 0:  # must not still reach the broker
-            continue
-        # STUDY size = grade-weighted (A+ 1.5x / A 1.0x / B 0.4x); B kept ≥1 (don't skip) to collect its live data
-        qty = max(1, round(int(s.get("suggested_qty") or 1) * GRADE_MULT.get(grade, 0.4)))
-        key = f"{s['symbol']}:{s['side']}:{s['entry']}:{s.get('session')}"
-        if key in _paper["placed"]:
+        try:
+            _cid = {}                              # P1.1 linkage: keep the SIGNAL's id so a fill
+            sid = s.get("candidate_id") or s.get("id")   # can upgrade its tracker row's state
+            if sid:
+                _cid["candidate_id"] = str(sid)
+            c = TradeCandidate(symbol=s["symbol"], side=s["side"], timeframe=s.get("tf", "5m"),
+                               setup=str(s.get("family", "orb")), entry=float(s["entry"]),
+                               stop=float(s["stop"]), tp2=float(s["tp2"]),
+                               strategy_version=STRATEGY_VERSION, **_cid)
+        except (KeyError, TypeError, ValueError) as e:            # broken geometry never leaves here
+            _paper["log"].append({"ts": _now(), "symbol": s.get("symbol"), "error": f"bad geometry: {e}"})
             continue
         try:
-            order = OrderRequest(candidate_id=key, symbol=s["symbol"],
-                                 side=Side.LONG if s["side"] == "long" else Side.SHORT, qty=qty,
-                                 order_type=OrderType.MARKET, stop_price=s["stop"], take_profit=s["tp2"],
-                                 tif=TimeInForce.DAY, idempotency_key=key)
-            ev = b.submit(order)
-            _paper["placed"].add(key)
-            _persist_runtime()              # restart must not re-place this order
-            _paper["log"].append({"ts": _now(), "symbol": s["symbol"], "side": s["side"], "qty": qty,
-                                  "grade": s["grade"], "entry": s["entry"], "stop": s["stop"], "tp2": s["tp2"],
-                                  "order": str(getattr(ev, "broker_order_id", "") or getattr(ev, "status", "submitted"))})
+            res = svc.submit(c, "autotrade", session=str(s.get("session") or ""),
+                             feed_healthy=s.get("source_healthy"),   # not-proven -> service refuses
+                             kill_switch=_state.get("kill_switch", False),
+                             qty_mult=GRADE_MULT.get(grade, 0.4), grade=str(grade))
+            if res.action == "rejected" and "no paper approval" in res.reason:
+                _state["paper_autotrade"] = False                 # revoke disarms on the next cycle
+                _paper["log"].append({"ts": _now(), "error": res.reason + " — autotrade disarmed"})
+                return
+            if res.action != "duplicate":                         # duplicates are steady-state noise
+                _paper["log"].append({"ts": _now(), "symbol": s["symbol"], "side": s["side"],
+                                      "grade": grade, "entry": s["entry"], "stop": s["stop"],
+                                      "tp2": s["tp2"], "action": res.action, "qty": res.qty,
+                                      "corr": res.correlation_id, "reason": res.reason[:160],
+                                      "order": res.broker_order_id or ""})
             _paper["log"] = _paper["log"][-200:]
         except Exception as e:
             _paper["log"].append({"ts": _now(), "symbol": s.get("symbol"), "error": str(e)[:120]})
@@ -531,6 +571,7 @@ def _scan_loop():
     from bot.market_intel import market_context
     period = int(os.environ.get("BOT_SCAN_SEC", "60"))
     while True:
+        _sync_controls()                       # API-set toggles reach THIS process every cycle
         if not _state["kill_switch"]:
             _latest["scanning"] = True
             try:
@@ -594,10 +635,15 @@ def _scan_loop():
                     # lab"): the slow-cadence steps recorded errors into _latest but nothing
                     # SURFACED them — a dead duel/phase78 hid exactly like the dead resolver (D5)
                     _latest["market"] = _beat_val("market_context", market_context)
-                    if _state.get("paper_autotrade"):
-                        from bot.reconcile import reconcile_once
+                    if settings.alpaca_paper:
+                        # EXECUTION SERVICE beats (Phase 5): broker-truth fills, reconciliation
+                        # with teeth (mismatch -> halt_submissions), stale-order sweep. Runs
+                        # whenever the paper broker is configured — open orders need tracking
+                        # even after the autotrade toggle goes off.
+                        _beat("exec_fills", lambda: _exec_service().poll_fills())
                         _latest["reconcile"] = _beat_val("reconcile",
-                                                         lambda: reconcile_once(_paper_broker()))
+                                                         lambda: _exec_service().reconcile())
+                        _beat("exec_stale", lambda: _exec_service().staleness_sweep())
                     from bot.strategy.duel import run_duel_once
                     _latest["duel_tick"] = _beat_val("duel", run_duel_once)
                 if _mkt_tick["n"] % 60 == 0:      # AITP PHASE 7-8 AUTO-ADVANCE (user 2026-07-06):
@@ -629,6 +675,35 @@ def _scan_loop():
                             _latest["battery_seen"] = ts
                             _latest["research_alerts"] = (rep.get("changes") or [])[:12]
                     _beat("battery", _battery_tick)
+                    def _daily_backup():          # Phase 7: one verified snapshot per UTC day
+                        import time as _t
+                        from bot import backup as _bk
+                        today = _t.strftime("%Y%m%d", _t.gmtime())
+                        if _state.get("_last_backup") == today:
+                            return {"skipped": today}
+                        r = _bk.backup()
+                        v = _bk.verify(r["path"]) if r.get("ok") else {"ok": False}
+                        _bk.prune()
+                        _state["_last_backup"] = today
+                        if not v.get("ok"):
+                            from bot.alerts import alert
+                            alert(f"daily backup FAILED verification: {r} / {v}", level="critical")
+                        return {**r, "verified": v.get("ok")}
+                    _beat("backup", _daily_backup)
+                    def _daily_bar_persist():     # LIVE-BAR PERSISTER (user 2026-07-12): the
+                        import datetime as _dt    # store's forward edge grows from the scan's
+                        from zoneinfo import ZoneInfo as _ZI   # own delayed feeds — QA freshness
+                        now_et = _dt.datetime.now(_ZI("America/New_York"))   # clears on its own
+                        if now_et.weekday() >= 5 or (now_et.hour, now_et.minute) < (16, 10):
+                            return {"skipped": "before 16:10 ET / weekend"}
+                        key = now_et.strftime("%Y%m%d")
+                        if _state.get("_last_bar_persist") == key:
+                            return {"skipped": key}
+                        from bot.market_data.live_persist import persist_day
+                        r = persist_day()
+                        _state["_last_bar_persist"] = key
+                        return r
+                    _beat("bar_persist", _daily_bar_persist)
                     from bot.phase78 import evaluate as _p78       # paper study self-eval, hourly
                     _latest["phase78"] = _beat_val("phase78", _p78)
                     from bot.boss import evaluate as _boss         # BOSS conformance watch
@@ -869,6 +944,13 @@ def _startup():            # queued — it touches the thread-startup path, so i
         tickwatch.start(_tick_symbols, on_tick=_tick_touch)
     except Exception:
         pass
+    # EXECUTION-SERVICE RECOVERY on boot (Phase 5): converge order rows to broker truth —
+    # crash-before-submit -> FAILED; timeout-but-accepted -> adopted; then reconcile positions.
+    if settings.alpaca_paper:
+        try:
+            _exec_service().recover()
+        except Exception:
+            pass
     # AUTO-ARM continuous training on boot (opt-in): set BOT_CONT_TRAINING=1 (+ optional
     # BOT_CONT_INTERVAL_MIN). Pairs with run_server.bat's --reload so new code always runs.
     if os.environ.get("BOT_CONT_TRAINING", "0") == "1" and not _cont["on"]:
@@ -888,24 +970,102 @@ def _startup():            # queued — it touches the thread-startup path, so i
         pass
 
 
+_CORE_BEATS = ("snapshot", "autotrack", "track_outcomes", "persist", "exec_fills", "reconcile")
+
+
+def _semantic_health(now: float | None = None) -> dict:
+    """SEMANTIC health (remediation Phase 7, 2026-07-11): 'the server responds' is not 'safe to
+    trade'. source_healthy = the scan heartbeat is FRESH (< 3x the scan cadence); healthy = kill
+    switch off AND heartbeat fresh AND no CORE subsystem beat failing. The audited endpoint
+    hardcoded source_healthy=true and derived healthy from the kill switch alone."""
+    from datetime import datetime as _dt
+    now = now if now is not None else _time.time()
+    scan_sec = max(int(os.environ.get("BOT_SCAN_SEC", "30") or 30), 30)
+    age = None
+    ts = _latest.get("ts")
+    if not ts and os.environ.get("BOT_AUTOSCAN") != "1":
+        # API role (reloadable process): the WORKER's persisted heartbeat is the cross-process
+        # truth — a dead worker behind a live API must read UNHEALTHY, and a live worker behind
+        # a freshly-reloaded API must read healthy (Phase 7 split-brain visibility).
+        try:
+            ts = json.loads(_RUNTIME_STATE.read_text(encoding="utf-8")).get("last_scan_at")
+        except Exception:
+            ts = None
+    if ts:
+        try:
+            age = now - _dt.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            age = None
+    scan_fresh = age is not None and age < 3 * scan_sec
+    fails = sorted(k for k, v in _beats.items() if not v.get("ok"))
+    core_fails = [k for k in fails if k in _CORE_BEATS]
+    broker = "n/a"
+    if settings.alpaca_paper:
+        try:
+            _paper_broker().is_market_open()
+            broker = "ok"
+        except Exception as e:
+            broker = f"down: {str(e)[:60]}"
+    healthy = (not _state["kill_switch"]) and scan_fresh and not core_fails \
+        and not str(broker).startswith("down")
+    return {"healthy": healthy, "source_healthy": bool(scan_fresh),
+            "scan_age_sec": round(age, 1) if age is not None else None,
+            "scan_budget_sec": 3 * scan_sec, "broker": broker,
+            "kill_switch": _state["kill_switch"],
+            "beats_failing": fails, "core_beats_failing": core_fails,
+            # PROCESS IDENTITY (split-brain visibility): which process produced this answer,
+            # and how old the snapshot it serves is
+            "pid": os.getpid(), "role": "scanner" if os.environ.get("BOT_AUTOSCAN") == "1" else "api",
+            "started_at": _START, "uptime_sec": int(now - _START)}
+
+
 @app.get("/api/health")
 def health():
-    broker = "n/a"
     try:
         from bot.strategy.orb_candidates import STRATEGY_VERSION as _sv
     except Exception:
         _sv = "?"
-    return {"mode": _state["mode"], "kill_switch": _state["kill_switch"],
-            "live_allowed": settings.live_allowed, "alpaca_paper": settings.alpaca_paper,
-            "source_healthy": True, "broker": broker, "healthy": not _state["kill_switch"],
-            "uptime_sec": int(_time.time() - _START), "scanning": _latest["scanning"],
+    sem = _semantic_health()
+    return {"mode": _state["mode"], "live_allowed": settings.live_allowed,
+            "alpaca_paper": settings.alpaca_paper,
+            **sem,
+            "scanning": _latest["scanning"],
             "paper_autotrade": _state.get("paper_autotrade", False),
             "strategy_version": _sv,           # stale-server tell: compare with the CHANGELOG
             "continuous_training": _cont["on"],
             # SUBSYSTEM HEARTBEATS (D5 prevention): each scan-loop step's last outcome — a step
             # that is failing or hasn't succeeded recently shows RED on the dashboard
-            "beats": _beats,
-            "beats_failing": sorted(k for k, v in _beats.items() if not v.get("ok"))}
+            "beats": _beats}
+
+
+@app.get("/api/live")
+def liveness():
+    """The WATCHDOG's endpoint (Phase 7): HTTP 200 alone means nothing — the watchdog reads
+    `healthy` and restarts on false/stale, not merely on connection failure."""
+    return _semantic_health()
+
+
+@app.get("/api/entry_matrix")
+def entry_matrix(evidence: str = "", floor: int = 30):
+    """ENTRY PROFITABILITY MATRIX (Phase E — the Profitability Lab's source). `evidence` is
+    REQUIRED and singular: backtest | shadow | paper | live — mixing is refused (rule 3).
+    Under-sample cells say INSUFFICIENT SAMPLE, never 0.00R (rule 6)."""
+    from bot.ml.entry_matrix import matrix
+    try:
+        return matrix(evidence, floor=max(int(floor), 1))
+    except ValueError as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/entry_matrix/nominations")
+def entry_matrix_nominations(evidence: str = "backtest"):
+    """Removal NOMINATIONS (Phase E.3): negative-expectancy cells with sample — each still needs
+    the cohort test before any removal is adopted. The matrix nominates; it never auto-blocks."""
+    from bot.ml.entry_matrix import nominations
+    try:
+        return {"evidence": evidence, "nominations": nominations(evidence)}
+    except ValueError as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/contract")
@@ -1401,7 +1561,7 @@ class DecisionReq(BaseModel):
 
 
 @app.post("/api/signal/decision")
-def signal_decision(d: DecisionReq):
+def signal_decision(d: DecisionReq, _=Depends(auth)):      # P1.4: journal mutation -> token guard
     """User marks a signal Taken or Skipped; the system then tracks where it goes (stop/TP1/TP2 first)."""
     from bot.tracker import record_decision
     return record_decision(d.signal, d.taken)
@@ -1572,18 +1732,16 @@ def _spawn_evolve_deep():
 
 
 @app.get("/api/evolve")
-def evolve_report(deep: bool = False):
-    """EVOLUTION ENGINE (BOSS_WORKERS_PLAN §4b): the SAVED mining report + emergent drafts —
-    serving the file keeps dashboard polls free (review fix: mining ran full table/parquet scans
-    per page refresh). deep=true spawns the full miner as a subprocess (also the nightly tick)."""
+def evolve_report():
+    """EVOLUTION ENGINE (BOSS_WORKERS_PLAN §4b): the SAVED mining report + emergent drafts.
+    READ-ONLY (Phase 6 GET-mutation audit): the old ?deep=true spawned the miner from a GET —
+    a dashboard poll could launch a full table scan. Deep runs are POST /api/evolve/run."""
     try:
         from bot.config import read_json
         from bot.evolve import _load_drafts, REPORT
         rep = read_json(REPORT, default={"note": "no mining run saved yet — click Mine now or "
                                                  "wait for the nightly tick"})
         out = dict(rep)
-        if deep:
-            out["deep_started"] = _spawn_evolve_deep()
         out["mining"] = (_evolve_proc["p"] is not None and _evolve_proc["p"].poll() is None)
         out["drafts"] = _load_drafts()
         return out
@@ -1592,16 +1750,27 @@ def evolve_report(deep: bool = False):
         return {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-400:]}
 
 
+@app.post("/api/evolve/run")
+def evolve_run(_=Depends(auth)):
+    """Spawn the full miner (was GET ?deep=true — moved to POST+auth, Phase 6)."""
+    return {"deep_started": _spawn_evolve_deep()}
+
+
 @app.get("/api/phase78")
-def phase78(advance: bool = True):
-    """AITP phase 7-8 readiness + auto-advance (user 2026-07-06: "whenever the paper study is
-    done it will be implemented automatically into these phases"). Evaluates the paper-study exit
-    criteria, the phase-7 hardening checks and execution quality; when ALL are green the 'live'
-    approval stage auto-advances for the current rule version (audit-logged; the LIVE_APPROVED.lock
-    file stays manual — double gate preserved; ES excluded by the cost-stress rule).
-    ?advance=false = dry evaluation only."""
+def phase78():
+    """AITP phase 7-8 readiness — READ-ONLY evaluation (Phase 6 GET-mutation audit: the old
+    default advance=true meant a BROWSER REFRESH or monitoring probe could advance the 'live'
+    approval stage — the audited governance-via-GET defect). The hourly scan-loop tick still
+    auto-advances when everything is green; a manual advance is POST /api/phase78/advance."""
     from bot.phase78 import evaluate
-    return evaluate(auto_advance=bool(advance))
+    return evaluate(auto_advance=False)
+
+
+@app.post("/api/phase78/advance")
+def phase78_advance(_=Depends(auth)):
+    """Evaluate AND auto-advance the live stage when all green (POST+auth, Phase 6)."""
+    from bot.phase78 import evaluate
+    return evaluate(auto_advance=True)
 
 
 @app.get("/api/candidates")
@@ -1634,6 +1803,7 @@ def kill(on: bool = True, x_api_token: str | None = Header(default=None)):
     if not on:
         auth(x_api_token)
     _state["kill_switch"] = bool(on)        # consulted by the orchestrator before any submit
+    _set_control("kill_switch", bool(on))   # cross-process: the WORKER syncs this each cycle
     _persist_runtime()                      # survives a restart (phase-7 recovery)
     from bot.audit import log as _audit
     _audit("kill_switch", on=bool(on))
@@ -1655,6 +1825,7 @@ def paper_autotrade_toggle(on: int = 0, _=Depends(auth)):
                              f"approve research → replay → paper on /training first",
                     "paper_autotrade": False}
     _state["paper_autotrade"] = bool(on)
+    _set_control("paper_autotrade", bool(on))  # cross-process (worker scan loop syncs)
     _persist_runtime()                      # survives a restart (phase-7 recovery)
     from bot.audit import log as _audit
     _audit("paper_autotrade", on=bool(on))
@@ -1765,41 +1936,17 @@ def place_order(t: OrderTicket, _=Depends(auth)):
     except ValueError as e:
         return {"action": "rejected", "reason": f"bad order geometry: {e}"}
     _journal.record(c)
-    # 2) risk gate (sized off the live account when paper/live)
+    # 2+3) ONE EXECUTION PATH (remediation Phase 5): approval + dated idempotency + account
+    # truth + risk + persistent OMS + broker all live in the service — the hand-rolled Account
+    # (equity-only, empty P&L/positions) and per-endpoint dedup keys are gone.
     b = _broker()
-    equity = 100_000.0
-    if b is not None:
-        try:
-            equity = b.account().equity
-        except Exception:
-            pass
-    acct = Account(equity=equity, mode=Mode(_state["mode"]) if _state["mode"] in
-                   ("replay", "paper", "live") else Mode.PAPER, kill_switch=_state["kill_switch"])
-    rd = decide(c, acct)
-    _journal.record(rd)
-    if not rd.approved:
-        return {"action": "rejected", "reason": rd.reason_code.value, "notes": rd.notes}
-    qty = min(t.qty, rd.max_qty) if t.qty else rd.max_qty
-    # DUPLICATE-ORDER GUARD: a double-clicked ticket / retried POST must not stack orders.
-    # Manual tickets are keyed by the full geometry (symbol|side|entry|stop|qty|day) so an
-    # intentionally different second trade on the same symbol still goes through.
-    import hashlib as _hl
-    ticket_key = _hl.sha1(f"manual|{c.symbol}|{c.side.value}|{c.entry}|{c.stop}|{qty}|"
-                          f"{c.generated_at[:10]}".encode()).hexdigest()[:16]
-    if _already_submitted(ticket_key):
-        return {"action": "duplicate", "idempotency_key": ticket_key,
-                "note": "identical ticket already submitted today — no new order"}
-    order = OrderRequest(candidate_id=c.candidate_id, symbol=c.symbol, side=c.side, qty=qty,
-                         order_type=OrderType.LIMIT, limit_price=c.entry,
-                         stop_price=c.stop, take_profit=c.tp2, idempotency_key=ticket_key)
-    # 3) transmit (paper/live) or shadow-log (replay/shadow)
-    if b is None:
-        return {"action": "shadow", "qty": qty, "note": "logged, NOT transmitted (mode=" + _state["mode"] + ")",
+    if b is None or _state["mode"] not in ("paper", "live"):
+        return {"action": "shadow", "note": "logged, NOT transmitted (mode=" + _state["mode"] + ")",
                 "rr": round(c.rr, 2)}
-    ev = b.submit(order)
-    _journal.record(ev)
-    return {"action": "submitted", "state": ev.state.value, "qty": qty,
-            "broker_order_id": ev.broker_order_id, "msg": ev.message}
+    res = _exec_service().submit(c, "manual", session="manual", feed_healthy=True,
+                                 kill_switch=_state["kill_switch"],
+                                 qty_cap=t.qty or None)
+    return res.to_dict()
 
 
 class OptionReq(BaseModel):
@@ -1882,41 +2029,21 @@ async def tv_webhook(req: Request):
                            strategy_version="tv-auto")
     except (KeyError, ValueError) as e:
         return {"action": "rejected", "reason": f"bad payload geometry: {e}"}
-    # DUPLICATE-WEBHOOK GUARD: TradingView retries + repeated alerts must not stack live orders.
-    # Key = payload signalId if the Pine sends one, else the candidate's deterministic
-    # (symbol|side|setup|session-day) idempotency key.
-    dedup_key = str(p.get("signalId") or p.get("signal_id") or c.idempotency_key)
-    if _already_submitted(dedup_key):
-        return {"action": "duplicate", "ticker": sym, "idempotency_key": dedup_key,
-                "note": "already processed — no new order"}
     _journal.record(c)
-    equity = 100_000.0
-    if b is not None:
-        try:
-            equity = b.account().equity
-        except Exception:
-            pass
-    acct = Account(equity=equity, mode=Mode(_state["mode"]) if _state["mode"] in ("replay", "paper", "live") else Mode.PAPER,
-                   kill_switch=_state["kill_switch"])
-    rd = decide(c, acct)
-    _journal.record(rd)
-    if not rd.approved:
-        return {"action": "rejected", "reason": rd.reason_code.value, "ticker": sym}
-    qty = int(p.get("quantity") or 0) or rd.max_qty
-    qty = min(qty, rd.max_qty)
-    order = OrderRequest(candidate_id=c.candidate_id, symbol=sym, side=side, qty=qty,
-                         order_type=OrderType.LIMIT, limit_price=c.entry, stop_price=c.stop,
-                         take_profit=c.tp2, idempotency_key=dedup_key)   # broker-side dedup (client_order_id)
-    if b is None:
-        return {"action": "shadow", "ticker": sym, "qty": qty, "note": f"logged, not transmitted (mode={_state['mode']})"}
-    ev = b.submit(order)
-    _journal.record(ev)
-    return {"action": "submitted", "ticker": sym, "qty": qty, "state": ev.state.value,
-            "broker_order_id": ev.broker_order_id}
+    # ONE EXECUTION PATH (remediation Phase 5): the service owns the dated idempotency key (TV
+    # retries resolve to 'duplicate'), submit-time approval, account truth, sizing authority and
+    # the persistent OMS. Every response carries a correlation id + final action.
+    if b is None or _state["mode"] not in ("paper", "live"):
+        return {"action": "shadow", "ticker": sym,
+                "note": f"logged, not transmitted (mode={_state['mode']})"}
+    res = _exec_service().submit(c, "webhook", session="tv", feed_healthy=True,
+                                 kill_switch=_state["kill_switch"],
+                                 qty_cap=int(p.get("quantity") or 0) or None)
+    return {"ticker": sym, **res.to_dict()}
 
 
 @app.post("/api/order/cancel")
-def cancel_order(order_id: str):
+def cancel_order(order_id: str, _=Depends(auth)):          # P1.4: broker mutation -> token guard
     b = _broker()
     if b is None:
         return {"error": "no live broker in this mode"}
@@ -2544,8 +2671,13 @@ async def data_synthesize_upload(request: Request, symbol: str | None = None, _=
     import io
     import pandas as pd
     from bot.ml.l2_features import synthesize_frame
+    # P1.4: enforce the size limit BEFORE reading (the audited path read the whole body
+    # into memory first — a large upload could OOM the API while "checking" its size)
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > 800_000_000:
+        return {"error": "file > 800MB — register its PATH instead (reads in place, no copy)"}
     body = await request.body()
-    if len(body) > 800_000_000:
+    if len(body) > 800_000_000:                     # chunked uploads without a length header
         return {"error": "file > 800MB — register its PATH instead (reads in place, no copy)"}
     name = (request.headers.get("x-filename") or "upload.csv").lower()
     try:
@@ -2657,3 +2789,205 @@ def dashboard():
 
 if (STATIC).exists():
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE U — OPERATOR-CONSOLE ENDPOINTS (docs/UI_PLAN.md step 0; thin + read-only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ready_cache = {"ts": 0.0, "out": None}
+
+
+@app.get("/api/readiness")
+def readiness():
+    """THE single readiness source (Phase U hard rule 4): server-computed gates with VERBATIM
+    reasons — the UI renders this, never derives readiness client-side. UNKNOWN never reads as
+    green: any blocking gate not True => overall BLOCKED."""
+    import time as _t
+    if _ready_cache["out"] and _t.time() - _ready_cache["ts"] < 20:
+        return _ready_cache["out"]
+    gates = []
+
+    def g(name, ok, reason, blocking=True):
+        gates.append({"name": name, "ok": (True if ok is True else (False if ok is False else None)),
+                      "reason": str(reason)[:200], "blocking": blocking})
+
+    sem = _semantic_health()
+    g("system health", sem["healthy"],
+      ("scan heartbeat fresh" if sem["source_healthy"]
+       else f"scan heartbeat stale ({sem['scan_age_sec']}s / budget {sem['scan_budget_sec']}s)")
+      + (f" · core beats failing: {sem['core_beats_failing']}" if sem["core_beats_failing"] else "")
+      + (f" · broker {sem['broker']}" if str(sem["broker"]).startswith("down") else ""))
+    g("kill switch", not _state["kill_switch"],
+      "off" if not _state["kill_switch"] else "ARMED — all trading stopped")
+    try:
+        from bot.strategy.orb_candidates import STRATEGY_VERSION
+        from bot import approval
+        st = approval.status(STRATEGY_VERSION)
+        ev = st["evidence"]
+        g("data QA (traded book)", ev.get("data_qa_traded_ok"),
+          ("QQQ+SPY green" + ("" if ev.get("data_qa_all_ok") else
+                              " — futures stores stay red on LEGACY short days (visible, non-traded)"))
+          if ev.get("data_qa_traded_ok")
+          else "traded-book QA RED — QQQ/SPY stale or damaged (persister catches spans up EOD)")
+        g("A/B version match", ev.get("ab_strategy_version_match"),
+          f"A/B report matches {STRATEGY_VERSION}" if ev.get("ab_strategy_version_match")
+          else "A/B report belongs to a DIFFERENT strategy version")
+        note = " (LEGACY record — pre-predicate)" if st.get("legacy") else \
+               (" (STALE — store fingerprint drifted)" if st.get("stale") else "")
+        g("paper approval", st["paper_approved"], f"{STRATEGY_VERSION}{note}")
+        from bot.phase78 import fills_scorecard, reconciliation_clean
+        fs = fills_scorecard()
+        n = fs["overall"].get("n", 0)
+        g("phase-8 fills", n >= 60, f"{n}/60 measured broker fills", blocking=False)
+        rc = reconciliation_clean()
+        g("reconciliation", rc.get("ok"),
+          (f"HALT: {rc.get('halt')}" if rc.get("halt")
+           else (f"{rc.get('investigation_required', 0)} order(s) INVESTIGATION_REQUIRED"
+                 if rc.get("investigation_required") else "clean")))
+    except Exception as e:
+        g("evidence", False, f"readiness computation failed: {str(e)[:140]}")
+    g("live lock", None, "LIVE stays hard-locked by design (LIVE_APPROVED.lock)", blocking=False)
+    blocked = [x["name"] for x in gates if x["blocking"] and x["ok"] is not True]
+    out = {"mode": _state["mode"], "kill_switch": _state["kill_switch"],
+           "overall": "OK" if not blocked else "BLOCKED", "blocking": blocked,
+           "gates": gates, "generated_at": _now()}
+    _ready_cache.update(ts=_t.time(), out=out)
+    return out
+
+
+@app.get("/api/exec/orders")
+def exec_orders(limit: int = 100):
+    """Orders & Fills + Reconciliation Center source: every order with its full lifecycle
+    timeline, fills, and the requested/filled/remaining/cancelled/PROTECTED breakdown."""
+    svc = _exec_service()
+    cols = ("order_id", "correlation_id", "source", "symbol", "side", "qty", "planned_entry",
+            "stop", "tp", "strategy_version", "state", "broker_order_id", "reason",
+            "created_at", "updated_at", "session", "family", "grade", "candidate_id")
+    rows = svc.db.execute(
+        "SELECT " + ",".join(cols) + " FROM exec_orders ORDER BY created_at DESC LIMIT ?",
+        (max(int(limit), 1),)).fetchall()
+    out = []
+    for r in rows:
+        o = dict(zip(cols, r))
+        o["timeline"] = [{"state": s, "message": m, "at": a} for s, m, a in svc.db.execute(
+            "SELECT state, message, at FROM exec_events WHERE order_id=? ORDER BY seq",
+            (o["order_id"],))]
+        fl = svc.db.execute("SELECT qty, price, at FROM exec_fills WHERE order_id=? ORDER BY at",
+                            (o["order_id"],)).fetchall()
+        o["fills"] = [{"qty": q, "price": p, "at": a} for q, p, a in fl]
+        filled = int(sum(q for q, _, _ in fl))
+        bracket_missing = any(t["state"] == "BRACKET_MISSING" for t in o["timeline"])
+        o["qty_breakdown"] = {
+            "requested": o["qty"] or 0, "filled": filled,
+            "remaining": max((o["qty"] or 0) - filled, 0),
+            "cancelled": max((o["qty"] or 0) - filled, 0) if o["state"] == "CANCELLED" else 0,
+            "protected": 0 if bracket_missing else filled}
+        out.append(o)
+    return {"halt": svc.halted(), "orders": out}
+
+
+@app.get("/api/exec/fills")
+def exec_fills_api():
+    """Every measured fill + the fills-derived open book and realized round trips."""
+    svc = _exec_service()
+    from bot.execution.service import ExecutionService
+    book, realized = ExecutionService._replay_fills(svc)
+    fills = [{"fill_id": f, "order_id": o, "symbol": s, "side": sd, "qty": q, "price": p, "at": a}
+             for f, o, s, sd, q, p, a in svc.db.execute(
+                 "SELECT fill_id, order_id, symbol, side, qty, price, at FROM exec_fills "
+                 "ORDER BY at DESC LIMIT 200")]
+    return {"fills": fills,
+            "open_book": {k: v for k, v in book.items() if v.get("net")},
+            "realized": [{"at": a, "pnl_usd": round(p, 2)} for a, p in realized[-100:]]}
+
+
+@app.get("/api/risk/state")
+def risk_state():
+    """Risk cockpit source: the SAME account truth the risk gate trades on, with per-field
+    provenance. Unprovable => a BLOCKED payload, never zeros (Phase U rules 2/5/6)."""
+    from bot.risk import RiskLimits, CORRELATION_BUCKET
+    L = RiskLimits()
+    try:
+        svc = _exec_service()
+        a = svc.account_truth(feed_healthy=True, kill_switch=_state["kill_switch"])
+    except Exception as e:
+        return {"blocked": True, "reason": f"ACCOUNT_STATE_UNPROVEN: {str(e)[:160]}",
+                "note": "an unprovable limit is a breached limit — submissions refuse (rule 5)"}
+
+    def f(v, src):
+        return {"value": v, "source": src}
+
+    buckets = {}
+    for s in a.open_symbols:
+        buckets.setdefault(CORRELATION_BUCKET.get(str(s).upper(), "other"), []).append(s)
+    return {"blocked": False, "as_of": _now(),
+            "equity": f(round(a.equity, 2), "broker"),
+            "peak_equity": f(round(a.peak_equity, 2), "flags high-water"),
+            "daily_pnl": f(round(a.daily_pnl, 2), "fills replay"),
+            "weekly_pnl": f(round(a.weekly_pnl, 2), "fills replay"),
+            "trades_today": f(a.trades_today, "exec orders"),
+            "consecutive_losses": f(a.consecutive_losses, "fills replay"),
+            "open_positions": f(a.open_positions, "broker (reconciled)"),
+            "correlation_buckets": buckets, "kill_switch": _state["kill_switch"],
+            "limits": {"daily_loss_usd": round(L.max_daily_loss * a.equity, 2),
+                       "weekly_loss_usd": round(L.max_weekly_loss * a.equity, 2),
+                       "max_trades_per_day": L.max_trades_per_day,
+                       "max_consecutive_losses": L.max_consecutive_losses,
+                       "max_open_positions": L.max_open_positions,
+                       "risk_per_trade_usd": round(L.risk_per_trade * a.equity, 2)}}
+
+
+@app.get("/api/removals")
+def removals_api():
+    """Removed entry groups (evidence-linked) + the matrix's current nominations."""
+    from bot.strategy.removals import active
+    try:
+        from bot.ml.entry_matrix import nominations
+        noms = nominations("backtest")
+    except Exception as e:
+        noms = [{"error": str(e)[:120]}]
+    return {"active": active(), "nominations": noms}
+
+
+@app.get("/api/incidents")
+def incidents_api():
+    """Incidents view source: crash records, watchdog events, backups, log growth, gate-1 clock."""
+    import datetime as _dt
+    from bot.config import BOT_ROOT as _BR
+    out = {}
+    crashes = sorted((_BR / "data").glob("crash_*.txt"))
+    out["crashes"] = [{"file": c.name,
+                       "head": c.read_text(encoding="utf-8", errors="replace")[:300]}
+                      for c in crashes[-5:]]
+    wl = _BR / "config" / "watchdog.log"
+    events = []
+    if wl.exists():
+        for ln in wl.read_text(encoding="utf-8", errors="replace").splitlines()[-60:]:
+            if any(k in ln for k in ("DOWN", "UNHEALTHY", "relaunch", "DELIBERATE", "started")):
+                events.append(ln[:200])
+    out["watchdog"] = events[-12:]
+    out["last_backup"] = None
+    bdir = _BR / "data" / "backups"
+    if bdir.exists():
+        snaps = sorted(d for d in bdir.iterdir() if d.is_dir())
+        if snaps:
+            from bot import backup as _bk
+            out["last_backup"] = {"snapshot": snaps[-1].name, "verify": _bk.verify(snaps[-1])}
+    logs = {}
+    for root in (_BR, _BR / "config"):
+        if root.exists():
+            for fl in root.glob("*.log"):
+                logs[fl.name] = fl.stat().st_size
+    out["log_bytes"] = logs
+    t0 = _dt.datetime(2026, 7, 12, 3, 0, tzinfo=_dt.timezone.utc)   # gate-1 start (23:00 ET 7/11)
+    out["gate1"] = {"day": round(max((_dt.datetime.now(_dt.timezone.utc) - t0).total_seconds()
+                                     / 86400.0, 0), 1), "of": 7,
+                    "crash_records": len(crashes),
+                    "note": "a crash WITH a record is explained; silence + zero records = pass"}
+    try:
+        al = _BR / "data" / "alerts.jsonl"
+        out["alerts_tail"] = al.read_text(encoding="utf-8").splitlines()[-5:] if al.exists() else []
+    except Exception:
+        out["alerts_tail"] = []
+    return out

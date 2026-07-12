@@ -7,4 +7,4 @@ rem   or just run run_all.bat to launch both.
 cd /d "%~dp0"
 set BOT_AUTOSCAN=0
 ..\.venv\Scripts\python.exe -m uvicorn bot.api.server:app --host 127.0.0.1 --port 8000 ^
-    --reload --reload-dir bot --reload-include "*.html"
+    --reload --reload-dir bot --reload-include "*.py" --reload-include "*.html"

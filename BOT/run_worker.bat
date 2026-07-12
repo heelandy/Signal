@@ -8,4 +8,6 @@ rem dead/empty). Scan-only runs stably. The ML champions all fail the gates anyw
 rem is lost — re-enable (=1) once the training-loop crash is fixed.
 set BOT_CONT_TRAINING=0
 set BOT_SCAN_SEC=30
-..\.venv\Scripts\python.exe run_worker.py
+rem output -> config\worker.log (2026-07-11 drill finding: worker #1 died with a closed
+rem console window and NO evidence; the crash handler catches python deaths, this catches the rest)
+..\.venv\Scripts\python.exe run_worker.py >> config\worker.log 2>&1

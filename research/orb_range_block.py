@@ -82,11 +82,11 @@ def main():
             report("RANGE — IS 2010-21", trR[yr <= 2021])
             report("RANGE — OOS 2022+", trR[yr >= 2022], min_n=20)
         report("unblock RANGE (full)", tro)
-        B.SLIP_TICKS = 4
+        B.SLIP_MULT = 2.0
         tro2 = run(dopen, ors, ore, cut, tdy, eod)
         lr2 = true_lr.reindex(pd.to_datetime(tro2["entry_time"], utc=True)).to_numpy()
         report("RANGE slice @ 2x slip", tro2[lr2 == 2])
-        B.SLIP_TICKS = 2
+        B.SLIP_MULT = 1.0
 
 
 if __name__ == "__main__":

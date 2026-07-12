@@ -87,7 +87,8 @@ def _bars_tf(con, sym: str, tf: str, sess: str):
         tcol = next((c for c in ("ts_utc", "ts_et", "ts") if c in raw.columns), None)
         # keep ONLY one timestamp column — a view carrying ts + ts_et produced duplicate 'ts'
         # keys after rename ("cannot assemble with duplicate keys", user crash 2026-07-05)
-        keep = [tcol] + [c for c in ("open", "high", "low", "close", "volume") if c in raw.columns]
+        keep = [tcol] + [c for c in ("open", "high", "low", "close", "volume", "adj_factor")
+                         if c in raw.columns]           # adj_factor rides along (Phase 3 roll analytics)
         return raw[keep].rename(columns={tcol: "ts"})
 
     if tf == "1m":
@@ -104,9 +105,12 @@ def _bars_tf(con, sym: str, tf: str, sess: str):
     rule = RESAMPLE_TF[tf]
     if rule is None:
         return b.reset_index(drop=True)
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    if "adj_factor" in b.columns:
+        agg["adj_factor"] = "last"                      # Phase 3: roll adjustment survives resampling
     o = (b.set_index("ts")
           .resample(rule, label="left", closed="left")
-          .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+          .agg(agg)
           .dropna(subset=["open"]).reset_index())
     return o
 

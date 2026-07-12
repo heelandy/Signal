@@ -15,13 +15,19 @@ import time
 from bot.execution.oms import OMS
 
 
-def reconcile_once(broker, oms: OMS | None = None) -> dict:
-    """Compare broker positions to the OMS internal book; returns per-symbol verdict."""
+def reconcile_once(broker, oms: OMS) -> dict:
+    """Compare broker positions to the OMS internal book; returns per-symbol verdict.
+    `oms` is REQUIRED (remediation Phase 5): the audited defect was defaulting to a fresh EMPTY
+    OMS, which reconciled broker truth against nothing. The live path now reconciles through
+    bot.execution.service.ExecutionService.reconcile() (fills-derived book + halt on mismatch);
+    this helper remains for replay/tests that own a real OMS instance."""
+    if oms is None:
+        raise ValueError("reconcile_once requires the OMS that submitted the orders — "
+                         "an empty book reconciles against nothing (Phase 5)")
     try:
         broker_pos = broker.positions()
     except Exception as e:
         return {"_error": f"broker poll failed: {e}"}
-    oms = oms or OMS()
     return oms.reconcile(broker_pos)
 
 

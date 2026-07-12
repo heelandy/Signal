@@ -1,0 +1,45 @@
+{
+ "knobs": {
+  "or_s": 570,
+  "or_e": 600,
+  "brk_buf_atr": 0.0,
+  "tod_end": 960,
+  "execm": "close",
+  "watch_live": true,
+  "cooldown_bars": 3,
+  "stale_bars": 24,
+  "retest_atr": 0.5,
+  "chase_atr": 1.5,
+  "reentry": true
+ },
+ "atr": 8.0,
+ "or": [
+  100.0,
+  104.0
+ ],
+ "bars": 234,
+ "note": "deterministic Layer-3 tape: day1 clean confirmed-close fire \u00b7 day2 watch cancel at the mid -> cooldown, NO fire \u00b7 day3 blow-through bar fires (its LOW was at the level = near, not chased), price re-arms flat inside the OR, then the re-entry fires. Pine must reproduce ALL THREE, including day3's two-fire subtlety \u2014 that is exactly the kind of semantics config-text sync cannot verify.",
+ "fires": [
+  {
+   "bar": 10,
+   "ts_et": "2026-01-05 10:20",
+   "side": "long",
+   "level": 104.0,
+   "close": 104.6
+  },
+  {
+   "bar": 163,
+   "ts_et": "2026-01-07 10:05",
+   "side": "long",
+   "level": 104.0,
+   "close": 117.0
+  },
+  {
+   "bar": 169,
+   "ts_et": "2026-01-07 10:35",
+   "side": "long",
+   "level": 104.0,
+   "close": 106.0
+  }
+ ]
+}

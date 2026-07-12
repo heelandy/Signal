@@ -1,7 +1,13 @@
-# Partial & incomplete tasks — living checklist (updated 2026-07-06)
+# Partial & incomplete tasks — living checklist (updated 2026-07-11)
 
 Status of every feature requested in the strategy/platform docs vs implementation. Update on every
 move. Scope rule: only STACK/AUTO Pines + BOT receive code changes by default.
+
+> **2026-07-10 CLEAN-RECORD RESET:** the ORB forward record is judged from the 2026-07-10 open;
+> ML / mining / Boss-workers are **PARKED**; the 7DTE condor is the only band-pass study.
+> **2026-07-11:** full-system audit verified against code → `docs/REMEDIATION_PLAN.md` is the fix
+> authority (feature freeze active; pre-fix backtest numbers are indicative only, NOT approval
+> evidence). Current-state summary: `docs/STATUS.md`.
 
 Legend: ✅ done · 🟡 partial · ❌ not started · ⏸ deferred by user
 
@@ -72,7 +78,7 @@ Combined NQ verify: **257.6→283.8R, PF 1.36, DD unchanged**. QQQ/SPY/ES byte-i
 | Replay-parity report | ✅ | 100% exact, 4 symbols |
 | Unified audit trail | ✅ | `BOT/data/audit.jsonl` + `/api/audit` |
 | Post-trade learning queue → training rows | ✅ | `live_labels` (PIT snapshots ride with decisions from now on) |
-| Risk lockouts (weekly loss, streak, correlated buckets) | ✅ | + daily/trailing/kill/news from before |
+| Risk lockouts (weekly loss, streak, correlated buckets) | 🟡 | daily/trailing/kill wired in `risk.py` ✅ — but **news lockout is built, NOT wired** (module imported nowhere, no calendar source) and the live gates run on thin Account state (no P&L/positions fed — remediation Phase 5). Corrected 2026-07-11 (Phase 0.2) |
 | Strategy-module registry (asset class × style contract) | ✅ | 4 implemented, 4 spec_only |
 | Paper→live path documented + double live gate | ✅ | docs/PAPER_TO_LIVE.md |
 | Scalping/swing module research | 🟡 | SWING DONE: equities QQQ pullback + NQ breakout both 7/7 gauntlet → lineages swing-1d-0.1 / swing-fut-1d-0.1 (approvable, in the duel). SCALP still blocked on L2 bar-store overlap (external data — your depth files vs bar refresh) |

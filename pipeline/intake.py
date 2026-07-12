@@ -41,13 +41,41 @@ def _utf8_stdout() -> None:
             pass
 
 
+class IntakeStepError(RuntimeError):
+    """A pipeline step failed — the intake aborts here (fail closed, remediation Phase 4).
+    The old behavior printed the rc and CONTINUED, so datasets and training were built on top
+    of failed ingestion/resampling. Use --keep-going only for manual salvage runs."""
+
+
+KEEP_GOING = False              # set by --keep-going (manual salvage only, never the default)
+LEDGER: list = []               # ordered (cmd, rc) of every step this run
+
+
 def run(cmd, cwd=ROOT, timeout=3600) -> str:
     p = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=timeout)
     tail = (p.stdout or p.stderr or "").strip().splitlines()[-2:]
     print(f"  $ {' '.join(str(c) for c in cmd[1:])[:90]} -> rc={p.returncode} {' | '.join(tail)}",
           flush=True)
+    LEDGER.append({"cmd": " ".join(str(c) for c in cmd[1:3]), "rc": p.returncode})
+    if p.returncode != 0 and not KEEP_GOING:
+        raise IntakeStepError(
+            f"step failed rc={p.returncode}: {' '.join(str(c) for c in cmd[1:])[:120]} — "
+            f"aborting the intake (fail closed); re-run with --keep-going for manual salvage")
     return p.stdout or ""
+
+
+def qa_gate(report_path=None) -> None:
+    """Abort the intake when the QA report is red — datasets and training must NEVER build on a
+    store that failed freshness/volume/session/grain checks (Phase 4)."""
+    import json
+    p = Path(report_path) if report_path else (BOT / "data" / "ml" / "reports" / "dataqa.json")
+    rep = json.loads(p.read_text(encoding="utf-8"))
+    bad = {s: r.get("issues", ["unreadable"]) for s, r in rep.get("symbols", {}).items()
+           if not r.get("ok")}
+    if bad and not KEEP_GOING:
+        detail = "; ".join(f"{s}: {v[0]}" for s, v in list(bad.items())[:4])
+        raise IntakeStepError(f"QA RED for {sorted(bad)} — {detail} — datasets/training blocked")
 
 
 def main(folder: str, train: bool = True):
@@ -88,8 +116,9 @@ def main(folder: str, train: bool = True):
                 break
             time.sleep(10)
 
-    # 4) QA
+    # 4) QA — and the GATE: a red report stops the intake here (Phase 4 fail-closed)
     run([PY, str(ROOT / "pipeline" / "hs_data_qa.py")], timeout=1200)
+    qa_gate()
 
     # 5) datasets + rejects (5m always; 15m for the equity lineages)
     print("5) datasets + rejects", flush=True)
@@ -113,4 +142,9 @@ def main(folder: str, train: bool = True):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], train="--no-train" not in sys.argv)
+    KEEP_GOING = "--keep-going" in sys.argv
+    try:
+        main(sys.argv[1], train="--no-train" not in sys.argv)
+    except IntakeStepError as e:
+        print(f"\n=== INTAKE ABORTED (fail closed) ===\n{e}\nledger: {LEDGER}", flush=True)
+        sys.exit(1)

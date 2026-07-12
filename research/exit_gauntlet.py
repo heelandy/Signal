@@ -51,10 +51,10 @@ def gauntlet(sym):
     d = state(sym, "5m"); setgate(d)
     pc = profile(run(d, CAND)); pd_ = profile(run(d, DFLT))
     # 2x slippage stress on the candidate
-    base_slip = B.SLIP_TICKS
-    B.SLIP_TICKS = base_slip * 2
+    base_slip = B.SLIP_MULT
+    B.SLIP_MULT = base_slip * 2
     ps = profile(run(d, CAND))
-    B.SLIP_TICKS = base_slip
+    B.SLIP_MULT = base_slip
     if pc is None or pd_ is None:
         print(f"{sym}: not enough data"); return False
     checks = {

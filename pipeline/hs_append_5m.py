@@ -43,19 +43,31 @@ def main(sym: str, csv: str, tz: str = "UTC") -> None:
     old = pd.read_parquet(path)
     last = old["ts_et"].max()
     add = new[new["ts_et"] > last]
+    dropped = len(new) - len(add)
     if not len(add):
-        print(f"{sym}: nothing newer than {last} in {csv}")
-        return
+        # Phase 4 fail-closed: a fully-overlapping file appends NOTHING — that must be a loud
+        # non-zero exit, not a silent no-op (replacing an existing span is a deliberate rebuild)
+        raise SystemExit(f"{sym}: ALL {len(new):,} rows overlap the existing store (<= {last}) — "
+                         f"nothing appended. Rebuilding an existing span is a manual, explicit "
+                         f"operation; this script only appends after the last official bar.")
+    if dropped:
+        print(f"{sym}: {dropped:,} overlapping rows (<= {last}) dropped — official bars win")
     out = pd.concat([old, add], ignore_index=True).sort_values("ts_et")
     out.to_parquet(path, index=False)
     try:
         m = json.load(open(MANIFEST, encoding="utf-8"))
     except Exception:
         m = {}
+    import hashlib
+    _h = hashlib.sha256()
+    with open(csv, "rb") as _f:
+        for _chunk in iter(lambda: _f.read(1 << 20), b""):
+            _h.update(_chunk)
     m[sym.upper() + "_5m_append"] = {
         "official_cutoff": str(last), "appended": int(len(add)),
         "appended_range": [str(add["ts_et"].min()), str(add["ts_et"].max())],
-        "source": csv, "granularity": "5m-as-1m rows (resampled tfs exact)",
+        "source": csv, "sha256": _h.hexdigest(),          # Phase 4 source manifest
+        "granularity": "5m-as-1m rows (resampled tfs exact)",
         "created_at": pd.Timestamp.now("UTC").isoformat()}
     os.makedirs("data", exist_ok=True)
     json.dump(m, open(MANIFEST, "w", encoding="utf-8"), indent=1)

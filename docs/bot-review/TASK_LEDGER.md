@@ -1,5 +1,9 @@
 # Task Ledger — everything requested this session, with implementation status
 
+> **⚠ HISTORICAL SNAPSHOT — session-scoped (2026-07-02), DO NOT USE FOR STATUS.** Current truth:
+> `docs/STATUS.md` · living checklist: `docs/TASKS_INCOMPLETE.md` · fix plan:
+> `docs/REMEDIATION_PLAN.md`. *(Deprecated 2026-07-11, remediation Phase 0.)*
+
 Session: 2026-07-02 · branch `claude/trading-bot-review-pq637q` (kept fast-forward-merged into `master`).
 Status legend: ✅ done+tested · 🟡 done, needs your action (TradingView compile / data-drive run) · 📋 queued next.
 
