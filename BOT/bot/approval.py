@@ -26,12 +26,21 @@ REPORTS = BOT_ROOT / "data" / "ml" / "reports"
 
 
 def _load() -> dict:
-    if FILE.exists():
+    if not FILE.exists():
+        return {}                                        # clean first run
+    try:
+        return json.loads(FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        # FAIL LOUD, not silent (bug hunt W5): a corrupt approvals file used to return {} silently
+        # — trading was blocked (safe) but the operator was never told, and a later approve() would
+        # CLOBBER the unreadable file. Keep the safe empty result (nothing is approved) but page.
         try:
-            return json.loads(FILE.read_text(encoding="utf-8"))
+            from bot.alerts import alert
+            alert(f"approvals.json CORRUPT ({str(e)[:80]}) — treating as NO approvals (paper "
+                  f"trading blocked); inspect before re-approving", level="critical", source="approval")
         except Exception:
-            return {}
-    return {}
+            pass
+        return {}
 
 
 def _save(d: dict) -> None:

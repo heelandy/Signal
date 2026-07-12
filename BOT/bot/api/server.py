@@ -16,7 +16,7 @@ import random
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Header, HTTPException, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel
@@ -27,7 +27,27 @@ from bot.contracts import TradeCandidate, OrderRequest, OrderType, Mode
 from bot.risk import decide, Account
 from bot import performance as perf
 
-app = FastAPI(title="HIGHSTRIKE BOT", version="0.1.0")
+
+def _json_safe(o):
+    """Recursively replace NaN/±inf floats with None (bug hunt W6): FastAPI serializes with
+    allow_nan=False, so ONE NaN in a payload (a degenerate ratio, a missing live-data float)
+    500s the whole endpoint. A null is a clean, parseable stand-in the console can render."""
+    if isinstance(o, float):
+        return None if (o != o or o == float("inf") or o == float("-inf")) else o
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
+
+
+class SafeJSONResponse(JSONResponse):
+    """App-wide NaN/inf-safe JSON: no endpoint can crash (or emit invalid JSON) on a stray NaN."""
+    def render(self, content) -> bytes:
+        return super().render(_json_safe(content))
+
+
+app = FastAPI(title="HIGHSTRIKE BOT", version="0.1.0", default_response_class=SafeJSONResponse)
 _journal = Journal()
 _state = {"mode": settings.mode, "kill_switch": False}
 _broker_cache = {}
@@ -1524,6 +1544,18 @@ def signals(force: int = 0):
             # SESSION-STRATEGY OPENS (user 2026-07-10 "do I have to look for the confluence
             # myself?" — NO): weekend-fade + nq-composite entries surface + alert automatically
             "session_opens": _session_opens()}
+
+
+@app.get("/api/patterns")
+def patterns(sym: str = ""):
+    """PATTERN ADVISORY (read-only, docs/PATTERN_RECOGNITION_V1.md §13) — re-presents the LIVE scan
+    snapshot as the pattern panel per symbol, with the confluence/pass summary. Advisory ONLY: it
+    creates no orders and the certified path is untouched. Evidence chip (PR1): QQQ/SPY=CERTIFIED
+    (can PASS the gate); NQ=CONTEXT, ES=UNPROVEN, GC=UNVERIFIED (never pass). Fast: reads the
+    already-computed snapshot, no re-scan."""
+    from bot.strategy.pattern_advisory import watchlist_advisory
+    syms = [sym.upper()] if sym else list(_WATCH)
+    return watchlist_advisory(_latest.get("signals") or [], syms, "5m")
 
 
 @app.get("/api/asset_levels")

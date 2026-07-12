@@ -123,7 +123,19 @@ def decide(c: TradeCandidate, acct: Account, limits: RiskLimits | None = None) -
 
     # --- sizing ---
     risk_dollars = acct.equity * L.risk_per_trade
-    pv = acct.point_value.get(c.symbol.upper(), 1.0)
+    # FAIL-CLOSED point value (bug hunt L1, 2026-07-12): a silent $1/pt fallback would size a
+    # futures symbol missing from the registry 20-100x too big. Equities/ETFs legitimately trade
+    # at $1/share and are absent from the dict by design — but a symbol KNOWN to be futures with
+    # no point value must be refused, not guessed (the contract registry fails loud; so do we).
+    sym = c.symbol.upper()
+    if sym in acct.point_value:
+        pv = acct.point_value[sym]
+    else:
+        from bot.strategy.asset_config import asset_config, _FUTURES_SYMS
+        if asset_config(sym).is_futures or sym in _FUTURES_SYMS:
+            return _reject(cid, ReasonCode.MAX_CONTRACTS,
+                           f"no point value for futures {sym} — refusing to size (fail closed)")
+        pv = 1.0                                          # equity/ETF: $1/share
     risk_per_unit = c.risk * pv
     qty = int(risk_dollars // risk_per_unit) if risk_per_unit > 0 else 0
     if qty < 1:
@@ -131,8 +143,15 @@ def decide(c: TradeCandidate, acct: Account, limits: RiskLimits | None = None) -
                        f"risk/unit ${risk_per_unit:.2f} > budget ${risk_dollars:.2f} (account too small)")
     cap = L.max_contracts if pv != 1.0 else int(L.max_notional_mult * acct.equity / c.entry)  # futures vs equity
     qty = min(qty, max(cap, 1))
+    risk_used = round(qty * risk_per_unit, 2)
+    # DEGENERATE STOP guard (bug hunt W1, 2026-07-12): a subnormally tight stop makes risk/unit
+    # round to $0.00 — an APPROVED decision with max_risk_dollars=0 would RAISE in the contract
+    # ctor (decide must never throw on a constructible candidate). Reject it as an unusable stop.
+    if risk_used <= 0:
+        return _reject(cid, ReasonCode.NO_STOP,
+                       f"stop too tight to size (risk/unit ${risk_per_unit:.6g})")
     return RiskDecision(candidate_id=cid, status=RiskStatus.APPROVED, reason_code=ReasonCode.OK,
-                        max_qty=qty, max_risk_dollars=round(qty * risk_per_unit, 2),
+                        max_qty=qty, max_risk_dollars=risk_used,
                         stop_policy="struct", target_policy="cap4",
                         notes=f"risk ${risk_dollars:.0f} @ ${risk_per_unit:.2f}/unit")
 

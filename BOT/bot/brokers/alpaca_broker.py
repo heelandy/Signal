@@ -139,14 +139,18 @@ class AlpacaBroker(Broker):
     def recent_orders(self, limit: int = 100) -> list[dict]:
         """Broker order truth for the ExecutionService (Phase 5): every order incl. closed,
         with nested bracket legs — the fill-ingestion, recovery-adoption and bracket-integrity
-        paths all read this shape."""
+        paths all read this shape.
+
+        MUST RAISE on a broker error, never return [] (bug hunt W7/L8): recover() sets known=None
+        ONLY when this call raises ('broker down: leave rows for next pass'). A swallowed error that
+        returned [] made known={} (not None), so recover() would _fail_release every PENDING_SUBMIT
+        order as 'crash before submit' and RELEASE ITS IDEM KEY — a possibly-live order could then
+        be re-submitted (double order). poll_fills wraps this call in its own try/except, so raising
+        is safe there (a poll just retries next cycle)."""
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
-        try:
-            ords = self._client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL,
-                                                            limit=limit, nested=True))
-        except Exception:
-            return []
+        ords = self._client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL,
+                                                        limit=limit, nested=True))
         return [_map_order(o) for o in ords]
 
     def flatten(self) -> dict:

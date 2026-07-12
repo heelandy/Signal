@@ -44,13 +44,26 @@ def _get(key: str, default: str | None = None) -> str | None:
 
 def read_json(path, default=None):
     """Shared JSON-state reader (review 2026-07-07: six hand-rolled copies across approval/boss/
-    evolve/phase78/duel/l2 — one hardened pair now). Missing/corrupt file -> `default` ({})."""
+    evolve/phase78/duel/l2 — one hardened pair now). Missing file -> `default`. A CORRUPT file
+    (present but unparseable) also returns the safe default but FIRES A LOUD ALERT (bug hunt W5):
+    the old code returned the default SILENTLY for all six consumers, so a torn state file was
+    invisible. Missing = clean first run; corrupt = a real fault the operator must see."""
     import json
     from pathlib import Path as _P
+    p = _P(path)
+    dflt = {} if default is None else default
+    if not p.exists():
+        return dflt
     try:
-        return json.loads(_P(path).read_text(encoding="utf-8"))
-    except Exception:
-        return {} if default is None else default
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        try:
+            from bot.alerts import alert
+            alert(f"state file CORRUPT: {p.name} ({str(e)[:80]}) — using safe default; inspect the "
+                  f"file", level="critical", source="state")
+        except Exception:
+            pass
+        return dflt
 
 
 def write_json(path, obj) -> None:

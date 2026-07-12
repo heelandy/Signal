@@ -26,9 +26,20 @@ FILE = BOT_ROOT / "config" / "entry_removals.json"
 
 
 def _load() -> list[dict]:
+    if not FILE.exists():
+        return []                                        # no removals registry yet (legitimate)
     try:
         return json.loads(FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        # FAIL LOUD (bug hunt W5): a corrupt removals registry silently returned [] — the DANGEROUS
+        # direction, since an ADOPTED (retired, money-losing) group would then read as not-removed
+        # and TRADE AGAIN. Page the operator; the empty result is announced, never hidden.
+        try:
+            from bot.alerts import alert
+            alert(f"entry_removals.json CORRUPT ({str(e)[:80]}) — removals CANNOT be enforced; a "
+                  f"retired group could trade. Fix the registry.", level="critical", source="removals")
+        except Exception:
+            pass
         return []
 
 

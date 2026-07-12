@@ -2,12 +2,25 @@
 *(updated 2026-07-11 · maintained under `docs/REMEDIATION_PLAN.md` Phase 0.6 — update on every landed phase)*
 
 > **Remediation scoreboard (2026-07-12): Phases 0–7 + R + E + P1 (complete) + U (complete) ALL
-> LANDED — suite 256 green, every fix red-first-tested, the operator console LIVE on :8000**
+> LANDED — suite 294 green, every fix red-first-tested, the operator console LIVE on :8000**
 > (Mission Control renders the honest verdict: READINESS BLOCKED on data QA — the frozen-span
 > waiver made visible). Open: P1.3 ML program (gated on fills + crash root-cause), TV bar-replay
 > of the parity goldens (user — writes `parity_tv.json`), the 07.7 paper re-approval click
 > (user), commit (parked). Forward gates running; fills expected from Monday's open.
 > Deltas: `docs/REMEDIATION_DELTA.md`.
+>
+> **Bug hunt COMPLETE — exhaustive (2026-07-12): 17 confirmed / suite 261 → 339 (+78 pinned).**
+> All 8 seeded leads adjudicated + all 7 waves boxed + the "complete everything" pass fully run
+> (`docs/BUG_HUNT_PLAN.md` / `BUG_HUNT_LOG.md`). EXHAUSTIVE coverage: corrupt-file matrix = every
+> state file; swallow audit = all 255 `except` sites (money-path ALARMs fixed); calendar = DST
+> spring/fall + half-days; GET sweep = all 62 routes; W1 state-machine = 25-seed generative fuzz;
+> ops = REAL kill -9 (mutex reacquire + WAL durability) + headless-Edge console (pages clean) +
+> disk-full ENOSPC; W2 cross-artifact = structural + empirical real-store recompute (exact). Top
+> money-path fixes: OMS not thread-safe (→ thread-local + autocommit); cumulative filled_qty
+> double-counted partial fills; fill-replay stale basis across a direction flip; loss gates
+> bucketed by UTC not ET; recent_orders/journal swallows (recover double-submit + audit loss) now
+> loud; NaN/inf → 500 fixed app-wide (SafeJSONResponse); read_json/approvals/removals corruption
+> now fails LOUD. Mirror-tape symmetry pinned. All red-first, zero regressions, freeze intact.
 
 ## Right now
 

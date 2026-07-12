@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS exec_flags(k TEXT PRIMARY KEY, v TEXT);
 
 TERMINAL = ("FILLED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED", "INVESTIGATION_REQUIRED")
 SCHEMA_V = 3                     # P1.5: bump WITH a migration below, never without
+_SCHEMA_READY: dict[str, bool] = {}   # db paths whose schema has been created (per-thread conns skip it)
 
 
 class AccountUnproven(RuntimeError):
@@ -82,6 +84,19 @@ def _alert(msg: str, level: str = "critical") -> None:
         pass
 
 
+def _fill_et_date(at) -> str:
+    """The ET calendar date of a fill timestamp (bug hunt W4): daily/weekly loss buckets are ET-DAY
+    buckets, but fills store the broker's UTC `updated_at`. An overnight futures fill after ~20:00
+    ET has a NEXT-day UTC date — bucketing on `str(at)[:10]` (UTC) put it in the wrong ET day and
+    mis-fed the daily/weekly loss gates. Naive stamps (test fixtures) are treated as already-local."""
+    s = str(at)
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s[:10]
+    return (dt.date() if dt.tzinfo is None else dt.astimezone(ET).date()).isoformat()
+
+
 class ExecutionService:
     STALE_SEC = 300                  # non-terminal order untouched this long -> investigation
 
@@ -92,28 +107,57 @@ class ExecutionService:
         if self.mode is not Mode.LIVE and not getattr(broker, "is_paper", True):
             raise ValueError("non-live mode with a live broker — refused (fail closed)")
         self.now = now or time.time
+        self._db_path = str(db_path)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=5000")
-        self.db.executescript(_SCHEMA)
+        # THREAD-LOCAL connections (bug hunt W1, 2026-07-12): this service is a PROCESS-WIDE
+        # singleton (_broker_cache["exec"]) used from the scan-beat thread AND FastAPI request
+        # threads at once. ONE shared sqlite connection (check_same_thread=False) corrupts under
+        # concurrent submit/poll — InterfaceError 'bad parameter', 'no more rows available', a
+        # NoneType fetch. Each thread gets its OWN connection (`self.db` is now per-thread); WAL +
+        # busy_timeout serialize writes at the FILE level and UNIQUE(idem_key) still admits exactly
+        # one submit per signal. No call-site changes — every `self.db.execute` picks up its thread's
+        # connection.
+        self._local = threading.local()
+        conn = self.db                                         # init-thread connection + schema
         # P1.5 schema versioning (ENFORCED): 1=base · 2=+session/family/grade · 3=+candidate_id.
         # A store written by NEWER code refuses to run under older code (fail loud, never corrupt).
-        cur_v = self.db.execute("PRAGMA user_version").fetchone()[0]
+        cur_v = conn.execute("PRAGMA user_version").fetchone()[0]
         if cur_v > SCHEMA_V:
             raise RuntimeError(f"execution.db is schema v{cur_v}, this code understands v{SCHEMA_V} "
                                f"— refusing to run OLD code on a NEWER store (P1.5)")
-        cols = {r[1] for r in self.db.execute("PRAGMA table_info(exec_orders)")}
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(exec_orders)")}
         for c in ("session", "family", "grade",                # Phase E.1: classification dims
                   "candidate_id"):                             # P1.1 linkage: tracker <-> fills
             if c not in cols:
-                self.db.execute(f"ALTER TABLE exec_orders ADD COLUMN {c} TEXT")
-        self.db.execute(f"PRAGMA user_version={SCHEMA_V}")
-        self.db.commit()
+                conn.execute(f"ALTER TABLE exec_orders ADD COLUMN {c} TEXT")
+        conn.execute(f"PRAGMA user_version={SCHEMA_V}")
+        conn.commit()
         if journal is None:
             from bot.journal import Journal
             journal = Journal()
         self.journal = journal
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        """This thread's sqlite connection (bug hunt W1): one connection per thread makes the
+        process-wide singleton safe under concurrent scan-beat + request-thread access. WAL lets
+        the connections share the file; each is opened once per thread and reused."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            # isolation_level=None (AUTOCOMMIT): every write is its own short transaction. The
+            # default deferred-transaction mode holds a read lock across account_truth's SELECTs and
+            # then upgrades to a write for _set_flag — 12 connections doing read-then-upgrade
+            # DEADLOCK (busy_timeout can't break a true deadlock -> 'database is locked'). This
+            # service already writes per-step-durably (PENDING_SUBMIT committed BEFORE the broker
+            # call), so no group atomicity is lost; the explicit .commit() calls become no-ops.
+            conn = sqlite3.connect(self._db_path, check_same_thread=False, isolation_level=None)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=10000")          # wait, don't crash, under write contention
+            if not _SCHEMA_READY.get(self._db_path):           # create the schema ONCE per db file,
+                conn.executescript(_SCHEMA)                    # not on every thread's connection (a
+                _SCHEMA_READY[self._db_path] = True            # 12-way CREATE storm = 'database is locked')
+            self._local.conn = conn
+        return conn
 
     # ── flags / halt ─────────────────────────────────────────────────────────
     def _flag(self, k: str):
@@ -141,7 +185,11 @@ class ExecutionService:
         return datetime.fromtimestamp(self.now(), tz=ET).date().isoformat()
 
     def idem_key(self, c: TradeCandidate, session: str = "") -> str:
-        raw = (f"{c.symbol}|{c.side.value}|{round(float(c.entry), 4)}|{session}|"
+        # `setup` MUST be in the key (bug hunt L2, 2026-07-12): the duplicate message claims "same
+        # setup, same trade date", but omitting setup here meant two DIFFERENT setups at the same
+        # symbol/side/price/day collided as a FALSE duplicate — the second order silently dropped.
+        setup = getattr(c, "setup", "") or ""
+        raw = (f"{c.symbol}|{c.side.value}|{setup}|{round(float(c.entry), 4)}|{session}|"
                f"{self._trade_date()}|{c.strategy_version}")
         return hashlib.sha1(raw.encode()).hexdigest()[:20]
 
@@ -185,12 +233,16 @@ class ExecutionService:
                 b["avg"] = (b["avg"] * abs(b["net"]) + price * qty) / tot if tot else 0.0
                 b["net"] += signed
             else:                                       # reduce / close -> realize
-                closed = min(abs(signed), abs(b["net"]))
-                direction = 1 if b["net"] > 0 else -1
+                net_before = b["net"]
+                closed = min(abs(signed), abs(net_before))
+                direction = 1 if net_before > 0 else -1
                 realized.append((at, (price - b["avg"]) * closed * direction * pv))
-                b["net"] += signed
+                b["net"] = net_before + signed
                 if b["net"] == 0:
                     b["avg"] = 0.0
+                elif b["net"] * net_before < 0:          # FLIPPED through zero (bug hunt L3, 2026-07-12):
+                    b["avg"] = price                     # the residual is a NEW position opened at THIS
+                    #                                      fill's price, not the stale pre-flip average
         return book, realized
 
     def account_truth(self, feed_healthy: bool | None = True,
@@ -208,8 +260,8 @@ class ExecutionService:
         monday = (datetime.fromisoformat(today) -
                   timedelta(days=datetime.fromisoformat(today).weekday())).date().isoformat()
         _, realized = self._replay_fills()
-        daily = sum(p for at, p in realized if str(at)[:10] == today)
-        weekly = sum(p for at, p in realized if str(at)[:10] >= monday)
+        daily = sum(p for at, p in realized if _fill_et_date(at) == today)
+        weekly = sum(p for at, p in realized if _fill_et_date(at) >= monday)
         streak = 0
         for _, p in reversed(realized):
             if p < 0:
@@ -277,9 +329,11 @@ class ExecutionService:
         rd = decide(c, acct)
         try:
             self.journal.record(rd)
-        except Exception:
-            pass
-        if not rd.approved:
+        except Exception as e:                           # ALARM, not silent (bug hunt W7/L8): a
+            _alert(f"journal.record(risk {c.symbol}) FAILED — OMS is truth, but the audit record "  # journal
+                   f"is lost (full disk?): {e}", level="warn")                                       # write is
+        if not rd.approved:                                                                          # best-effort
+
             self._fail_release(oid, f"risk {rd.reason_code.value}: {rd.notes}")
             return ExecutionResult("rejected", corr, order_id=oid,
                                    reason=f"risk {rd.reason_code.value}: {rd.notes}")
@@ -307,8 +361,9 @@ class ExecutionService:
         self._update(oid, "SUBMITTED", f"src={source}", broker_order_id=ev.broker_order_id)
         try:
             self.journal.record(ev)
-        except Exception:
-            pass
+        except Exception as e:                           # ALARM, not silent (bug hunt W7/L8)
+            _alert(f"journal.record(fill {c.symbol}) FAILED — order SUBMITTED + in the OMS, but the "
+                   f"journal audit record is lost (full disk?): {e}", level="warn")
         return ExecutionResult("submitted", corr, order_id=oid,
                                broker_order_id=ev.broker_order_id, qty=qty)
 
@@ -337,22 +392,31 @@ class ExecutionService:
             if state in ("SUBMIT_UNKNOWN", "PENDING_SUBMIT"):   # recovery adoption: broker truth
                 self._update(oid, "SUBMITTED", "adopted from broker after unknown/crash",
                              broker_order_id=str(o.get("id")))
-            filled = int(float(o.get("filled_qty") or 0))
+            filled = int(float(o.get("filled_qty") or 0))     # CUMULATIVE filled qty (broker truth)
             price = float(o.get("avg_fill_price") or 0.0)
             if filled > 0 and price > 0:
                 fid = f"{o.get('id')}:{filled}"
                 cur = self.db.execute("SELECT 1 FROM exec_fills WHERE fill_id=?", (fid,)).fetchone()
                 if not cur:
-                    self.db.execute(
-                        "INSERT OR IGNORE INTO exec_fills(fill_id, order_id, broker_order_id, "
-                        "symbol, side, qty, price, at) VALUES(?,?,?,?,?,?,?,?)",
-                        (fid, oid, str(o.get("id")), sym, side, filled, price,
-                         str(o.get("updated_at") or utcnow_iso())))
-                    self.db.commit()
-                    ingested += 1
-                    self._mark_tracker_filled(oid)             # P1.1 linkage: shadow -> paper_filled
-                    if status in ("filled", "partially_filled"):
-                        self._bracket_check(oid, sym, o)
+                    # INCREMENTAL ingest (bug hunt W1 fuzz, 2026-07-12): filled_qty is CUMULATIVE.
+                    # Storing it as the fill qty double-counted a partial-then-full sequence (5 then
+                    # 10 booked 15 shares for a 10-lot -> false reconcile mismatch / wrong P&L). Book
+                    # only the DELTA since what we've already recorded for this order.
+                    already = int(self.db.execute(
+                        "SELECT COALESCE(SUM(qty), 0) FROM exec_fills WHERE order_id=?",
+                        (oid,)).fetchone()[0])
+                    delta = filled - already
+                    if delta > 0:
+                        self.db.execute(
+                            "INSERT OR IGNORE INTO exec_fills(fill_id, order_id, broker_order_id, "
+                            "symbol, side, qty, price, at) VALUES(?,?,?,?,?,?,?,?)",
+                            (fid, oid, str(o.get("id")), sym, side, delta, price,
+                             str(o.get("updated_at") or utcnow_iso())))
+                        self.db.commit()
+                        ingested += 1
+                        self._mark_tracker_filled(oid)         # P1.1 linkage: shadow -> paper_filled
+                        if status in ("filled", "partially_filled"):
+                            self._bracket_check(oid, sym, o)
             if status == "filled":
                 self._update(oid, "FILLED", f"avg {price}")
             elif status in ("canceled", "cancelled"):

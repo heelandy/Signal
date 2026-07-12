@@ -58,11 +58,14 @@ def append_bars(path: Path | str, fetched: pd.DataFrame, sym: str) -> dict:
     if ts.dt.tz is None:
         ts = ts.dt.tz_localize(ET)
     new["ts_et"] = ts.dt.tz_convert(ET)
-    # sanity (Phase 4 spirit): broken candles never enter the store
+    # sanity (Phase 4 spirit): broken candles never enter the store. NOTE np.isfinite is REQUIRED
+    # (bug hunt W3.2): `(cols > 0).all()` passes +inf (inf > 0 is True) and pd.to_numeric does not
+    # coerce inf — an inf bar would otherwise enter the store.
     for c in ("open", "high", "low", "close"):
         new[c] = pd.to_numeric(new[c], errors="coerce")
-    new = new[(new["high"] >= new["low"]) & (new[["open", "high", "low", "close"]] > 0).all(axis=1)
-              & new[["open", "high", "low", "close"]].notna().all(axis=1)]
+    ohlc = new[["open", "high", "low", "close"]]
+    new = new[(new["high"] >= new["low"]) & (ohlc > 0).all(axis=1)
+              & ohlc.notna().all(axis=1) & np.isfinite(ohlc).all(axis=1)]
     old_ts = pd.to_datetime(old["ts_et"])
     if old_ts.dt.tz is None:                         # some stores keep naive ET
         last = old_ts.max()
@@ -70,9 +73,22 @@ def append_bars(path: Path | str, fetched: pd.DataFrame, sym: str) -> dict:
     else:
         last = old_ts.max()
         new_key = new["ts_et"]
-    add = new[new_key > last].sort_values("ts_et")
+    # dedup within the fetched frame (bug hunt W3.3): a router that repeats a timestamp must not
+    # double-append that bar — keep the last value for each ts.
+    add = (new[new_key > last].sort_values("ts_et")
+           .drop_duplicates(subset="ts_et", keep="last"))
     if not len(add):
         return {"sym": sym, "appended": 0, "last": str(last)}
+    # CONTINUITY GUARD (bug hunt W3.1): a mis-routed fetch (wrong symbol's prices) passes every
+    # candle-sanity check but can never CONTINUE the series — an NQ store (~20000) does not step
+    # into SPY prices (~550). Refuse an impossible gap from the store's last close; fail closed so
+    # the QA never blesses a corrupted store. 5x is far beyond any real move, even across the freeze.
+    last_close = float(old.loc[old_ts.idxmax(), "close"])
+    first_new = float(add["close"].iloc[0])
+    if last_close > 0 and not (0.2 <= first_new / last_close <= 5.0):
+        return {"sym": sym, "appended": 0,
+                "error": f"discontinuity: store last close {last_close:g} vs first new {first_new:g} "
+                         f"(x{first_new / last_close:.2g}) — refusing (wrong symbol / corrupt feed)"}
     et = add["ts_et"]
     mins = et.dt.hour * 60 + et.dt.minute
     wk = et.dt.dayofweek < 5
@@ -114,10 +130,12 @@ def append_bars(path: Path | str, fetched: pd.DataFrame, sym: str) -> dict:
 def _manifest(sym: str, rows: pd.DataFrame, n: int) -> None:
     """Extend the `{SYM}_5m_append` provenance row — the SAME key pipeline/hs_append_5m uses, so
     the data-QA 1m grain exception keeps covering the whole live-appended span."""
-    try:
+    # FAIL LOUD on a corrupt manifest (bug hunt W3.4/L7): the old bare `except: m={}` silently RESET
+    # the whole manifest — one torn file wiped EVERY symbol's provenance and the QA grain exception
+    # with it. A missing file (first run) is fine; a present-but-unparseable one is a real fault.
+    m = {}
+    if MANIFEST.exists():
         m = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    except Exception:
-        m = {}
     k = f"{sym.upper()}_5m_append"
     rec = m.get(k) or {"appended": 0, "appended_range": [str(rows["ts_et"].min()), None]}
     rec["appended"] = int(rec.get("appended", 0)) + n
@@ -129,7 +147,9 @@ def _manifest(sym: str, rows: pd.DataFrame, n: int) -> None:
     rec["updated_at"] = pd.Timestamp.now("UTC").isoformat()
     m[k] = rec
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST.write_text(json.dumps(m, indent=1), encoding="utf-8")
+    tmp = MANIFEST.with_suffix(".json.tmp")               # ATOMIC (bug hunt W3.4/L7): tmp + replace so
+    tmp.write_text(json.dumps(m, indent=1), encoding="utf-8")   # a crash mid-write can't tear the manifest
+    os.replace(tmp, MANIFEST)
 
 
 def persist_day(syms=STORE_SYMS, spawn_post: bool = True, period: str = "60d") -> dict:

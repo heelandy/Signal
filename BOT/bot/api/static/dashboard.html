@@ -181,6 +181,14 @@
       <div id="livemkt"><div class="mut">loading…</div></div></div>
   </div>
 
+  <!-- PATTERN ADVISORY (read-only; docs/PATTERN_RECOGNITION_V1.md) -->
+  <div class="sec">Pattern Advisory <span class="mut" style="text-transform:none;letter-spacing:0;font-weight:400">— advisory only, no orders · QQQ/SPY certified · NQ/ES/GC context</span></div>
+  <div class="grid" id="patgrid">
+    <div class="card col12"><h2><svg class="ic"><use href="#i-target"/></svg> Pattern Advisory
+        <span id="patsum" class="r"></span></h2>
+      <div id="patterns" style="overflow-x:auto"><div class="mut">loading…</div></div></div>
+  </div>
+
   <!-- OPTIONS PERFORMANCE -->
   <div class="grid" style="margin-top:12px">
     <div class="card col12"><h2><svg class="ic"><use href="#i-activity"/></svg> Options Performance (30D)</h2>
@@ -410,6 +418,39 @@ async function loadAccount(){
 // TIERED refresh — fast (status/account) vs data (perf/tables). Each panel only re-renders when its
 // HTML actually changed (setHTML), so the page never fully "reloads" — only what needs it updates.
 let LASTPERF={};
+// PATTERN ADVISORY (read-only): re-presents the live scan as the pattern panel. NQ/ES/GC print
+// CONTEXT and can never PASS the gate; only QQQ/SPY (certified) can. Advisory only — no orders.
+async function loadPatterns(){
+  let d; try{ d=await J('/api/patterns'); }catch(e){ return; }
+  const ev_c={CERTIFIED:'--grn',CONTEXT:'--mut',UNPROVEN:'--yel',UNVERIFIED:'--mut',INSUFFICIENT:'--mut'};
+  const st_c={CONFIRMED:'--grn',WATCHING:'--yel',ARMED:'--yel','PULLBACK PENDING':'--pur',INVALIDATED:'--red','BLOCKED (removed)':'--red',WAIT:'--mut'};
+  const lv=x=>x==null?'—':x;
+  const syms=d.symbols||{}; let rows='';
+  ['QQQ','SPY','NQ','ES','GC'].filter(s=>syms[s]).forEach(s=>{
+    const adv=syms[s], ev=adv.header.evidence, ec=ev_c[ev]||'--mut';
+    (adv.panels||[]).forEach(p=>{
+      const sc=st_c[p.state]||'--mut';
+      const conf=(p.confluence&&p.confluence.length)?p.confluence.join(' · '):'—';
+      const pass=p.passes?`<span class="badge" style="background:rgba(45,212,167,.16);color:var(--grn)">PASS</span> `:'';
+      rows+=`<tr${p.active?'':' style="opacity:.5"'}>
+        <td style="font-weight:700">${s}</td>
+        <td><span class="badge" style="background:rgba(255,255,255,.04);border:1px solid var(${ec});color:var(${ec})">${ev}</span></td>
+        <td>${lv(p.pattern)}</td>
+        <td style="color:var(${sc});font-weight:700">${lv(p.state)}</td>
+        <td>${lv(p.grade)}</td>
+        <td class="mut" style="font-size:10px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lv(p.location)}</td>
+        <td style="font-variant-numeric:tabular-nums;white-space:nowrap">${lv(p.entry)}<span class="mut"> / </span>${lv(p.stop)}</td>
+        <td class="mut" style="font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${conf}</td>
+        <td style="white-space:nowrap">${pass}<span style="color:var(${p.passes?'--txt':'--mut'})">${lv(p.action)}</span></td></tr>`;
+    });
+  });
+  $('#patterns').innerHTML = rows
+    ? `<table style="width:100%;font-size:11px;border-collapse:collapse"><thead><tr>
+        <th>SYM</th><th>EVIDENCE</th><th>PATTERN</th><th>STATE</th><th>GR</th><th>LOCATION</th><th>ENTRY / STOP</th><th>CONFLUENCE</th><th>ACTION</th></tr></thead><tbody>${rows}</tbody></table>`
+    : '<div class="mut">no advisory data yet — patterns appear as setups form</div>';
+  const su=d.summary||{};
+  $('#patsum').textContent = `${su.advisories||0} advisories · ${su.with_confluence||0} confluence · ${su.passing||0} pass`;
+}
 async function refreshFast(){ loadStatusBar(); loadAccount(); }
 async function refreshData(){
   const p=await J('/api/performance'); LASTPERF=p;
@@ -992,7 +1033,7 @@ setInterval(()=>{const m=marketOpen()?'OPEN':'CLOSED'; if($('#f-market').textCon
 tape();
 // TIERED polling (was one 5s full refresh): status 6s · signals+book 12s · perf/tables 20s · market/ORB 60s
 refreshFast();  setInterval(refreshFast, 6000);
-scanSignals();  loadDecisions();  setInterval(()=>{scanSignals(); loadDecisions();}, 12000);
+scanSignals();  loadDecisions();  loadPatterns();  setInterval(()=>{scanSignals(); loadDecisions(); loadPatterns();}, 12000);
 refreshData();  setInterval(refreshData, 20000);
 loadMarket();   setInterval(loadMarket, 60000);
 loadQuotes('indices'); setInterval(()=>loadQuotes(MKTGROUP), 30000);
@@ -1001,13 +1042,14 @@ loadContract(); checkProp();
 </script>
 </div><!-- ═══ PHASE U — OPERATE bundle (docs/UI_PLAN.md steps 1,2,4,5,6) ═══ -->
 <style>
-  .u-card{border:1px solid #2a2f3a;border-radius:8px;padding:10px 12px;margin:10px 0;background:rgba(20,24,32,.6)}
+  .u-card{border:1px solid #2a2f3a;border-radius:8px;padding:10px 12px;margin:10px 0;background:rgba(20,24,32,.6);overflow-x:auto}
   .u-h{font-weight:700;margin:0 0 6px;font-size:14px;letter-spacing:.4px}
   .u-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;margin-right:6px}
   .u-ok{background:#123d1e;color:#5fdc82}.u-bad{background:#43151a;color:#ff7a86}
   .u-unk{background:#3a3320;color:#e8c15a}.u-deg{background:#3a2a12;color:#f0a95a}
   .u-mut{color:#8a93a5;font-size:12px}.u-mono{font-family:ui-monospace,Consolas,monospace}
   .u-row{display:flex;flex-wrap:wrap;gap:10px}.u-col{flex:1 1 320px;min-width:300px}
+  .u-card table,.u-card .u-tbl{max-width:100%}
   #u-mission{position:sticky;top:0;z-index:50;border-bottom:2px solid #2a2f3a;background:#0d1117;padding:8px 14px}
   .u-gate{font-size:12px;margin:2px 0}.u-tbl{width:100%;border-collapse:collapse;font-size:12px}
   .u-tbl th,.u-tbl td{padding:4px 8px;border-bottom:1px solid #232838;text-align:left;font-size:12.5px}
@@ -1032,7 +1074,12 @@ const $=id=>document.getElementById(id);
    clipped/unreadable). Relocate on init; the mission strip stays body-level (full-width). */
 (function(){const host=document.querySelector(".app .wrap")||document.querySelector(".app");
   const sec=document.getElementById("u-operate");
-  if(host&&sec) host.appendChild(sec);})();
+  if(host&&sec) host.appendChild(sec);
+  /* user 2026-07-12: the Entry Console answers the same question as the Pattern Advisory
+     ("should I enter now?") — move it directly UNDER the advisory strip. Its JS still finds it
+     by id (uEntry -> #u-entry-body), so only the DOM position changes. */
+  const eg=document.getElementById("patgrid"), ec=document.getElementById("u-entry");
+  if(eg&&ec) eg.insertAdjacentElement("afterend", ec);})();
 const chip=(state,txt)=>`<span class="u-chip u-${state}">${esc(txt)}</span>`;
 const four=v=>v===true?chip("ok","HEALTHY"):v===false?chip("bad","BLOCKED"):chip("unk","UNKNOWN");
 const J=async u=>{const r=await fetch(u);return r.json();};
