@@ -76,14 +76,20 @@ def _train_impl(sym: str, window: int, archs: tuple | None, n_splits: int, embar
     if not buckets["monotone_ok"]:
         return {**report, "promote": False,
                 "reason": "high-confidence sequences do not out-earn low-confidence OOS — NN not useful"}
-    challenger = CalibratedModel(zoo[best]().fit(X, y), calib)
+    # LEAKAGE FIX (Signal-Certificate T5, 2026-07-12): the promotion AUC must come from a model that
+    # NEVER saw the holdout. The old code fit the challenger on ALL (X,y) then "evaluated" on the last
+    # 30% X[k:] — which was IN the training set → inflated holdout AUC → wrongful promotion. The GATE
+    # model is now fit on the first 70% ONLY and scored on the untouched last 30%; the DEPLOYED model
+    # (registered below) still uses all data.
     k = int(len(X) * 0.7)
-    ch_auc = auc(y[k:], challenger.predict_proba(X[k:]))
+    gate_model = CalibratedModel(zoo[best]().fit(X[:k], y[:k]), calib)   # never sees X[k:]
+    ch_auc = auc(y[k:], gate_model.predict_proba(X[k:]))                 # honest holdout AUC
     champ, _meta = _reg.champion(NN_MODEL_NAME)
     cm_auc = auc(y[k:], champ.predict_proba(X[k:])) if champ is not None else float("-inf")
     promote = champ is None or (ch_auc == ch_auc and ch_auc >= cm_auc)
     report.update({"challenger_auc": round(float(ch_auc), 3), "promote": bool(promote)})
     if promote:
+        challenger = CalibratedModel(zoo[best]().fit(X, y), calib)      # deploy on ALL data
         version = f"{sym}-{best}-w{window}-auc{results[best]['oos_auc']}"
         _reg.register(challenger, NN_MODEL_NAME, version,
                       {"oos_auc": results[best]["oos_auc"], "oos_brier": results[best]["oos_brier"],

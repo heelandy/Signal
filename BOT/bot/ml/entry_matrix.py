@@ -53,9 +53,12 @@ def _rows_shadow() -> tuple[list[dict], str]:
                 blob = json.loads(j or "{}") or {}
             except Exception:
                 pass
+            from bot.strategy.entry_group import entry_group_id
             rows.append({"symbol": str(sym).upper(), "side": side or "—",
                          "session": sess or "—", "family": fam or "—",
                          "grade": blob.get("grade") or "—",
+                         "entry_group_id": entry_group_id(sym, side, sess,
+                                                          blob.get("tf") or "5m", fam),  # T2
                          "regime": blob.get("regime") or blob.get("macro_regime") or "—",
                          "net_r": float(r), "day": str(at or "")[:10]})
     finally:
@@ -92,8 +95,10 @@ def _rows_paper() -> tuple[list[dict], str]:
             sym, side, sess, fam, grade, planned, stop, _ = best
             pv = POINT_VALUE.get(str(sym).upper(), 1.0)
             risk = abs(float(planned) - float(stop)) * pv if planned and stop else None
+            from bot.strategy.entry_group import entry_group_id
             rows.append({"symbol": str(sym).upper(), "side": side or "—",
                          "session": sess or "—", "family": fam or "—", "grade": grade or "—",
+                         "entry_group_id": entry_group_id(sym, side, sess, "5m", fam),  # T2
                          "regime": "—", "net_r": (pnl / risk) if risk else 0.0,
                          "day": str(at)[:10]})
         con.close()
@@ -201,9 +206,13 @@ def build_backtest_rows(runs=(("QQQ", "5m"), ("SPY", "5m"), ("NQ", "5m"), ("ES",
     for sym, tf in runs:
         d = load_state(sym, tf, "rth")
         tr = run_backtest(d)
+        from bot.strategy.entry_group import entry_group_id
         for _, t in tr.iterrows():
             rows.append({"symbol": sym, "side": t["direction"], "session": "rth",
                          "family": f"orb@{tf}", "grade": "—",
+                         # T2: canonical group id — the SAME id the live scan/execution resolve, so a
+                         # backtest cell and a paper cell for the same group join.
+                         "entry_group_id": entry_group_id(sym, t["direction"], "rth", tf, f"orb@{tf}"),
                          "regime": str(t.get("regime", "—")),
                          "net_r": float(t["net_R"]), "day": str(t["entry_time"])[:10]})
     out = {"lineage": f"corrected engine (Phases 1-3) · frozen store span (pre-R waiver) · "

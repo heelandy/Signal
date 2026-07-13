@@ -21,16 +21,28 @@
 > bucketed by UTC not ET; recent_orders/journal swallows (recover double-submit + audit loss) now
 > loud; NaN/inf → 500 fixed app-wide (SafeJSONResponse); read_json/approvals/removals corruption
 > now fails LOUD. Mirror-tape symmetry pinned. All red-first, zero regressions, freeze intact.
+>
+> **Bug hunt — 2nd pass (2026-07-12): Signal-Certificate / T1-T5 new surfaces. 1 confirmed-fixed /
+> 1 confirmed-deferred (pinned) / 2 false-alarm-with-proof. Suite 339 → 399 + 2 strict-xfail.**
+> Full 89-test armor re-run green. FIXED: `certify_and_fire` propagated a submit exception AFTER
+> the ORDER-READY alert (firing door could crash mid-fire) → now captured into the cert, never
+> propagated. DEFERRED (pinned strict-xfail): T4 round-trip finalization is unreachable via the
+> live poll path + marks the wrong candidate — but `decisions.state` has NO consumer yet (forward
+> scaffolding), and the fix needs identity-join plumbing on the REMAINING list. FALSE-ALARM: T2
+> family→category coupling (no false-split — ORB aliases collapse to one id); NQ Asia "not arming"
+> at 18:45 (correct — Asia OR forms 19:00-20:00 ET, armable after 20:00). Nine certificate gates
+> verified consistently fail-closed (no false-PASS). Freeze intact.
 
 ## Right now
 
 - **Strategy version:** `orb-standard-2026.07.7` (close-confirm / watch-state, F78 pullback rules)
 - **Mode:** PAPER · live **HARD-LOCKED** (`config/LIVE_APPROVED.lock` absent — double gate) · kill switch OFF
-- **Paper autotrade:** **OFF** — Phase 5 landed 2026-07-11, so decision 0.5's condition is met:
-  the toggle may be re-armed (user action) and every order it places now goes through the
-  ExecutionService (risk on real account state → persistent OMS → fills → reconciliation).
-  Shadow tracking runs regardless of this toggle. ⚠ restart the worker/server first — the
-  running processes predate the Phase 1–5 code.
+- **Paper autotrade:** **ARMED** (re-armed after Phase 5 landed 2026-07-11 — decision 0.5's
+  condition met; forward gates running since 2026-07-11 ~23:00 ET via the cross-process ctl
+  channel). Every order it places goes through the ExecutionService (risk on real account state →
+  persistent OMS → fills → reconciliation). Market closed + 0/60 broker-paper fills → no orders yet;
+  first fills expected from the next armed session. Shadow tracking runs regardless of this toggle.
+  (Single source of truth for this field — do not restate elsewhere.)
 - **Clean forward record:** judged from the **2026-07-10 open**; ML / mining / Boss-workers
   **PARKED**; the 7DTE condor is the only band-pass study.
 - **Feature freeze:** ACTIVE (no new strategies/indicators/dashboards/AI features —

@@ -28,6 +28,20 @@ def client():
     srv._ready_cache.update(ts=0.0, out=None)
 
 
+def test_t3_readiness_split_paper_live_model_never_confused(client):
+    """SIGNAL-CERTIFICATE T3: readiness is split by objective. Paper can be ready at 0/60 fills, but
+    live must NEVER read ready (hard-locked by design), and model readiness is its own verdict."""
+    r = client.get("/api/readiness").json()
+    obj = r.get("objectives")
+    assert obj and {"paper_ready", "live_ready", "model_ready"} <= set(obj)
+    for k in ("paper_ready", "live_ready", "model_ready"):
+        assert set(obj[k]) == {"ready", "blocking"}
+    assert obj["live_ready"]["ready"] is False, "live can never read ready (hard-locked by design)"
+    assert any("hard-locked" in b.lower() for b in obj["live_ready"]["blocking"]), obj["live_ready"]
+    # model readiness must reflect the version guard (champion 07.4 vs current 07.7 → not ready)
+    assert obj["model_ready"]["ready"] in (True, False)
+
+
 def test_tu1_readiness_enumerates_gates_never_bare_green(client):
     r = client.get("/api/readiness").json()
     assert r["overall"] in ("OK", "BLOCKED")

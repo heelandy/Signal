@@ -68,6 +68,16 @@ Persisted **before** any alert is sent; the alert carries its id + hash. Content
 | **ML** | compatible model + full inputs, or abstain | silent fallback / stale model | champion is 07.4, live is 07.7 → **must abstain** until rebuilt (T5) |
 | **Audit** | certificate saved + hash verified | persistence fails | not built yet — the certificate store is new |
 
+> **CERTIFICATE + `certify_and_fire()` LANDED 2026-07-12 (`bot/signal_certificate.py`, 22 tests).**
+> The nine gates run; **UNKNOWN==BLOCKED** (missing proof blocks like an explicit failure); the
+> certificate is **persisted (audit gate) BEFORE any alert**, the alert carries its hash; a blocked
+> candidate produces an auditable BLOCKED cert and NO alert / NO order; ML abstain is fine but a
+> silent fallback (scored on incomplete inputs) blocks; identical inputs → identical decision. It
+> orchestrates the existing services (risk.decide / approval / removals / evidence_manifest /
+> entry_group_id) — no new strategy logic. **REMAINING:** wire the live scan / manual / webhook
+> sources to route through it (the sources currently emit proposals directly); populate ctx from the
+> real scan/broker/data state; expiry enforcement.
+
 ## 4. The one firing door — `certify_and_fire()`
 
 Analogue of ExecutionService (the one *order* door): **one central path every Python signal source
@@ -82,6 +92,19 @@ Each track: **grounded current status → what remains → definition of done.**
 are marked ✔ (checked against the tree 2026-07-12).
 
 ### T1 — Immutable evidence + fingerprint semantics  *(the keystone — unblocks everything)*
+> **KEYSTONE LANDED 2026-07-12 (suite 362 → 367).** `pipeline/hs_data_qa.py` now emits an
+> **`evidence_fingerprint`** over a frozen `EVIDENCE_CUTOFF` (data ≤ cutoff — immutable across daily
+> appends) alongside the operational `store_fingerprint`. `approval._staleness` compares the FROZEN
+> fingerprint (legacy records keep the old store-compare). `bot/evidence_manifest.py` builds the
+> immutable manifest (version · commit · evidence-fp · cutoff · spans · engine/sim version · costs ·
+> report/dataset hashes · QA · waiver) and `approve()` pins it to every paper/live record. Tests:
+> `test_evidence_manifest.py` (4) + `test_t1_daily_bar_append_does_not_invalidate_approval` — a daily
+> append no longer marks a fresh approval stale. STATUS.md autotrade conflict reconciled (ARMED).
+> **REMAINING (ops/user, not code contract):** regenerate the evidence pack from the snapshot ·
+> refuse pre-remediation artifacts on current endpoints · re-issue the 07.7 paper approval so it
+> carries the new manifest · data-universe: NQ/ES/GC excluded via traded-book scoping (advisory
+> already marks them CONTEXT) — give each its own readiness gate in T3.
+
 **Status.** Approval pins a store fingerprint and auto-invalidates on change
 (`approval.py:_staleness`). ✔ **BUG:** it pins the **whole current store** fingerprint
 (`evidence("").get("store_fingerprint")`), and the new live-bar persister appends bars **daily** →
@@ -114,6 +137,16 @@ current-facing pre-remediation artifacts · daily bar appends never invalidate f
 active symbols pass QA (red ones excluded) · paper approval is non-legacy and pinned to the snapshot.
 
 ### T2 — Entry Profitability Matrix + `entry_group_id`
+> **FOUNDATION LANDED 2026-07-12.** `bot/strategy/entry_group.py` — one canonical
+> `PR-{CAT}-{SESSION}-{TF}-{PATTERN}-{SIDE}-v{n}` id; the legacy names `orb@5m` / `breakout` /
+> `orb_stack` all normalize to the same `ORB_C` group (PR1 proved ORB is one pattern), an
+> unrecognized family maps to UNKNOWN (never guessed). Wired into all three matrix row-builders
+> (backtest / shadow / paper) so a backtest cell and a paper cell for the same group JOIN. Tests:
+> `test_signal_certificate_t2.py` (4) incl. the matrix builder stamping the id. **REMAINING:**
+> identity-join paper attribution (replace the "latest-prior-order" join — needs T4 fill linkage) ·
+> emit the full entry classification from the backtest engine (fills the `—` grades) · true net-R
+> with fees/partials · robustness gates (CI/OOS/both-halves/cost-stress/multiple-comparison).
+
 **Status.** `bot/ml/entry_matrix.py` exists; backtest output ~2,740 samples / 28 cells but **every
 historical grade is `—`**. Identifiers are **incompatible across paths** ✔: backtest `orb@5m`, live
 family `breakout`, execution setup `orb_stack`. Paper attribution ✔ assigns realized P&L to the
@@ -140,6 +173,16 @@ family `breakout`, execution setup `orb_stack`. Paper attribution ✔ assigns re
 same group has the same id across all evidence types · paper net-R reconciles exactly to the fill
 ledger · no silent exception yields a false-empty matrix · under-sample rows stay non-verdicts · an
 adopted removal is proven unable to fire/submit yet stays visible for shadow.
+
+### T3 — Operator Console (finish the workflow)
+> **READINESS SPLIT LANDED 2026-07-12.** `/api/readiness` now carries `objectives:
+> {paper_ready, live_ready, model_ready}`, each `{ready, blocking}`. Paper can be ready at 0/60
+> fills, but **live can never read ready (hard-locked by design)** and model readiness reflects the
+> champion-version guard (07.4 champion vs 07.7 current → not ready → ML abstains). Test:
+> `test_t3_readiness_split_paper_live_model_never_confused`. **REMAINING (some fills-gated):**
+> pre-fire state endpoint (per symbol/side FSM state before a fire) · reconciliation COMPARISON
+> table (internal vs broker row-by-row) · protection from confirmed working legs · risk-cockpit real
+> feed-health + buying-power/DD-room · Strategy Evidence quarantine · real browser acceptance tests.
 
 ### T3 — Operator Console (finish the workflow)
 **Status.** Endpoints/views exist (`/api/readiness`, Orders & Fills, Risk, Profitability Lab,
@@ -172,6 +215,14 @@ row-by-row · all critical views pass automated browser tests · no current-faci
 mixed-lineage evidence.
 
 ### T4 — Label lineage (candidate → order → fill → final label)
+> **CORE LANDED 2026-07-12.** `_mark_tracker_filled` now sets **`entry_filled`** on an entry fill and
+> **`label_final`** ONLY when the round trip closes (net→0), computed in `poll_fills` from
+> `_replay_fills`. A finalized label is never downgraded; a pure shadow row (no exec_orders link) is
+> never touched. Tests: `test_signal_certificate_t4.py` (4) — entry≠final, closed→final, shadow
+> untouched, no-downgrade. This is the ML-correctness keystone T5 depends on. **REMAINING:** fill
+> `role`+`fee` columns (schema bump) · append-only lifecycle-event table · `live_labels.py` field
+> retention · dataset versioning + substrate separation · external-signal-without-version → UNKNOWN.
+
 **Status.** ExecutionService stores `candidate_id` and can mark a tracker row `paper_filled` ✔ (one
 link closed). Training-label path incomplete. `_mark_tracker_filled` fires on an **entry** fill — a
 profitability label must not be final until the round trip **closes**.
@@ -195,6 +246,13 @@ explicit evidence type + strategy version · zero shadow outcomes appear as pape
 completed round trips create final execution labels · every dataset has row-level lineage audit.
 
 ### T5 — Production ML program  *(last — genuinely blocked on T1–T4)*
+> **LEAKAGE FIX LANDED 2026-07-12 (`bot/nn/train.py`).** The NN challenger was `.fit(X, y)` on ALL
+> observations then "evaluated" on the last 30% `X[k:]` — data it had trained on → inflated holdout
+> AUC → wrongful promotion. Now the **promotion gate** fits on the first 70% ONLY and scores the
+> untouched last 30%; the **deployed** model still uses all data. **REMAINING (model itself gated on
+> the 60-fill/56-day burn-in):** untouched final holdout · strategy+schema serving guards · registry
+> lineage metadata · abstain honesty (prior labelled a prior) · drift monitoring + rollback.
+
 **Status.** Only champion = NN-similarity on 07.4; live is 07.7; version guard blocks the old
 champion ✔; broker-paper sample = 0; continuous training disabled. **ML must abstain today.**
 

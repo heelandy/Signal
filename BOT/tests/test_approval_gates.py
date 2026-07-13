@@ -66,11 +66,12 @@ def appr(tmp_path, monkeypatch):
     return approval, tmp_path / "reports"
 
 
-def _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-1"):
+def _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-1", evidence_fp="efp-1"):
     (reports / "dataqa.json").write_text(json.dumps(
         {"symbols": {"QQQ": {"ok": qa_ok, "issues": [] if qa_ok else ["STALE: old"]},
                      "SPY": {"ok": qa_ok, "issues": []}},   # traded book = QQQ+SPY (2026-07-12)
-         "all_ok": qa_ok, "store_fingerprint": fingerprint}), encoding="utf-8")
+         "all_ok": qa_ok, "store_fingerprint": fingerprint,
+         "evidence_fingerprint": evidence_fp, "evidence_cutoff": "2026-07-10"}), encoding="utf-8")
     (reports / "ab_entry_standard.json").write_text(json.dumps(
         {"config": {"strategy_version": ab_version}}), encoding="utf-8")
 
@@ -94,23 +95,41 @@ def test_t62b_override_is_recorded_forever(appr):
 
 def test_t62c_green_evidence_approves_and_snapshots(appr):
     approval, reports = appr
-    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-9")
+    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-9", evidence_fp="efp-9")
     rec = approval.approve("v1", "paper")
     assert not rec.get("override")
-    assert rec["evidence"]["store_fingerprint"] == "fp-9", (
-        "the approval must pin the exact store fingerprint it was granted against")
+    assert rec["evidence"]["store_fingerprint"] == "fp-9"
+    assert rec["evidence"]["evidence_fingerprint"] == "efp-9", (
+        "T1: the approval must pin the FROZEN evidence fingerprint it was granted against")
 
 
-def test_t62d_fingerprint_drift_marks_approval_stale(appr):
+def test_t62d_evidence_fingerprint_drift_marks_approval_stale(appr):
+    """A change to the FROZEN evidence fingerprint (historical evidence actually changed) must mark
+    downstream approvals STALE."""
     approval, reports = appr
-    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-9")
+    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-9", evidence_fp="efp-9")
     approval.approve("v1", "paper")
     assert approval.paper_approved("v1")
-    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-CHANGED")
+    _write_reports(reports, qa_ok=True, ab_version="v1", fingerprint="fp-9", evidence_fp="efp-CHANGED")
     st = approval.status("v1")
-    assert st.get("stale"), "a dataset-fingerprint change must mark downstream approvals STALE"
+    assert st.get("stale"), "an EVIDENCE-fingerprint change must mark downstream approvals STALE"
     assert not approval.paper_approved("v1"), (
         "auto-invalidation: arm checks must refuse a stale approval until re-evidenced")
+
+
+def test_t1_daily_bar_append_does_not_invalidate_approval(appr):
+    """SIGNAL-CERTIFICATE T1 (keystone): the live-bar persister appends bars daily, changing the
+    STORE fingerprint — but not the FROZEN evidence fingerprint. A fresh approval must stay valid
+    across those appends (the pre-T1 bug invalidated it every EOD)."""
+    approval, reports = appr
+    _write_reports(reports, qa_ok=True, fingerprint="store-day1", evidence_fp="efp-frozen")
+    approval.approve("v1", "paper")
+    assert approval.paper_approved("v1")
+    # EOD append: store fingerprint moves, evidence (data <= cutoff) is unchanged
+    _write_reports(reports, qa_ok=True, fingerprint="store-day2-appended", evidence_fp="efp-frozen")
+    assert not approval.status("v1").get("stale"), (
+        "a daily append (store fp changes, evidence fp frozen) must NOT invalidate the approval")
+    assert approval.paper_approved("v1")
 
 
 # ── T6.3 champion strategy-version guard at serving time ────────────────────

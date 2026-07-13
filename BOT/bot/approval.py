@@ -68,6 +68,10 @@ def evidence(strategy_version: str) -> dict:
             ev["data_qa_traded_ok"] = all(
                 symd.get(s, {}).get("ok") is True for s in traded)
             ev["store_fingerprint"] = d.get("store_fingerprint")
+            # Signal-Certificate T1: pin the FROZEN evidence fingerprint (immutable across daily
+            # bar appends), not the growing store fingerprint. store_fingerprint stays for display.
+            ev["evidence_fingerprint"] = d.get("evidence_fingerprint")
+            ev["evidence_cutoff"] = d.get("evidence_cutoff")
         except Exception:
             ev["data_qa_all_ok"] = False
     ab = REPORTS / "ab_entry_standard.json"
@@ -114,16 +118,25 @@ _REQUIRED = {"paper": ("data_qa_traded_ok", "ab_strategy_version_match"),
 
 
 def _staleness(recs: dict) -> bool:
-    """Auto-invalidation (Phase 6): an approval pins the store fingerprint it was granted
-    against — if the store has since changed, downstream approvals are STALE until
-    re-evidenced. Legacy records without a snapshot are honored (flagged 'legacy') until
-    Phase R re-decides them."""
-    cur = evidence("").get("store_fingerprint")
+    """Auto-invalidation. An approval pins the FROZEN evidence fingerprint (Signal-Certificate T1,
+    2026-07-12) it was granted against — if the immutable evidence range changes, downstream
+    approvals are STALE until re-evidenced. Daily live-bar appends AFTER the evidence cutoff move
+    the operational store_fingerprint but NOT the evidence_fingerprint, so they no longer wrongly
+    invalidate a fresh approval. LEGACY records (pinned only a store_fingerprint, pre-T1) keep the
+    old store-compare until re-issued."""
+    cur = evidence("")
+    cur_efp = cur.get("evidence_fingerprint")
+    cur_sfp = cur.get("store_fingerprint")
     for s in ("paper", "live"):
         snap = (recs.get(s) or {}).get("evidence") or {}
-        pinned = snap.get("store_fingerprint")
-        if pinned and cur and pinned != cur:
-            return True
+        pinned_efp = snap.get("evidence_fingerprint")
+        if pinned_efp:                                    # T1 record: compare the FROZEN fingerprint
+            if cur_efp and pinned_efp != cur_efp:
+                return True
+        else:                                             # legacy record: pre-T1 store-fingerprint
+            pinned_sfp = snap.get("store_fingerprint")
+            if pinned_sfp and cur_sfp and pinned_sfp != cur_sfp:
+                return True
     return False
 
 
@@ -161,6 +174,12 @@ def approve(strategy_version: str, stage: str, approved_by: str = "user", notes:
             raise ValueError(f"stage '{stage}' refused — RED evidence: {red} "
                              f"(pass override=True to record a deliberate, visible exception)")
         rec["evidence"] = ev
+        try:                                              # Signal-Certificate T1: pin the immutable
+            from bot.evidence_manifest import build_manifest   # evidence manifest with the record
+            rec["manifest"] = build_manifest(strategy_version,
+                                             waiver="frozen-span" if override else None)
+        except Exception:
+            pass
         if override:
             rec["override"] = True
     recs[stage] = rec

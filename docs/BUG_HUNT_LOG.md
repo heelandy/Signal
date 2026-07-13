@@ -354,3 +354,62 @@ days; GET sweep = all 62 routes; W1 state-machine = 25-seed generative fuzz; W6 
 payloads; ops = real kill -9 (mutex + WAL) + headless-Edge console + disk-full ENOSPC. W2 cross-
 artifact = structural (one shared run_backtest) + empirical (real-store recompute exact).
 Freeze intact: no new strategies/indicators/params; sealed journals untouched.
+
+## Second hunt — Signal-Certificate / T1-T5 surfaces (post-remediation new code) — 2026-07-12
+
+The first hunt fixed everything the audit named + everything the waves found in the code that
+EXISTED then. Since then the Signal-Certificate centerpiece + the T1-T5 tracks LANDED — new
+money-path-adjacent code that the exhaustive hunt never saw. Re-ran the full 89-test bug-hunt armor
+(all green) then hunted the new surfaces. **Suite 398 → 399 (+1 fix) + 2 strict-xfail deferred-armor.**
+
+- **CONFIRMED · MED (firing door) · certify_and_fire propagated a submit exception AFTER alerting.**
+  `alert_fn` was wrapped in try/except but `submit_fn` was NOT — a submit that raises (broker socket
+  death, sqlite error) AFTER the "ORDER READY" alert already fired would propagate out of the ONE
+  firing door and could kill the caller/scan beat, and the caller would lose the certificate entirely
+  (no audit linkage). FIX: wrap `submit_fn` exactly like `alert_fn` — a raise is captured into
+  `cert["submit_result"] = {"error": ...}`, never propagated; the OMS remains the order-truth source
+  (the cert submit is audit only). Test: `test_certify_and_fire_survives_a_submit_that_raises`
+  (red-first: RuntimeError propagated; green: cert returned, fired=True, error captured).
+
+- **CONFIRMED · LOW (dead wiring / unreachable via live path) · DEFERRED-fix · T4 round-trip
+  finalization can't fire through poll_fills + marks the wrong candidate.** Two facets: (1) a bracket
+  TP/stop exit is a SEPARATE broker order whose `id`/`client_order_id` match no `exec_orders` row, so
+  `poll_fills` skips it (`if not row: continue`) — the internal book never returns to net 0 for a
+  bracket-closed trade, so `closed = (net==0)` is never True via the live path and `label_final` is
+  never set; (2) even when a separate opposing order DOES close the book,
+  `_mark_tracker_filled(closing_oid, final=True)` finalizes the CLOSING order's candidate, not the
+  entry's — the entry decision the T4 docstring says must finalize stays `entry_filled`. The existing
+  `test_t4_closed_round_trip_is_label_final` masks this: it hand-inserts the exit fill against the
+  ENTRY's own `order_id` and hand-calls `_mark_tracker_filled` — a state poll_fills never produces.
+  SEVERITY LOW: `decisions.state` (entry_filled/label_final) has NO consumer today — the matrix reads
+  `exec_orders.state` (a different table/state-machine, service.py L78), so this is forward
+  scaffolding with zero current label/money-path impact. FIX DEFERRED (matches the plan's REMAINING
+  execution-label / identity-join work): the correct fix needs position→entry linkage plumbing;
+  building it now would add un-exercisable code to the live money-path service during the freeze.
+  PINNED with two `@pytest.mark.xfail(strict=True)` tests asserting the CORRECT contract
+  (`test_t4_bracket_exit_should_finalize_the_entry`, `test_t4_close_finalizes_the_entry_not_the_
+  closing_order`) — the day the plumbing lands they xPASS → turn RED → forcing whoever fixes it to
+  delete the marker and acknowledge the fix. Self-documenting deferred TODO in the suite.
+
+- **FALSE-ALARM (with proof) · T2 entry_group_id family→category coupling.** `entry_group_id` passes
+  `family` into `asset_category(symbol, family)` — suspected false-SPLIT (the same symbol's ORB
+  aliases resolving to different categories → different ids, the very defect T2 fixes). VERIFIED not
+  a bug: `asset_category` only returns "op" for `options-*` families; for every ORB alias
+  (orb@5m/breakout/orb_stack/orb_c/orb) the category is symbol-only, so all aliases collapse to ONE
+  id (`test_same_group_same_id_across_legacy_names` pins it). No false-split.
+
+- **NOT A DEFECT (explained) · NQ Asia "not arming" at ~18:45 ET.** Correct behavior, not a bug: the
+  futures Asia OR window is 19:00-20:00 ET (`ASIA_FUT = ("asia", 60, 120, 540)` — 60min→19:00,
+  120min→20:00 from the 18:00 trade-day base), and a break can only fire AFTER the OR closes (20:00)
+  + `entry_delay`. At 18:45 the Asia OR hasn't started forming — nothing should arm. Config matches
+  the 19:00-20:00 intent. Tonight NQ Asia builds its OR 19:00-20:00 and is armable after 20:00 ET.
+
+- **VERIFIED (no false-PASS) · the nine certificate gates are consistently fail-closed.** Traced each
+  gate for a way to return OK on bad input: UNKNOWN (None) blocks everywhere; case/whitespace
+  variants of "certified"/entry-state block (fail-closed); truthy-but-not-True `closed_bar` blocks
+  (strict `is not True`); a dict-instead-of-RiskDecision blocks (`getattr(rd,"approved",False)`); ML
+  is the only soft gate and only by DESIGN (abstain/unknown = honest pass, stale/incompatible/
+  score-without-full-inputs = block). No false-pass path found.
+
+Freeze intact: the one fix is error-handling hardening of the firing door (no new strategy/params);
+the T4 gap is DEFERRED not built. Full armor (89) + full suite (399 passed, 2 xfailed) green.

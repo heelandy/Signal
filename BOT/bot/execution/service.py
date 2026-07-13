@@ -414,7 +414,11 @@ class ExecutionService:
                              str(o.get("updated_at") or utcnow_iso())))
                         self.db.commit()
                         ingested += 1
-                        self._mark_tracker_filled(oid)         # P1.1 linkage: shadow -> paper_filled
+                        # T4 label lineage: an ENTRY fill is NOT a final training label — the label
+                        # finalizes only when the round trip CLOSES (the symbol's net returns to 0).
+                        book, _ = self._replay_fills()
+                        closed = int(book.get(sym, {}).get("net", 0)) == 0
+                        self._mark_tracker_filled(oid, final=closed)
                         if status in ("filled", "partially_filled"):
                             self._bracket_check(oid, sym, o)
             if status == "filled":
@@ -425,18 +429,24 @@ class ExecutionService:
                 self._update(oid, status.upper(), str(o.get("reason") or ""))
         return {"orders_seen": seen, "fills_ingested": ingested}
 
-    def _mark_tracker_filled(self, oid: str) -> None:
-        """Label-lifecycle linkage (P1.1 completion, 2026-07-12): a broker fill upgrades the
-        originating tracker decision's state to 'paper_filled' — a filled row can never be
-        confused with a shadow row in training or the matrix."""
+    def _mark_tracker_filled(self, oid: str, final: bool = False) -> None:
+        """Label-lifecycle linkage (P1.1 + T4 round-trip finalization, 2026-07-12). A broker fill
+        upgrades the originating tracker decision's state so it can never be confused with a shadow
+        row in training or the matrix. CRITICAL (T4): an ENTRY fill sets 'entry_filled' (NOT a final
+        label); only a CLOSED round trip (net back to 0) sets 'label_final'. The execution-label
+        dataset uses ONLY label_final rows — so a still-open entry can never be scored as a completed
+        trade, and a pure shadow row (no exec_orders link) is never touched at all."""
         try:
             row = self.db.execute("SELECT candidate_id FROM exec_orders WHERE order_id=?",
                                   (oid,)).fetchone()
             if not row or not row[0]:
                 return
+            state = "label_final" if final else "entry_filled"
             from bot.tracker import _con
             con = _con()
-            con.execute("UPDATE decisions SET state='paper_filled' WHERE candidate_id=?", (row[0],))
+            # never DOWNGRADE a finalized label back to entry_filled on a late poll
+            con.execute("UPDATE decisions SET state=? WHERE candidate_id=? "
+                        "AND (state IS NULL OR state != 'label_final')", (state, row[0]))
             con.commit(); con.close()
         except Exception:
             pass

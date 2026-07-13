@@ -43,6 +43,12 @@ def test_t71b_missing_state_is_a_clean_boot(tmp_path, monkeypatch):
 def test_t72_stale_scan_heartbeat_is_unhealthy(monkeypatch):
     import bot.api.server as srv
     srv._state["kill_switch"] = False
+    # HERMETIC: _semantic_health() probes the live paper broker (alpaca_paper defaults True). In CI
+    # (no alpaca-py / no creds / no network) that probe raises -> broker="down" -> it would wrongly
+    # drag `healthy` to False. Stub it so this test isolates the SCAN-heartbeat + beats logic it
+    # actually covers; broker health is exercised by its own tests.
+    monkeypatch.setattr(srv, "_paper_broker",
+                        lambda: type("B", (), {"is_market_open": lambda self: True})())
     old = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=30)
     monkeypatch.setitem(srv._latest, "ts", old.isoformat())
     h = srv._semantic_health()

@@ -28,6 +28,32 @@ MANIFEST = ROOT / "data" / "mbo_bars_manifest.json"
 EXPECTED_BARS = {("5m", "rth"): 78, ("1m", "rth"): 390}     # full RTH grid per trade day
 TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
               "1h": 3600, "2h": 7200, "4h": 14400}
+
+# EVIDENCE CUTOFF (Signal-Certificate T1, 2026-07-12): the frozen research-span end. The `store`
+# fingerprint hashes the WHOLE growing store (rows/last-ts/volume) so the daily live-bar persister
+# invalidates approvals every EOD even though no HISTORICAL evidence changed. The EVIDENCE
+# fingerprint hashes only data UP TO this cutoff — immutable across appends AFTER it. Approvals pin
+# the evidence fingerprint; operational freshness uses store_fingerprint separately.
+EVIDENCE_CUTOFF = os.environ.get("HS_EVIDENCE_CUTOFF", "2026-07-10")
+
+
+def evidence_fingerprint(con, syms, tf: str = "5m", sess: str = "rth",
+                         cutoff: str = None) -> str:
+    """Fingerprint of the FROZEN evidence range [start, cutoff] per symbol — stable across bars
+    appended AFTER the cutoff (the operational store grows daily; the evidence snapshot must not)."""
+    import hashlib
+    cutoff = (cutoff or EVIDENCE_CUTOFF)[:10]
+    parts = []
+    for sym in sorted(s.upper() for s in syms):
+        row = con.execute(
+            "SELECT count(*), min(ts), max(ts), sum(volume) FROM bars "
+            "WHERE sym=? AND tf=? AND session=? AND CAST(ts AS DATE) <= ?",
+            [sym, tf, sess, cutoff]).fetchone()
+        n, lo, hi, vol = row
+        sub = hashlib.sha256("|".join([sym, tf, sess, str(int(n or 0)), str(lo), str(hi),
+                                       str(vol)]).encode()).hexdigest()[:16]
+        parts.append(f"{sym}:{sub}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 FRESHNESS_BDAYS = 3            # Phase 4: span end older than this many trading days = STALE
 SHORT_DAY_PCT = 2.0            # Phase 4: more than this % of days under 90% expected bars = FAIL
 
@@ -148,6 +174,16 @@ def qa_report(syms: list[str], tf: str = "5m", sess: str = "rth", save: bool = T
             # an unreadable symbol is a FAILED symbol (fail closed), never a silent skip
             out["symbols"][sym.upper()] = {"error": str(e)[:200], "ok": False,
                                            "issues": [f"QA crashed: {str(e)[:120]}"]}
+    # EVIDENCE fingerprint over the frozen cutoff (T1) — computed while the connection is open, so
+    # appends after the cutoff cannot move it. store_fingerprint (below) stays for operational
+    # freshness only.
+    try:
+        out["evidence_cutoff"] = EVIDENCE_CUTOFF
+        out["evidence_fingerprint"] = evidence_fingerprint(con, syms, tf, sess, EVIDENCE_CUTOFF)
+    except Exception as e:
+        out["evidence_cutoff"] = EVIDENCE_CUTOFF
+        out["evidence_fingerprint"] = None
+        out.setdefault("evidence_fp_error", str(e)[:120])
     con.close()
     import hashlib
     out["store_fingerprint"] = hashlib.sha256("|".join(

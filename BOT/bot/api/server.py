@@ -2881,8 +2881,37 @@ def readiness():
         g("evidence", False, f"readiness computation failed: {str(e)[:140]}")
     g("live lock", None, "LIVE stays hard-locked by design (LIVE_APPROVED.lock)", blocking=False)
     blocked = [x["name"] for x in gates if x["blocking"] and x["ok"] is not True]
+    # READINESS SPLIT (Signal-Certificate T3): paper / live / model must never be confused. `overall`
+    # OK can hold at 0/60 fills because fills are non-blocking FOR PAPER — but that must not read as
+    # live-ready. Each objective is computed from its own gate set.
+    def _names_ok(names):
+        hit = [x for x in gates if x["name"] in names]
+        return (bool(hit) and all(x["ok"] is True for x in hit),
+                [f"{x['name']}: {x['reason']}" for x in hit if x["ok"] is not True])
+    paper_names = {"system health", "kill switch", "data QA (traded book)", "A/B version match",
+                   "paper approval", "reconciliation"}
+    p_ok, p_block = _names_ok(paper_names)
+    fills_ok = any(x["name"] == "phase-8 fills" and x["ok"] is True for x in gates)
+    live_block = list(p_block) + ([] if fills_ok else ["phase-8 fills: <60 measured broker fills"]) \
+        + ["LIVE hard-locked by design (LIVE_APPROVED.lock)"]
+    try:
+        from bot.strategy.orb_candidates import STRATEGY_VERSION as _SV
+        from bot.ml.registry import ModelRegistry
+        champ = next((m for m in ModelRegistry().list() if getattr(m, "champion", False)), None)
+        if champ and getattr(champ, "strategy_version", None) == _SV:
+            m_ok, m_block = True, []
+        elif champ:
+            m_ok, m_block = False, [f"champion trained on {champ.strategy_version}, current is {_SV} — must abstain"]
+        else:
+            m_ok, m_block = False, ["no champion model — ML abstains"]
+    except Exception as e:
+        m_ok, m_block = False, [f"model registry unavailable: {str(e)[:80]}"]
     out = {"mode": _state["mode"], "kill_switch": _state["kill_switch"],
            "overall": "OK" if not blocked else "BLOCKED", "blocking": blocked,
+           "objectives": {
+               "paper_ready": {"ready": bool(p_ok), "blocking": p_block},
+               "live_ready": {"ready": False, "blocking": live_block},   # hard-locked by design
+               "model_ready": {"ready": bool(m_ok), "blocking": m_block}},
            "gates": gates, "generated_at": _now()}
     _ready_cache.update(ts=_t.time(), out=out)
     return out
