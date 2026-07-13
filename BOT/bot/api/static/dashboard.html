@@ -1134,6 +1134,12 @@ async function uEntry(){
         <div class="u-mono" style="font-size:12px;margin:4px 0">
           OR ${esc(s.or_low??"?")}–${esc(s.or_high??"?")} · entry ${esc(s.entry)} · stop ${esc(s.stop)} · TP1 ${esc(s.tp1??"—")} · TP2 ${esc(s.tp2)}
           · R:R ${esc(s.rr??"?")} · grade ${esc(s.grade??"?")} · session ${esc(s.session??"—")} · P(win) ${esc(s.confidence??"—")}</div>
+        ${(()=>{  /* OPTIONS play on the signal card (operator 2026-07-13: "pine shows options, system did not") —
+                     the scan already computes the plan for equities; the Entry Console just never rendered it */
+          if(!s.options)return "";
+          try{const r=s.options.recommended,st=s.options.structures[r];
+            return `<div class="u-mut">OPTIONS: <b>${esc(r.toUpperCase())}</b> ${esc((st.legs||[]).join(" / "))} · cost/credit $${esc(st.cost_or_credit_usd??"?")} · exit ${esc(st.exit&&st.exit.target?st.exit.target:"—")}</div>`;
+          }catch(e){return "";}})()}
         <div class="u-mut">WHY: ${whyLine(s)}</div></div>`;}).join("");
   }catch(e){$("u-entry-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
 }

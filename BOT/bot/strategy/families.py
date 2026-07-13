@@ -106,7 +106,9 @@ def prepare(bars: pd.DataFrame, sym: str = "") -> pd.DataFrame:
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     for col in ("open", "high", "low", "close"):
         df[col] = df[col].astype(float)
-    df["volume"] = df.get("volume", 0).astype("float64")
+    # bug hunt 2026-07-13 (found via the rth5f armor probe): df.get("volume", 0) returns the INT 0
+    # when the column is missing -> .astype AttributeError. Zeros keep VWAP/vol gates fail-closed.
+    df["volume"] = df["volume"].astype("float64") if "volume" in df.columns else 0.0
     # STACK-IDENTITY (user 2026-07-03): merge live SPY/VIX daily externals so compute_state produces the
     # REAL macro regime gates (regime D block + SPY stand-down), matching the STACK Pine's Regime group.
     # PIT PARITY (remediation Phase 1, 2026-07-11): join the most recent COMPLETED daily row strictly

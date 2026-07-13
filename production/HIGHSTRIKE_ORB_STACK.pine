@@ -21,6 +21,10 @@
 // ⚠️ st_state AND the order blocks are PORTED from hs_harness.py. st_state RECONCILE (F28) settled offline (edge
 //    invariant to the pivot tie-rule). The OB port (F41) still needs a TV compile + reconcile vs the harness OB.
 //    Forward-paper-test fills before sizing (esp. Asia).
+// CHANGE 2026-07-13 (operator): MACRO trend ref is PER-ASSET (own symbol daily) by default and
+// the directional stand-down no longer applies to EQUITIES (futures keep it); VIX regime block
+// unchanged for all. Toggles: 'Macro trend ref = OWN symbol' + 'Equities: no directional
+// stand-down'. Divergence from BOT gates documented in docs/REMEDIATION_PLAN.md.
 // ═══════════════════════════════════════════════════════════════════
 //@version=6
 indicator("HIGHSTRIKE ORB — STACK", overlay=true, max_labels_count=300, max_lines_count=300)
@@ -115,8 +119,12 @@ local_atr_hi  = input.float(2.5,  "Volatile ATR%",  group="Regime", step=0.25)
 block_range_in = input.bool(false,  "Block RANGE regime", group="Regime",
               tooltip="F76 (2026-07-06): per-asset — FUTURES trade the chop (the blocked cohort is POSITIVE: NQ +0.19R x309, ES +0.18R x326, OOS up on both) = leave OFF on NQ/MNQ/ES; EQUITIES keep the block (their OOS degrades without it) = turn ON on QQQ/SPY charts. Matches the BOT engine per-asset block_range.")
 macro_en       = input.bool(true,  "MACRO filter ON", group="Regime")
-macro_standdown= input.bool(true,  "Stand-down vs SPY trend", group="Regime")
-spy_sym  = input.symbol("SPY",      "Macro trend ref", group="Regime")
+macro_standdown= input.bool(true,  "Stand-down vs macro trend", group="Regime")
+macro_own_ref  = input.bool(true,  "Macro trend ref = OWN symbol (per-asset)", group="Regime",
+            tooltip="OPERATOR RULE (2026-07-13, after the Mon 07-13 selloff: 'Macro B SPY↑' blocked SPY/NVDA shorts while both dumped −2/−3% — Friday's SPY daily said risk-on all day): the macro TREND leg reads THIS CHART's own daily trend (per-asset), not SPY's. VIX stays the vol ref (regime A-D unchanged in spirit). OFF = the classic SPY reference below.")
+macro_eq_exempt= input.bool(true,  "Equities: no directional stand-down", group="Regime",
+            tooltip="OPERATOR RULE (2026-07-13): the DIRECTIONAL stand-down (trend-up blocks shorts / trend-down blocks longs) applies to FUTURES only — EQUITIES are exempt (their edge was being vetoed by a stale daily reference; the VIX regime block still applies to everyone). NOTE: INTENTIONAL divergence from the BOT gates (the BOT still applies SPY/VIX to equities pending the completion-order decision + re-evidence) — documented in REMEDIATION_PLAN.")
+spy_sym  = input.symbol("SPY",      "Macro trend ref (when not per-asset)", group="Regime")
 vix_sym  = input.symbol("CBOE:VIX", "Macro vol ref",   group="Regime")
 vix_calm = input.float(15.0, "VIX calm",     group="Regime", step=1)
 vix_vol  = input.float(25.0, "VIX volatile", group="Regime", step=1)
@@ -182,7 +190,7 @@ eval_lock  = input.int(2, "EVAL: lock day after N losing signals (0 = off)", gro
 //   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
 //   retest target: NQ/MNQ Impulse midpoint (F78: +13.5R, better DD) · others OR edge
 auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
-            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config (rule orb-standard-2026.07.7) EXCEPT the equity macro: since 2026-07-13 the Pine reads a PER-ASSET macro trend ref and EXEMPTS equities from the directional stand-down (operator rule after the 07-13 selloff) — an INTENTIONAL, documented divergence while the BOT keeps SPY/VIX gates pending the completion-order decision (REMEDIATION_PLAN §F-NQ-ASIA-1). OFF = use the manual inputs.")
 string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
 bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
 bool _aES  = _aroot == "ES" or _aroot == "MES"
@@ -394,7 +402,10 @@ spy_b() =>
     [_a,_b,sadx] = ta.dmi(14,14)
     [close, ta.ema(close,20), ta.ema(close,50), sadx]
 vix_b() => ta.sma(close,5)
-[spc, se20, se50, sadx] = request.security(spy_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+// per-asset macro ref (operator 2026-07-13): the trend leg reads THIS chart's own daily unless
+// macro_own_ref is off; spy_up/spy_dn keep their names but mean "macro-REF trend up/dn".
+string macro_trend_sym = macro_own_ref ? syminfo.tickerid : spy_sym
+[spc, se20, se50, sadx] = request.security(macro_trend_sym, "D", spy_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
 vix5 = request.security(vix_sym, "D", vix_b(), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
 bool spy_up = not na(spc) and spc > se20 and se20 > se50
 bool spy_dn = not na(spc) and spc < se20 and se20 < se50
@@ -421,8 +432,12 @@ string regime = reg_conf != "-" ? reg_conf : reg_raw
 // F31f: B-block can be session-scoped — London hours = 03:00-09:30 ET (o_now 540-930 on the trade-day clock)
 bool b_block_now = block_b_ses == "All sessions" or (block_b_ses == "London only" and o_now >= 540 and o_now < 930)
 bool macro_allow = not macro_en or not ((regime == "D" and block_d) or (regime == "B" and b_block_now))
-bool macro_long_ok  = not macro_en or not macro_standdown or not spy_dn
-bool macro_short_ok = not macro_en or not macro_standdown or not spy_up
+// directional stand-down: FUTURES only when the equity exemption is on (operator 2026-07-13) —
+// the VIX regime block (macro_allow) still applies to every symbol.
+bool eff_standdown = macro_standdown and (not macro_eq_exempt or syminfo.type == "futures")
+bool macro_long_ok  = not macro_en or not eff_standdown or not spy_dn
+bool macro_short_ok = not macro_en or not eff_standdown or not spy_up
+string _mref = macro_own_ref ? "OWN" : "SPY"    // display tag for the macro trend reference
 
 // ───────────────────────── LOCAL REGIME ─────────────────────────
 int local_regime = atr_pct >= local_atr_hi ? 3 : adxV >= local_adx_min ? 1 : 2
@@ -985,8 +1000,8 @@ if barstate.islast and show_dash
     string rr_txt = is_trail ? "1R stop · trail " + str.tostring(trail_atr, "#.#") + "ATR" : is_full ? "FULL → 1:" + str.tostring(tp2_rr, "#.#") + " cap" : "1 : " + str.tostring(tp2_rr, "#.#")
     string greason = not macro_allow ? ("BLOCK " + regime) : not local_ok ? "RANGE block" : "clear ✓"
     // per-side "why not firing" (first failing gate) — makes a WAIT explainable (esp. the OR-mid / narrow-OR blocks)
-    string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : (eff_ctx and not ctx_up) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_long_ok ? "SPY down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (eff_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_cd > 0 ? "cooldown " + str.tostring(l_cd) + " bars (mid lost)" : l_range ? "range — stale watch, no trade" : l_ext ? "pullback — retest " + str.tostring(Le, format.mintick) + " first" : (watch_gate and not l_watch) ? "no watch — needs close above OR mid" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
-    string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : (eff_ctx and not ctx_dn) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_short_ok ? "SPY up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (eff_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_cd > 0 ? "cooldown " + str.tostring(s_cd) + " bars (mid lost)" : s_range ? "range — stale watch, no trade" : s_ext ? "pullback — retest " + str.tostring(Se, format.mintick) + " first" : (watch_gate and not s_watch) ? "no watch — needs close below OR mid" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
+    string whyL = in_long or traded_l ? "" : l_invalid ? "closed < OR low — reclaim " + str.tostring(or_high, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_up ? "trend gate" : (eff_ctx and not ctx_up) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_long_ok ? _mref + " down" : not local_ok ? "range regime" : (ob_on and not in_bull_ob[1]) ? "no OB" : (eff_bias and not or_bull) ? "OR-mid: short day" : not volexp_ok ? "narrow OR" : not cap_long_ok ? "VWAP ext" : l_cd > 0 ? "cooldown " + str.tostring(l_cd) + " bars (mid lost)" : l_range ? "range — stale watch, no trade" : l_ext ? "pullback — retest " + str.tostring(Le, format.mintick) + " first" : (watch_gate and not l_watch) ? "no watch — needs close above OR mid" : not brk_l ? "no break yet" : not near_l ? "too far · retest" : not seq_l ? "no up-push" : "ready"
+    string whyS = in_short or traded_s ? "" : s_invalid ? "closed > OR high — reclaim " + str.tostring(or_low, format.mintick) + " to reset" : not or_set ? "OR forming" : not wkday ? "weekend" : ev_halt ? "eval halt" : ev_throttle ? "day lock" : stale_gap ? "pre-open" : not past_delay ? "arm delay" : o_now >= trade_end ? "session over" : not eff_down ? "trend gate" : (eff_ctx and not ctx_dn) ? (use_abc ? "context: no engine aligned (A∨B∨C)" : "context: struct+VWAP not aligned") : not macro_allow ? "macro " + regime : not macro_short_ok ? _mref + " up" : not local_ok ? "range regime" : (ob_on and not in_bear_ob[1]) ? "no OB" : (eff_bias and or_bull) ? "OR-mid: long day" : not volexp_ok ? "narrow OR" : not cap_short_ok ? "VWAP ext" : s_cd > 0 ? "cooldown " + str.tostring(s_cd) + " bars (mid lost)" : s_range ? "range — stale watch, no trade" : s_ext ? "pullback — retest " + str.tostring(Se, format.mintick) + " first" : (watch_gate and not s_watch) ? "no watch — needs close below OR mid" : not brk_s ? "no break yet" : not near_s ? "too far · retest" : not seq_s ? "no down-push" : "ready"
     // FAST DIRECTION read (the user's core ask: how fast does the system know which way?) — 0-2 bar lag reads vs the slow structure
     // STALENESS FIX (user 2026-07): OR arrow = where price is NOW vs the OR (live zone), not the
     // frozen 10:00 day bias (which kept showing ▲ with price under the OR low). Slope + Struct come
@@ -1034,7 +1049,7 @@ if barstate.islast and show_dash
     table.cell(dash,1,9, sess_lbl + "  " + or_start + " ET", text_color=color.aqua, text_size=size.tiny)
     table.cell(dash,2,9, or_set ? "OR " + str.tostring(or_low, "#.#") + "/" + str.tostring(or_high, "#.#") + (ormid_bias ? (or_bull ? " · long½" : " · short½") : "") : "OR forming…", text_color=or_set and ormid_bias ? (or_bull ? color.lime : color.red) : color.aqua, text_size=size.tiny)
     table.cell(dash,0,10,"Macro", text_color=color.silver, text_size=size.tiny)
-    table.cell(dash,1,10, regime + (spy_up ? " SPY↑" : spy_dn ? " SPY↓" : ""), text_color=regime == "A" ? color.lime : regime == "D" ? color.red : color.aqua, text_size=size.tiny)
+    table.cell(dash,1,10, regime + (spy_up ? " " + _mref + "↑" : spy_dn ? " " + _mref + "↓" : ""), text_color=regime == "A" ? color.lime : regime == "D" ? color.red : color.aqua, text_size=size.tiny)
     table.cell(dash,2,10, greason, text_color=greason == "clear ✓" ? color.lime : color.orange, text_size=size.tiny)
     table.cell(dash,0,11,"VWAP cap", text_color=color.silver, text_size=size.tiny)
     table.cell(dash,1,11, f_q(extL), text_color=f_qc(extL), text_size=size.tiny)

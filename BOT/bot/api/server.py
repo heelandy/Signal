@@ -637,6 +637,10 @@ def _scan_loop():
                     from bot.strategy.eq_calendar import tick  # monday (EQ shares book) —
                     tick()                                     # approval-gated shadow
                 _beat("eq_calendar", _eq_calendar_tick)
+                def _rth5f_tick():                             # RTH5F confluence book (operator go
+                    from bot.strategy.rth5f_shadow import tick  # 2026-07-13) — WATCH-ONLY shadow
+                    tick()                                     # lineage, own version, no orders
+                _beat("rth5f_shadow", _rth5f_tick)
                 _beat("persist", _persist_runtime)             # heartbeat for the phase-7 health check
                 def _tickwatch_check():                        # F102: the 3s poll thread must stay fresh
                     from bot.market_data import tickwatch

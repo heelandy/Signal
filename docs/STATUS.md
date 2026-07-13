@@ -22,16 +22,53 @@
 > loud; NaN/inf → 500 fixed app-wide (SafeJSONResponse); read_json/approvals/removals corruption
 > now fails LOUD. Mirror-tape symmetry pinned. All red-first, zero regressions, freeze intact.
 >
-> **Bug hunt — 2nd pass (2026-07-12): Signal-Certificate / T1-T5 new surfaces. 1 confirmed-fixed /
-> 1 confirmed-deferred (pinned) / 2 false-alarm-with-proof. Suite 339 → 399 + 2 strict-xfail.**
-> Full 89-test armor re-run green. FIXED: `certify_and_fire` propagated a submit exception AFTER
-> the ORDER-READY alert (firing door could crash mid-fire) → now captured into the cert, never
-> propagated. DEFERRED (pinned strict-xfail): T4 round-trip finalization is unreachable via the
-> live poll path + marks the wrong candidate — but `decisions.state` has NO consumer yet (forward
-> scaffolding), and the fix needs identity-join plumbing on the REMAINING list. FALSE-ALARM: T2
-> family→category coupling (no false-split — ORB aliases collapse to one id); NQ Asia "not arming"
-> at 18:45 (correct — Asia OR forms 19:00-20:00 ET, armable after 20:00). Nine certificate gates
-> verified consistently fail-closed (no false-PASS). Freeze intact.
+> **Bug hunt — 2nd pass (2026-07-12): Signal-Certificate / T1-T5 new surfaces. 2 confirmed-FIXED /
+> 2 false-alarm-with-proof. NO deferrals — error is error (operator rule), every confirmed bug
+> fixed same-day.** Full 89-test armor re-run green. FIXED (1): `certify_and_fire` propagated a
+> submit exception AFTER the ORDER-READY alert (firing door could crash mid-fire) → captured into
+> the cert, never propagated. FIXED (2): T4 round-trip finalization — a bracket TP/stop is a
+> NESTED LEG of the entry order that poll_fills never ingested, so the internal book never closed
+> (reconcile would MISMATCH-HALT on every bracket exit) and `label_final` was unreachable; plus
+> finalization marked the closing order's candidate, not the entry's. Legs now carry fill truth,
+> a filled leg books the offsetting close against the ENTRY, finalization walks the symbol's
+> entries at net 0. Former strict-xfail pins flipped into live-path regression tests. FALSE-ALARM:
+> T2 family→category coupling (no false-split); NQ Asia "not arming" at 18:45 (correct — Asia OR
+> forms 19:00-20:00 ET, armable after 20:00). Nine certificate gates verified fail-closed.
+> CI (tests.yml) fixed: httpx + pytz added to the slim install (collection abort + DuckDB tz), and
+> test_t72 made hermetic (no live-broker probe). CI-replica suite green. Freeze intact.
+>
+> **Fresh audit adjudicated (2026-07-12, no code change): 6 of 7 findings CONFIRMED, 1 STALE
+> (exit-fill core — fixed same day), 1 measurement discrepancy (42/45 not 12/45 feature rows).**
+> Central verdict AGREED: integration gap, not missing modules — certify_and_fire has zero
+> production callers, zero certificates exist, artifacts/approvals predate the new controls, the
+> running :8000 predates the T3 readiness split (operator restart), ENTER is computed client-side,
+> ml fallback 0.42 flows into the ensemble as a vote. Claim-by-claim with measured evidence +
+> the accepted 12-step completion order: `docs/AUDIT_COMPARE_2026-07-12.md`.
+>
+> **RESEARCH ARC CLOSED + SHADOW BOOKS LANDED (2026-07-13).** The full macro/filter research
+> (SPY-gate A/B/C · spec-macro OOS · 11-filter spec battery · 5-filter fine-tune · SPY deep
+> search) lives in `REMEDIATION_PLAN.md` §Post-remediation intake / F-NQ-ASIA-1. Outcomes:
+> QQQ/NQ/overnight LOCKED to their current best books (every challenger failed OOS); TWO new
+> watch-only shadow books landed in `bot/strategy/rth5f_shadow.py` (+ scan-loop beat, live on
+> the next worker restart): **NQ-RTH5F** (b40/rvol1.20/adx18: IS +29.9R PF 2.14 · OOS 2016-23
+> +27.5R PF 1.23, 3 eras positive) and **SPY-5F** (b40/rvol0.90/adx18: 2016-26 +38.3R PF 1.25,
+> only 14% overlap with the canonical SPY book — additive). Own lineage `rth5f-0.1`; never
+> orders; excluded from the core ML corpus AND (bug-hunt fix, 3rd pass) from the canonical
+> matrix shadow cells. Hunt log: `BUG_HUNT_LOG.md` §Third hunt — 2 confirmed defects fixed
+> (matrix shadow-lineage pollution, latent for ALL study lineages · missing-volume crash in the
+> shadow module AND canonical families.prepare), T4 leg ingestion armored (short-side + partial
+> legs), suite 412 green.
+>
+> **FIELD FINDING F-NQ-ASIA-1 — ROOT-CAUSED same day (2026-07-12):** Pine filled an NQ Asia long
+> @ 20:00 ET that the system never showed. Reproduced live-exact: data + OR byte-identical to
+> Pine (29910.5/29845); the validated Layer-3 machine DECLINED by design (`no_watch` — the watch
+> cannot be armed on the first post-OR bar; then the 55pt > 1.5×ATR extension latched; retest
+> never confirmed). Backtest shares the same resolver → evidence self-consistent. Verdicts:
+> entry logic NOT a defect · **Pine parity divergence confirmed** (Pine arms/fills the first
+> post-OR close — TV-side item, operator) · **observability defect CONFIRMED**: the decline was
+> invisible (engine's `collect_rejects` reasons exist but are never surfaced) — "evaluated and
+> declined" must never look like "dead scanner". Fix queued. Detail: REMEDIATION_PLAN
+> §Post-remediation intake / F-NQ-ASIA-1.
 
 ## Right now
 

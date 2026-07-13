@@ -132,43 +132,88 @@ def test_t4_label_final_is_never_downgraded(env):
     assert _state(T, "C1") == "label_final", "a finalized label must never revert to entry_filled"
 
 
-# ── KNOWN GAP (bug hunt 2026-07-12) — T4 finalization is unreachable through the LIVE poll path.
-# These xfail tests assert the CORRECT contract the T4 docstring promises; they fail today because
-# the finalization plumbing (execution-label ingestion / identity-join) is DEFERRED to the
-# REMAINING list. `strict=True` means the day the plumbing lands they xPASS → turn RED → forcing
-# whoever fixes it to delete the marker and acknowledge the fix. See docs/BUG_HUNT_LOG.md.
-# The existing `test_t4_closed_round_trip_is_label_final` proves the mechanism in isolation (it
-# hand-inserts the exit fill against the ENTRY's order_id and hand-calls _mark_tracker_filled) —
-# a state poll_fills never actually produces, which is exactly what these two pin.
+# ── T4 LIVE-PATH FINALIZATION (bug hunt find, FIXED 2026-07-12) ──────────────────────────────
+# Found as two xfail-pinned defects: (1) a bracket stop/TP is a NESTED leg of the entry order
+# (recent_orders nested=True), not a separate matchable order — poll_fills never saw the close,
+# so net never returned to 0 and label_final was unreachable via the live path; (2) finalization
+# marked the CLOSING order's candidate, not the entry's. FIX: poll_fills ingests a FILLED leg as
+# the offsetting fill booked against the ENTRY order, and finalization walks the SYMBOL's filled
+# entries when the book returns to net 0. These are now the live-path regression tests.
 
-@pytest.mark.xfail(strict=True, reason="T4 deferred: a bracket exit leg is a separate broker order "
-                   "that poll_fills skips (no matching id/idem_key), so net never returns to 0 and "
-                   "the entry decision never reaches label_final via the live path")
-def test_t4_bracket_exit_should_finalize_the_entry(env):
+def test_t4_bracket_exit_finalizes_the_entry(env):
     T, svc = env
     c = TradeCandidate(symbol="QQQ", side="long", timeframe="5m", setup="orb_stack",
                        entry=100.0, stop=99.0, tp2=104.0, strategy_version="orb-standard-2026.07.7",
                        candidate_id="C1")
     r = svc.submit(c, "autotrade")
-    # entry fill -> entry_filled, book net +1
+    # entry fill -> entry_filled, book net +1 (legs working, not yet filled)
     svc.broker.orders = [{"id": r.broker_order_id, "client_order_id": None, "status": "filled",
                           "filled_qty": 1, "avg_fill_price": 100.0,
-                          "legs": [{"status": "accepted"}, {"status": "accepted"}]}]
+                          "legs": [{"id": "TP-1", "status": "accepted", "filled_qty": 0,
+                                    "avg_fill_price": 0.0},
+                                   {"id": "SL-1", "status": "accepted", "filled_qty": 0,
+                                    "avg_fill_price": 0.0}]}]
     svc.poll_fills()
     assert _state(T, "C1") == "entry_filled"
-    # the bracket TP now fills at the broker: a SEPARATE order — its id/client_order_id match no
-    # exec_orders row, so poll_fills skips it and the close is never booked internally.
-    svc.broker.orders = [{"id": "BRK-TP-LEG", "client_order_id": None, "status": "filled",
-                          "filled_qty": 1, "avg_fill_price": 104.0, "side": "sell"}]
+    # the bracket TP fills at the broker — it arrives as a FILLED NESTED LEG of the entry order
+    svc.broker.orders = [{"id": r.broker_order_id, "client_order_id": None, "status": "filled",
+                          "filled_qty": 1, "avg_fill_price": 100.0,
+                          "legs": [{"id": "TP-1", "status": "filled", "filled_qty": 1,
+                                    "avg_fill_price": 104.0,
+                                    "updated_at": "2026-07-13T15:30:00+00:00"},
+                                   {"id": "SL-1", "status": "canceled", "filled_qty": 0,
+                                    "avg_fill_price": 0.0}]}]
     svc.poll_fills()
     book, _ = svc._replay_fills()
-    assert book["QQQ"]["net"] == 0, "the round trip closed at the broker"
+    assert book["QQQ"]["net"] == 0, "the filled TP leg must close the internal book"
     assert _state(T, "C1") == "label_final", "a closed round trip must finalize the ENTRY label"
+    # idempotent: a late duplicate poll neither re-books the leg nor downgrades the label
+    svc.poll_fills()
+    book2, _ = svc._replay_fills()
+    assert book2["QQQ"]["net"] == 0 and _state(T, "C1") == "label_final"
 
 
-@pytest.mark.xfail(strict=True, reason="T4 deferred: when a separate opposing order closes the "
-                   "book, _mark_tracker_filled finalizes the CLOSING order's candidate, not the "
-                   "entry's — the entry decision stays entry_filled")
+def test_t4_short_entry_bracket_close_and_partial_legs(env):
+    """Bug hunt 3rd pass: the leg-offset side must mirror for SHORT entries, and a leg that fills
+    PARTIALLY (cumulative 1 then 3) must ingest deltas — never double-book, never wrong-side."""
+    T, svc = env
+    c = TradeCandidate(symbol="QQQ", side="short", timeframe="5m", setup="orb_stack",
+                       entry=100.0, stop=101.0, tp2=96.0, strategy_version="orb-standard-2026.07.7",
+                       candidate_id="C1")
+    r = svc.submit(c, "autotrade")
+    assert r.action == "submitted", r.reason
+    # short entry fills 3 lots -> book net -3
+    svc.broker.orders = [{"id": r.broker_order_id, "client_order_id": None, "status": "filled",
+                          "filled_qty": 3, "avg_fill_price": 100.0,
+                          "legs": [{"id": "TP-9", "status": "accepted", "filled_qty": 0,
+                                    "avg_fill_price": 0.0}]}]
+    svc.poll_fills()
+    book, _ = svc._replay_fills()
+    assert book["QQQ"]["net"] == -3
+    assert _state(T, "C1") == "entry_filled"
+    # the TP leg fills PARTIALLY (cumulative 1), then fully (cumulative 3)
+    svc.broker.orders = [{"id": r.broker_order_id, "client_order_id": None, "status": "filled",
+                          "filled_qty": 3, "avg_fill_price": 100.0,
+                          "legs": [{"id": "TP-9", "status": "partially_filled", "filled_qty": 1,
+                                    "avg_fill_price": 96.0, "updated_at": "2026-07-13T15:00:00+00:00"}]}]
+    svc.poll_fills()
+    book, _ = svc._replay_fills()
+    assert book["QQQ"]["net"] == -2, "a partial leg fill must ingest the DELTA (1), offsetting long"
+    assert _state(T, "C1") == "entry_filled", "still open — must NOT finalize at net -2"
+    svc.broker.orders = [{"id": r.broker_order_id, "client_order_id": None, "status": "filled",
+                          "filled_qty": 3, "avg_fill_price": 100.0,
+                          "legs": [{"id": "TP-9", "status": "filled", "filled_qty": 3,
+                                    "avg_fill_price": 96.0, "updated_at": "2026-07-13T15:05:00+00:00"}]}]
+    svc.poll_fills()
+    book, _ = svc._replay_fills()
+    assert book["QQQ"]["net"] == 0, "cumulative 3 after 1 must ingest delta 2 -> flat"
+    assert _state(T, "C1") == "label_final", "flat round trip must finalize the SHORT entry"
+    # duplicate late poll: nothing re-books, label stays final
+    svc.poll_fills()
+    book, _ = svc._replay_fills()
+    assert book["QQQ"]["net"] == 0 and _state(T, "C1") == "label_final"
+
+
 def test_t4_close_finalizes_the_entry_not_the_closing_order(env):
     T, svc = env
     T.record_decision(_sig("C2"), taken=True, auto=True)          # the closing order's candidate

@@ -394,6 +394,7 @@ class ExecutionService:
                              broker_order_id=str(o.get("id")))
             filled = int(float(o.get("filled_qty") or 0))     # CUMULATIVE filled qty (broker truth)
             price = float(o.get("avg_fill_price") or 0.0)
+            did_ingest = False
             if filled > 0 and price > 0:
                 fid = f"{o.get('id')}:{filled}"
                 cur = self.db.execute("SELECT 1 FROM exec_fills WHERE fill_id=?", (fid,)).fetchone()
@@ -401,10 +402,10 @@ class ExecutionService:
                     # INCREMENTAL ingest (bug hunt W1 fuzz, 2026-07-12): filled_qty is CUMULATIVE.
                     # Storing it as the fill qty double-counted a partial-then-full sequence (5 then
                     # 10 booked 15 shares for a 10-lot -> false reconcile mismatch / wrong P&L). Book
-                    # only the DELTA since what we've already recorded for this order.
+                    # only the DELTA since the ENTRY fills we've already recorded (excl. leg fills).
                     already = int(self.db.execute(
-                        "SELECT COALESCE(SUM(qty), 0) FROM exec_fills WHERE order_id=?",
-                        (oid,)).fetchone()[0])
+                        "SELECT COALESCE(SUM(qty), 0) FROM exec_fills WHERE order_id=? "
+                        "AND fill_id NOT LIKE 'leg:%'", (oid,)).fetchone()[0])
                     delta = filled - already
                     if delta > 0:
                         self.db.execute(
@@ -414,13 +415,44 @@ class ExecutionService:
                              str(o.get("updated_at") or utcnow_iso())))
                         self.db.commit()
                         ingested += 1
-                        # T4 label lineage: an ENTRY fill is NOT a final training label — the label
-                        # finalizes only when the round trip CLOSES (the symbol's net returns to 0).
-                        book, _ = self._replay_fills()
-                        closed = int(book.get(sym, {}).get("net", 0)) == 0
-                        self._mark_tracker_filled(oid, final=closed)
+                        did_ingest = True
                         if status in ("filled", "partially_filled"):
-                            self._bracket_check(oid, sym, o)
+                            self._bracket_check(oid, sym, o)   # only at ENTRY fill (legs still working)
+            # T4 FIX (bug hunt 2026-07-12): a bracket stop/TP is a NESTED leg of the entry order
+            # (recent_orders is nested=True), NOT a separate matchable order — so poll_fills never
+            # saw the close: the round trip never finalized AND reconcile would mismatch on every
+            # close. Ingest a FILLED protective leg as the OFFSETTING fill, booked against the ENTRY
+            # order, so the internal book closes to broker truth and the ENTRY decision finalizes.
+            for leg in (o.get("legs") or []):
+                lfilled = int(float(leg.get("filled_qty") or 0))
+                lprice = float(leg.get("avg_fill_price") or 0.0)
+                lid = str(leg.get("id") or "")
+                if lfilled <= 0 or lprice <= 0 or not lid:
+                    continue
+                already_leg = int(self.db.execute(
+                    "SELECT COALESCE(SUM(qty), 0) FROM exec_fills WHERE fill_id LIKE ?",
+                    (f"leg:{lid}:%",)).fetchone()[0])
+                ldelta = lfilled - already_leg                 # CUMULATIVE, like the parent
+                if ldelta <= 0:
+                    continue
+                offset = "short" if side == "long" else "long"  # normalize to the replay convention
+                self.db.execute(
+                    "INSERT OR IGNORE INTO exec_fills(fill_id, order_id, broker_order_id, symbol, "
+                    "side, qty, price, at) VALUES(?,?,?,?,?,?,?,?)",
+                    (f"leg:{lid}:{lfilled}", oid, lid, sym, offset, ldelta, lprice,
+                     str(leg.get("updated_at") or o.get("updated_at") or utcnow_iso())))
+                self.db.commit()
+                ingested += 1
+                did_ingest = True
+            # label lineage: finalize the ENTRY whose round trip just CLOSED (net back to 0) — by
+            # SYMBOL via exec_orders, never the closing order's candidate. A still-open entry stays
+            # entry_filled; a pure shadow row (no exec_orders link) is never touched.
+            if did_ingest:
+                book, _ = self._replay_fills()
+                if int(book.get(sym, {}).get("net", 0)) == 0:
+                    self._finalize_symbol_entries(sym)
+                else:
+                    self._mark_tracker_filled(oid, final=False)
             if status == "filled":
                 self._update(oid, "FILLED", f"avg {price}")
             elif status in ("canceled", "cancelled"):
@@ -428,6 +460,18 @@ class ExecutionService:
             elif status in ("rejected", "expired"):
                 self._update(oid, status.upper(), str(o.get("reason") or ""))
         return {"orders_seen": seen, "fills_ingested": ingested}
+
+    def _finalize_symbol_entries(self, sym: str) -> None:
+        """T4 round-trip finalization (bug hunt 2026-07-12): the symbol's book just returned to
+        net 0, so EVERY filled entry on this symbol has a completed round trip — finalize the
+        ENTRY decisions (by symbol via exec_orders), never the closing order's candidate. The
+        no-downgrade guard in _mark_tracker_filled keeps late/duplicate polls harmless."""
+        rows = self.db.execute(
+            "SELECT DISTINCT o.order_id FROM exec_orders o "
+            "JOIN exec_fills f ON f.order_id = o.order_id "
+            "WHERE o.symbol=? AND COALESCE(o.candidate_id,'') != ''", (sym,)).fetchall()
+        for (oid,) in rows:
+            self._mark_tracker_filled(oid, final=True)
 
     def _mark_tracker_filled(self, oid: str, final: bool = False) -> None:
         """Label-lifecycle linkage (P1.1 + T4 round-trip finalization, 2026-07-12). A broker fill

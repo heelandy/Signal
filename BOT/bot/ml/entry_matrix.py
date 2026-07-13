@@ -40,6 +40,9 @@ def _rows_backtest() -> tuple[list[dict], str]:
         return [], "no backtest rows built yet — run build_backtest_rows()"
 
 
+SHADOW_BOOK_PREFIXES = ("rth5f", "worker-", "emergent-", "trail-", "options-native-")
+
+
 def _rows_shadow() -> tuple[list[dict], str]:
     from bot.tracker import DB
     rows = []
@@ -48,6 +51,12 @@ def _rows_shadow() -> tuple[list[dict], str]:
         for sym, side, fam, sess, r, j, at in con.execute(
                 "SELECT symbol, side, family, session, result_r, json, decided_at FROM decisions "
                 "WHERE outcome != 'open' AND result_r IS NOT NULL"):
+            # LINEAGE SEPARATION (bug hunt 2026-07-13): dedicated shadow-book/study lineages
+            # (rth5f + the worker/trail/options studies) carry their OWN rules/geometry — blending
+            # them into the CANONICAL shadow evidence would corrupt the matrix cells the same way
+            # the ML dataset was protected against (dataset.py family-prefix + version-pure).
+            if str(fam or "").startswith(SHADOW_BOOK_PREFIXES):
+                continue
             blob = {}
             try:
                 blob = json.loads(j or "{}") or {}

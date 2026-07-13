@@ -202,7 +202,13 @@ def _map_order(o) -> dict:
             "filled_qty": float(o.filled_qty or 0),
             "avg_fill_price": float(o.filled_avg_price or 0),
             "updated_at": str(o.updated_at or ""),
-            "legs": ([{"status": str(l.status).split(".")[-1].lower()}
+            # legs carry fill truth too (T4 fix 2026-07-12): a bracket stop/TP is a NESTED leg of
+            # the entry order, and poll_fills ingests a FILLED leg as the round trip's CLOSING
+            # fill — without id/filled_qty/avg_fill_price the close was invisible to the book.
+            "legs": ([{"id": str(l.id), "status": str(l.status).split(".")[-1].lower(),
+                       "filled_qty": float(l.filled_qty or 0),
+                       "avg_fill_price": float(l.filled_avg_price or 0),
+                       "updated_at": str(l.updated_at or "")}
                       for l in (o.legs or [])] if getattr(o, "legs", None) else None)}
 
 

@@ -371,25 +371,26 @@ money-path-adjacent code that the exhaustive hunt never saw. Re-ran the full 89-
   (the cert submit is audit only). Test: `test_certify_and_fire_survives_a_submit_that_raises`
   (red-first: RuntimeError propagated; green: cert returned, fired=True, error captured).
 
-- **CONFIRMED · LOW (dead wiring / unreachable via live path) · DEFERRED-fix · T4 round-trip
-  finalization can't fire through poll_fills + marks the wrong candidate.** Two facets: (1) a bracket
-  TP/stop exit is a SEPARATE broker order whose `id`/`client_order_id` match no `exec_orders` row, so
-  `poll_fills` skips it (`if not row: continue`) — the internal book never returns to net 0 for a
-  bracket-closed trade, so `closed = (net==0)` is never True via the live path and `label_final` is
-  never set; (2) even when a separate opposing order DOES close the book,
-  `_mark_tracker_filled(closing_oid, final=True)` finalizes the CLOSING order's candidate, not the
-  entry's — the entry decision the T4 docstring says must finalize stays `entry_filled`. The existing
-  `test_t4_closed_round_trip_is_label_final` masks this: it hand-inserts the exit fill against the
-  ENTRY's own `order_id` and hand-calls `_mark_tracker_filled` — a state poll_fills never produces.
-  SEVERITY LOW: `decisions.state` (entry_filled/label_final) has NO consumer today — the matrix reads
-  `exec_orders.state` (a different table/state-machine, service.py L78), so this is forward
-  scaffolding with zero current label/money-path impact. FIX DEFERRED (matches the plan's REMAINING
-  execution-label / identity-join work): the correct fix needs position→entry linkage plumbing;
-  building it now would add un-exercisable code to the live money-path service during the freeze.
-  PINNED with two `@pytest.mark.xfail(strict=True)` tests asserting the CORRECT contract
-  (`test_t4_bracket_exit_should_finalize_the_entry`, `test_t4_close_finalizes_the_entry_not_the_
-  closing_order`) — the day the plumbing lands they xPASS → turn RED → forcing whoever fixes it to
-  delete the marker and acknowledge the fix. Self-documenting deferred TODO in the suite.
+- **CONFIRMED · MED · FIXED · T4 round-trip finalization was unreachable via the live poll path +
+  marked the wrong candidate + the internal book NEVER closed on a bracket exit.** Three facets,
+  one root: (1) a bracket TP/stop exit is a NESTED LEG of the entry order (`recent_orders` is
+  `nested=True`), not a separate matchable order — `poll_fills` never ingested it, so the internal
+  book never returned to net 0: `label_final` unreachable AND (worse, found while fixing)
+  **`reconcile()` would MISMATCH-HALT on every bracket-closed trade** (internal net≠0 vs broker 0);
+  (2) `_map_order` stripped legs to `{"status"}` only — the leg's fill truth (id/qty/price) was
+  discarded before the service ever saw it; (3) finalization marked the CLOSING order's candidate,
+  not the entry's. Initially logged DEFERRED-as-LOW ("no consumer yet") — WRONG CALL, corrected on
+  the user's discipline: error is error; a red test is a bug regardless of current production reach.
+  FIX: `_map_order` legs now carry `id/status/filled_qty/avg_fill_price/updated_at` (contract test
+  updated in lockstep); `poll_fills` ingests a FILLED leg incrementally (cumulative-delta, same W1
+  rule; `leg:{id}:{qty}` fill ids; excluded from the parent's entry-delta sum) as the OFFSETTING
+  fill booked against the ENTRY order; when the symbol's book returns to net 0,
+  `_finalize_symbol_entries(sym)` finalizes every filled entry's decision BY SYMBOL — never the
+  closing order's candidate; the no-downgrade guard keeps late/duplicate polls harmless. The two
+  strict-xfail pins were FLIPPED into live-path regression tests
+  (`test_t4_bracket_exit_finalizes_the_entry` — nested-leg close + idempotent re-poll;
+  `test_t4_close_finalizes_the_entry_not_the_closing_order`) + 2 new broker-contract tests pin the
+  enriched leg shape. W1 fuzz (cumulative/dup/out-of-order) all green over the changed delta math.
 
 - **FALSE-ALARM (with proof) · T2 entry_group_id family→category coupling.** `entry_group_id` passes
   `family` into `asset_category(symbol, family)` — suspected false-SPLIT (the same symbol's ORB
@@ -413,3 +414,49 @@ money-path-adjacent code that the exhaustive hunt never saw. Re-ran the full 89-
 
 Freeze intact: the one fix is error-handling hardening of the firing door (no new strategy/params);
 the T4 gap is DEFERRED not built. Full armor (89) + full suite (399 passed, 2 xfailed) green.
+
+## Third hunt — RTH5F shadow books + T4 leg ingestion (post-landing surfaces) — 2026-07-13
+
+New code since the 2nd pass: the T4 exit-fill fix (leg ingestion + finalize-by-symbol), the
+certificate submit-wrap, and the RTH5F/SPY-5F shadow books (`bot/strategy/rth5f_shadow.py` +
+scan-loop beat). Hunted money-path-first; 1 confirmed defect, rest armor.
+
+- **CONFIRMED · MED · shadow-book lineage POLLUTED the canonical matrix shadow evidence.**
+  `entry_matrix._rows_shadow` selected EVERY resolved tracker decision with NO family/version
+  filter — the audit's "loaders do not isolate strategy versions" gap, made concrete by landing
+  rth5f: the moment a shadow-book row resolved, it would blend into the CANONICAL shadow cells
+  (and so would worker-/trail-/options-native- study rows, which were ALWAYS blendable — a latent
+  defect predating rth5f). The ML dataset was already double-protected (feat-notna + version-pure
+  + family-prefix exclusion, `dataset.py:48-72`) — the matrix loader had none of it. FIX:
+  `SHADOW_BOOK_PREFIXES` exclusion in `_rows_shadow` (mirrors dataset.py's lineage separation).
+  Red-first: `tests/test_bughunt_shadow_lineage.py` (seeds core+rth5f+worker+trail rows → only
+  core survives).
+- **VERIFIED SAFE · ML dataset vs rth5f** — two independent filters exclude shadow-book rows from
+  the core corpus: rth5f rows carry no pit_features (`feat0.notna()` drops them) AND version-pure
+  (`rth5f-0.1 != orb-standard-2026.07.7`). No leak path.
+- **ARMOR · T4 leg ingestion holds under short-side + partial-leg attack** — new pin
+  `test_t4_short_entry_bracket_close_and_partial_legs`: SHORT entry + TP leg filling cumulatively
+  (1 then 3) ingests deltas on the correct offset side, finalizes only at net 0, and a duplicate
+  late poll re-books nothing. No defect found.
+- **CONFIRMED · LOW-MED · the fail-closed armor probe found a CRASH — `df.get("volume", 0)`
+  returns the INT 0 when the column is missing → `.astype` AttributeError.** Present in the new
+  `rth5f_shadow._prep` AND (same idiom, latent) in the CANONICAL `families.prepare`
+  (families.py:109) — a volume-less router frame would crash the scan's prepare for that symbol.
+  FIX both: explicit column check, missing volume = zeros → VWAP/vol gates fail CLOSED. Pins:
+  `test_malformed_inputs_fail_closed` (shadow) + `test_prepare_survives_a_frame_without_volume`
+  (canonical). This is why armor probes run against NEW code: the probe was written as a formality
+  and caught a live defect in two modules.
+- **ARMOR · rth5f fail-closed** — a dead feed returns an error dict into the beat (never raises);
+  missing volume blocks at the rvol gate.
+- Also verified: autotrade/advisory/autotracker cannot see shadow-book rows (they read
+  `_latest["signals"]` which rth5f never enters); `_finalize_symbol_entries` is exec-orders-scoped
+  (shadow rows have no orders — untouchable).
+
+THIRD-PASS TALLY: **2 confirmed defects fixed** (matrix shadow-lineage pollution · missing-volume
+crash in shadow AND canonical prepare), T4 short/partial-leg armored, ML-dataset leak path
+verified closed. Suite 408 → 412. Warnings audit (operator question, "22 warnings"):
+ALL third-party deprecations, zero behavioral — FastAPI `on_event` (our registration at
+server.py:951 carries the planned lifespan migration note + the library's echo), starlette-httpx
+TestClient (test-only), websockets.legacy (alpaca dep), webull SDK `utcnow` (vendor), sklearn
+feature-names UserWarning (LGBM canary test). Instance counts vary by test selection (22 vs 27);
+unique sites: ~6, none ours except the noted on_event registration.
