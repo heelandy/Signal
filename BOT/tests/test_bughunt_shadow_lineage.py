@@ -29,9 +29,10 @@ def _seed(db, cid, family, version, sym="NQ"):
 
 def test_matrix_shadow_rows_exclude_shadow_book_lineages(tmp_path, monkeypatch):
     import bot.tracker as T
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
     monkeypatch.setattr(T, "DB", tmp_path / "hs.db")
     T._con().close()                                       # create schema
-    _seed(T.DB, "C-CORE", "breakout", "orb-standard-2026.07.7")
+    _seed(T.DB, "C-CORE", "breakout", STRATEGY_VERSION)    # current version (loader is version-pure)
     _seed(T.DB, "C-5F", "rth5f", "rth5f-0.1")
     _seed(T.DB, "C-WORKER", "worker-q", "worker-q-0.1")
     _seed(T.DB, "C-TRAIL", "trail-eq", "trail-eq-0.1")

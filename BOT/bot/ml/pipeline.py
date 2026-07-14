@@ -193,13 +193,16 @@ def version_ok(meta) -> bool:
     return ok
 
 
-def predict_candidate(c, feats: dict | None = None) -> float:
-    """PREDICT: calibrated P(win) from the champion (or the prior). `feats` = the PIT snapshot the
-    scan computed at the signal bar (train/live parity); without it a thin candidate-only vector
-    is used. Attaches the confidence to the candidate."""
+def predict_candidate(c, feats: dict | None = None) -> float | None:
+    """PREDICT: calibrated P(win) from the champion, or **None = ABSTAIN** (completion-order
+    step 10, 2026-07-14). The old fallback returned the hardcoded prior 0.42 with NO model —
+    live.py fed it into decide_ensemble as a vote, and 0.42 < 0.45 meant the NON-EXISTENT model
+    down-voted every signal. Absent/blocked/failing models now abstain; the ensemble's own rule
+    ('absent models simply don't vote') does the rest. `feats` = the PIT snapshot the scan
+    computed at the signal bar (train/live parity). Attaches the confidence to the candidate."""
     model, meta = _reg.champion(MODEL_NAME)
     if model is None or not _schema_ok(meta) or not version_ok(meta):
-        return _PRIOR
+        return None                                # ABSTAIN — no model / schema-blocked / version-blocked
     try:
         x = to_vector(feats) if feats else np.array(feat(c), float)
         p = float(np.atleast_1d(model.predict_proba(x.reshape(1, -1)))[0])
@@ -213,7 +216,8 @@ def predict_candidate(c, feats: dict | None = None) -> float:
         c.confidence = round(p, 3)
         return c.confidence
     except Exception:
-        return _PRIOR
+        return None                                # scoring failure = the certificate's 'silent
+        #                                            fallback' class — ABSTAIN, never the prior
 
 
 def explain_last_champion(feats: dict) -> dict | None:

@@ -143,9 +143,11 @@ def test_t63_mismatched_champion_never_serves(monkeypatch):
     monkeypatch.setattr(pipeline, "to_vector", lambda f: __import__("numpy").zeros(4))
     c = SimpleNamespace(symbol="QQQ", side=SimpleNamespace(value="long"), confidence=None)
     p = pipeline.predict_candidate(c, feats={"any": 1.0})
-    assert p == pipeline._PRIOR, (
+    # policy update (completion-order step 10, 2026-07-14): a blocked champion now ABSTAINS (None)
+    # instead of surfacing the 0.42 prior — the prior entered the ensemble as a phantom down-vote.
+    assert p is None, (
         f"a champion labeled 07.4 must NOT serve under the current strategy — got {p} "
-        f"(silent version-crossed serving is the audited defect)")
+        f"(silent version-crossed serving is the audited defect; blocked = ABSTAIN)")
 
 
 def test_t63b_similarity_guard(monkeypatch):

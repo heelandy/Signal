@@ -1125,21 +1125,31 @@ async function uEntry(){
   try{
     const d=await J("/api/signals");
     const sigs=d.signals||[];
-    if(!sigs.length){$("u-entry-body").innerHTML='<span class="u-mut">no live signals — the scan is looking (states render the moment one fires; off-hours = none is correct)</span>';return;}
-    $("u-entry-body").innerHTML=sigs.map(s=>{
+    /* DECLINED/MASKED decisions (F-NQ-ASIA-1): "evaluated and declined" must never look like a
+       dead scanner — every decline renders with its first-failing-gate or mask reason */
+    const decl=(d.declines||[]).slice(-8).reverse();
+    const declHtml=decl.length?`<div class="u-mut" style="margin-top:6px;border-top:1px solid #333;padding-top:4px"><b>DECLINED / MASKED (recent)</b>${decl.map(x=>`<div class="u-mono" style="font-size:11px">${esc(x.ts)} ${esc(x.symbol)} ${esc(String(x.side).toUpperCase())} [${esc(x.session??"")}] — ${esc(x.kind)}: ${esc(x.reason)}</div>`).join("")}</div>`:"";
+    if(!sigs.length){$("u-entry-body").innerHTML='<span class="u-mut">no live signals — the scan is looking (states render the moment one fires; off-hours = none is correct)</span>'+declHtml;return;}
+    $("u-entry-body").innerHTML=declHtml+sigs.map(s=>{
       const [st,label]=entryState(s);
-      const act=st==="ok"?chip("ok","ACTION: ENTER — grade "+esc(s.grade||"?")):chip(st,"ACTION: DO NOT ENTER YET");
+      /* BACKEND-AUTHORITATIVE ACTION (steps 8/9, 2026-07-14): the server ran the nine-gate
+         certificate; the UI renders its verdict VERBATIM. Client-side fallback only for old
+         processes that don't send `action` yet. */
+      const cert=s.certificate||null;
+      const act=s.action?chip(s.action==="ENTER"?"ok":"deg","ACTION: "+s.action+(cert&&cert.hash?" · cert "+esc(String(cert.hash).slice(0,8)):"")):(st==="ok"?chip("ok","ACTION: ENTER — grade "+esc(s.grade||"?")):chip(st,"ACTION: DO NOT ENTER YET"));
+      const certLine=(cert&&cert.blocking&&cert.blocking.length)?`<div class="u-mut">CERT ${esc(cert.overall)}: blocked by ${esc(cert.blocking.join(", "))}</div>`:"";
       return `<div class="u-card" style="margin:6px 0">
         <b>${esc(s.symbol)} — ${esc(String(s.side).toUpperCase())}</b> ${chip(st,label)} ${act}
         <div class="u-mono" style="font-size:12px;margin:4px 0">
           OR ${esc(s.or_low??"?")}–${esc(s.or_high??"?")} · entry ${esc(s.entry)} · stop ${esc(s.stop)} · TP1 ${esc(s.tp1??"—")} · TP2 ${esc(s.tp2)}
-          · R:R ${esc(s.rr??"?")} · grade ${esc(s.grade??"?")} · session ${esc(s.session??"—")} · P(win) ${esc(s.confidence??"—")}</div>
+          · R:R ${esc(s.rr??"?")} · grade ${esc(s.grade??"?")} · session ${esc(s.session??"—")} · ${s.confidence!=null?`P(win) ${esc(s.confidence)}`:`<b>ML: ABSTAIN</b> — no compatible model`}</div>
         ${(()=>{  /* OPTIONS play on the signal card (operator 2026-07-13: "pine shows options, system did not") —
                      the scan already computes the plan for equities; the Entry Console just never rendered it */
           if(!s.options)return "";
           try{const r=s.options.recommended,st=s.options.structures[r];
             return `<div class="u-mut">OPTIONS: <b>${esc(r.toUpperCase())}</b> ${esc((st.legs||[]).join(" / "))} · cost/credit $${esc(st.cost_or_credit_usd??"?")} · exit ${esc(st.exit&&st.exit.target?st.exit.target:"—")}</div>`;
           }catch(e){return "";}})()}
+        ${certLine}
         <div class="u-mut">WHY: ${whyLine(s)}</div></div>`;}).join("");
   }catch(e){$("u-entry-body").innerHTML=chip("unk","UNKNOWN")+esc(String(e));}
 }

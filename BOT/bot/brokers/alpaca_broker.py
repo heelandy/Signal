@@ -153,6 +153,11 @@ class AlpacaBroker(Broker):
                                                         limit=limit, nested=True))
         return [_map_order(o) for o in ords]
 
+    def close_position(self, symbol: str) -> dict:
+        """SYMBOL-SCOPED close (completion-order step 5) — one ticker, never the account."""
+        o = self._client.close_position(symbol)
+        return {"closed": True, "broker_order_id": str(getattr(o, "id", "") or "")}
+
     def flatten(self) -> dict:
         """Close ALL positions + cancel open orders (the UI 'Flatten All' button)."""
         try:

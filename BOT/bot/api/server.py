@@ -250,6 +250,11 @@ def _paper_autotrade():
         grade = s.get("grade")
         if not s.get("tradeable") or grade not in ("A+", "A", "B"):   # B → A+ (skip C = info-only/unverified)
             continue
+        # THE ONE DOOR (completion-order step 8, 2026-07-14): only a CERTIFIED signal — the
+        # backend ran the nine gates and stamped ACTION: ENTER — may reach the broker. A missing
+        # or blocked certificate keeps the door shut (fail closed).
+        if s.get("action") != "ENTER":
+            continue
         if str(s.get("boss", "")).startswith("stand_down"):       # BOSS one-macro-bet rule (review fix
             continue                                              # 2026-07-07): correlated same-direction
                                                                   # fires — only the bucket LEAD places
@@ -606,6 +611,8 @@ def _scan_loop():
                     pass
                 _latest["signals"] = _sigs       # publish AFTER allocate's in-place sort (review
                 _latest["ts"] = _now(); _latest["error"] = None   # fix: no mid-sort reads)
+                from bot.live import LAST_DECLINES as _LD          # observability (F-NQ-ASIA-1)
+                _latest["declines"] = list(_LD)
                 # EVERY step below runs ISOLATED with a heartbeat (D5 lesson): before, one raise
                 # here skipped every later step — track_outcomes died silently for 19 hours.
                 _beat("snapshot", _snapshot_latest)        # share signals with the reloadable API process
@@ -1538,6 +1545,9 @@ def signals(force: int = 0):
             _latest["error"] = str(e)
     return {"signals": _latest["signals"], "ts": _latest["ts"], "scanning": _latest["scanning"],
             "error": _latest["error"], "watchlist": _WATCH,
+            # DECLINED/MASKED decisions (F-NQ-ASIA-1, 2026-07-14): 'evaluated and declined' must
+            # never look like 'dead scanner' — the engine/mask reasons ride to the console
+            "declines": _latest.get("declines") or [],
             # RESOLUTION FEED (user 2026-07-10 awareness): last ~30 first-touch outcomes so the
             # dashboard can announce a TP2/stop the cycle it books, not when you dig for it
             "resolutions": _latest.get("resolutions") or [],
@@ -2054,7 +2064,9 @@ async def tv_webhook(req: Request):
     if event in ("exit", "close") or (p.get("action") or "").lower() in ("exit", "close"):
         if b is None:
             return {"action": "shadow_exit", "ticker": sym, "note": "logged (no live broker in this mode)"}
-        return {"action": "exit", "ticker": sym, **b.flatten()}
+        # completion-order step 5 (2026-07-14): SYMBOL-SCOPED, OMS-recorded — the old branch
+        # called b.flatten() = close_all_positions: one ticker's exit closed the WHOLE account.
+        return {"ticker": sym, **_exec_service().close_symbol(sym, source="webhook")}
 
     side = {"buy": "long", "sell": "short"}.get((p.get("action") or "").lower())
     if side is None:
@@ -2083,7 +2095,7 @@ def cancel_order(order_id: str, _=Depends(auth)):          # P1.4: broker mutati
     b = _broker()
     if b is None:
         return {"error": "no live broker in this mode"}
-    return {"cancelled": b.cancel(order_id).state.value}
+    return _exec_service().cancel_order(order_id, source="ui")   # step 5: OMS reflects the cancel
 
 
 @app.post("/api/flatten")
@@ -2091,7 +2103,7 @@ def flatten(_=Depends(auth)):
     b = _broker()
     if b is None:
         return {"error": "no live broker in this mode"}
-    return b.flatten()
+    return _exec_service().flatten_all(source="ui")              # step 5: audited via the service
 
 
 def _flow_score(b, n: int = 20) -> float:
@@ -2964,7 +2976,8 @@ def exec_fills_api():
                  "ORDER BY at DESC LIMIT 200")]
     return {"fills": fills,
             "open_book": {k: v for k, v in book.items() if v.get("net")},
-            "realized": [{"at": a, "pnl_usd": round(p, 2)} for a, p in realized[-100:]]}
+            "realized": [{"at": a, "pnl_usd": round(p, 2), "symbol": s, "order_id": o}
+                         for a, p, s, o in realized[-100:]]}   # identity-joined (steps 6/7)
 
 
 @app.get("/api/risk/state")

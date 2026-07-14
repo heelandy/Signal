@@ -45,17 +45,24 @@ SHADOW_BOOK_PREFIXES = ("rth5f", "worker-", "emergent-", "trail-", "options-nati
 
 def _rows_shadow() -> tuple[list[dict], str]:
     from bot.tracker import DB
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
     rows = []
     con = sqlite3.connect(str(DB))
     try:
-        for sym, side, fam, sess, r, j, at in con.execute(
-                "SELECT symbol, side, family, session, result_r, json, decided_at FROM decisions "
+        for sym, side, fam, sess, r, j, at, ver in con.execute(
+                "SELECT symbol, side, family, session, result_r, json, decided_at, "
+                "strategy_version FROM decisions "
                 "WHERE outcome != 'open' AND result_r IS NOT NULL"):
             # LINEAGE SEPARATION (bug hunt 2026-07-13): dedicated shadow-book/study lineages
             # (rth5f + the worker/trail/options studies) carry their OWN rules/geometry — blending
             # them into the CANONICAL shadow evidence would corrupt the matrix cells the same way
             # the ML dataset was protected against (dataset.py family-prefix + version-pure).
             if str(fam or "").startswith(SHADOW_BOOK_PREFIXES):
+                continue
+            # VERSION-PURE (completion-order step 7, 2026-07-14): shadow evidence counts ONLY the
+            # CURRENT rule version — foreign/unknown/legacy rows describe retired rules (the same
+            # P1.1 rule the ML dataset enforces). Cells stay honestly thin until 07.8 rows accrue.
+            if str(ver or "unknown") != STRATEGY_VERSION:
                 continue
             blob = {}
             try:
@@ -76,16 +83,18 @@ def _rows_shadow() -> tuple[list[dict], str]:
 
 
 def _rows_paper() -> tuple[list[dict], str]:
-    """Round trips realized from the Phase-5 execution record. Attribution: each realized event
-    joins the latest prior entry order for its symbol (best-effort until volumes grow)."""
+    """Round trips realized from the Phase-5 execution record. IDENTITY JOIN (completion-order
+    steps 6/7, 2026-07-14): each realized event carries its ORDER_ID from the fill replay —
+    candidate_id -> order_id -> fill -> round trip. The old 'latest prior order' join was
+    SYMBOL-BLIND: concurrent QQQ/SPY round trips cross-attributed P&L, family and grade."""
     from bot.execution.service import DB_PATH
     rows = []
     try:
         con = sqlite3.connect(str(DB_PATH))
-        orders = con.execute(
-            "SELECT symbol, side, session, family, grade, planned_entry, stop, created_at "
-            "FROM exec_orders WHERE state NOT IN ('FAILED','REJECTED') ORDER BY created_at"
-        ).fetchall()
+        omap = {oid: (sym, side, sess, fam, grade, planned, stop)
+                for oid, sym, side, sess, fam, grade, planned, stop in con.execute(
+                    "SELECT order_id, symbol, side, session, family, grade, planned_entry, stop "
+                    "FROM exec_orders WHERE state NOT IN ('FAILED','REJECTED')")}
         from bot.execution.service import ExecutionService  # reuse the replay math
 
         class _Stub:                                          # replay needs only the db handle
@@ -94,26 +103,27 @@ def _rows_paper() -> tuple[list[dict], str]:
         svc.db = con
         _, realized = ExecutionService._replay_fills(svc)
         from bot.risk import POINT_VALUE
-        for at, pnl in realized:
-            best = None
-            for o in orders:
-                if str(o[7]) <= str(at):
-                    best = o
-            if best is None:
+        unattributed = 0
+        for at, pnl, sym, oid in realized:
+            o = omap.get(oid)
+            if o is None:                                     # a fill with no OMS order: never
+                unattributed += 1                             # guess — count it, skip it
                 continue
-            sym, side, sess, fam, grade, planned, stop, _ = best
-            pv = POINT_VALUE.get(str(sym).upper(), 1.0)
+            osym, side, sess, fam, grade, planned, stop = o
+            pv = POINT_VALUE.get(str(osym).upper(), 1.0)
             risk = abs(float(planned) - float(stop)) * pv if planned and stop else None
             from bot.strategy.entry_group import entry_group_id
-            rows.append({"symbol": str(sym).upper(), "side": side or "—",
+            rows.append({"symbol": str(osym).upper(), "side": side or "—",
                          "session": sess or "—", "family": fam or "—", "grade": grade or "—",
-                         "entry_group_id": entry_group_id(sym, side, sess, "5m", fam),  # T2
+                         "entry_group_id": entry_group_id(osym, side, sess, "5m", fam),  # T2
                          "regime": "—", "net_r": (pnl / risk) if risk else 0.0,
                          "day": str(at)[:10]})
         con.close()
+        tag = f" ({unattributed} unattributed skipped)" if unattributed else ""
+        return rows, f"execution.db broker paper fills (measured, identity-joined){tag}"
     except Exception:
         pass
-    return rows, "execution.db broker paper fills (measured)"
+    return rows, "execution.db broker paper fills (measured, identity-joined)"
 
 
 def _rows_live() -> tuple[list[dict], str]:

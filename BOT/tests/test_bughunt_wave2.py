@@ -162,7 +162,7 @@ def test_w2_fills_scorecard_equals_raw_exec_fills_replay(tmp_path, monkeypatch):
     svc.db.commit()
     monkeypatch.setattr("bot.execution.service.DB_PATH", tmp_path / "execution.db")
     _, realized = svc._replay_fills()
-    raw_total = round(sum(p for _, p in realized), 3)
+    raw_total = round(sum(p for _, p, *_ in realized), 3)
     from bot.phase78 import fills_scorecard
     sc = fills_scorecard()
     assert sc["overall"]["n"] == len(realized), (sc["overall"], len(realized))

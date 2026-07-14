@@ -167,7 +167,19 @@ def fast_state_1m(d5: pd.DataFrame, bars_1m: pd.DataFrame, sym: str) -> np.ndarr
     return m["st"].to_numpy(float)
 
 
-def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFrame | None = None) -> list[dict]:
+def _mask_reason(ma_ok: bool, rg_ok: bool, dir_ok: bool, side: str) -> str:
+    """Human reason for a scan-level mask kill (F-NQ-ASIA-1 observability, 2026-07-14)."""
+    if not ma_ok:
+        return "VIX-regime block (macro_allow)"
+    if not rg_ok:
+        return "chop/RANGE block (local regime)"
+    if side == "short":
+        return "macro stand-down: trend-up blocks shorts"
+    return "macro stand-down: trend-down blocks longs"
+
+
+def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFrame | None = None,
+         declines_out: list | None = None) -> list[dict]:
     """Run all 4 families with the symbol's PER-ASSET config; signals active in the last `bars_back` bars.
     bars_1m (optional): 1m frame for the SAME symbol — the trend gate + struct_aligned grade then read
     the 1-MINUTE structure (staleness fix 2026-07, mirrors the Pine fast_dir input); stop geometry
@@ -251,7 +263,9 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
             # only to close-confirm families (stop/retest execms have no watch machine).
             _l3 = layer3_kwargs(a)
             _l3["watch_live"] = cl and _l3["watch_live"]
+            _rej = [] if (declines_out is not None and fam.tradeable) else None
             lsig, ssig, or_lo, or_hi, *_ = B._orb_signals(d, or_s, or_e, 0.0, cut, fam.execm, tradeday, reentry,
+                                            collect_rejects=_rej,
                                             ob_l=obl, ob_s=obs, entry_delay=a.entry_delay, chase_atr=a.chase_atr,
                                             strong_body=(SB if cl else 0.0), ft_confirm=(cl and a.ft_confirm), dir_seq=cl,
                                             max_entries=a.max_entries,
@@ -278,8 +292,30 @@ def scan(bars: pd.DataFrame, symbol: str, bars_back: int = 2, bars_1m: pd.DataFr
             _ms = d["macro_short_ok"].fillna(True).to_numpy(bool) if "macro_short_ok" in d else _ones
             _rg = ((d["local_regime"] != 2).to_numpy() if ("local_regime" in d and a.block_range)
                    else _ones)
+            _raw_l, _raw_s = lsig.copy(), ssig.copy()
             lsig = lsig & _ma & _ml & _rg
             ssig = ssig & _ma & _ms & _rg
+            # DECLINE/MASK OBSERVABILITY (F-NQ-ASIA-1, 2026-07-14): everything the tradeable
+            # family evaluated-and-declined in the visible window becomes a decline record —
+            # engine rejects carry the FIRST failing gate; mask kills carry which mask. Watch-only.
+            if declines_out is not None and fam.tradeable:
+                _lo_i = max(0, n - bars_back)
+                for _i in range(_lo_i, n):
+                    if _raw_l[_i] and not lsig[_i]:
+                        declines_out.append({"symbol": symbol, "side": "long", "session": sname,
+                                             "ts": str(_et_all.iloc[_i])[:16], "kind": "mask",
+                                             "reason": _mask_reason(bool(_ma[_i]), bool(_rg[_i]),
+                                                                    bool(_ml[_i]), "long")})
+                    if _raw_s[_i] and not ssig[_i]:
+                        declines_out.append({"symbol": symbol, "side": "short", "session": sname,
+                                             "ts": str(_et_all.iloc[_i])[:16], "kind": "mask",
+                                             "reason": _mask_reason(bool(_ma[_i]), bool(_rg[_i]),
+                                                                    bool(_ms[_i]), "short")})
+                for _i, _side, _r in (_rej or []):
+                    if _i >= _lo_i:
+                        declines_out.append({"symbol": symbol, "side": _side, "session": sname,
+                                             "ts": str(_et_all.iloc[_i])[:16], "kind": "engine",
+                                             "reason": _r})
             for i in range(max(0, n - bars_back), n):
                 sign = 1 if lsig[i] else (-1 if ssig[i] else 0)
                 if sign == 0:

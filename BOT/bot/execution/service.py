@@ -218,13 +218,17 @@ class ExecutionService:
     # ── account truth ────────────────────────────────────────────────────────
     def _replay_fills(self):
         """Replay exec_fills chronologically → per-symbol net/avg + realized P&L events.
-        Deterministic and cheap (paper fills are few); the same math the tests seed."""
+        Deterministic and cheap (paper fills are few); the same math the tests seed.
+        Realized tuples are (at, pnl$, symbol, order_id) — the IDENTITY the matrix paper loader
+        joins on (completion-order steps 6/7, 2026-07-14: the old (at, pnl) shape forced a
+        symbol-blind latest-prior-order attribution that cross-attributed concurrent trades)."""
         from bot.risk import POINT_VALUE
         rows = self.db.execute(
-            "SELECT symbol, side, qty, price, at FROM exec_fills ORDER BY at, fill_id").fetchall()
+            "SELECT symbol, side, qty, price, at, order_id FROM exec_fills "
+            "ORDER BY at, fill_id").fetchall()
         book: dict[str, dict] = {}
-        realized: list[tuple[str, float]] = []          # (at, pnl$)
-        for sym, side, qty, price, at in rows:
+        realized: list[tuple[str, float, str, str]] = []   # (at, pnl$, symbol, order_id)
+        for sym, side, qty, price, at, oid in rows:
             pv = POINT_VALUE.get(str(sym).upper(), 1.0)
             b = book.setdefault(sym, {"net": 0, "avg": 0.0})
             signed = qty if side == "long" else -qty
@@ -236,7 +240,7 @@ class ExecutionService:
                 net_before = b["net"]
                 closed = min(abs(signed), abs(net_before))
                 direction = 1 if net_before > 0 else -1
-                realized.append((at, (price - b["avg"]) * closed * direction * pv))
+                realized.append((at, (price - b["avg"]) * closed * direction * pv, sym, oid))
                 b["net"] = net_before + signed
                 if b["net"] == 0:
                     b["avg"] = 0.0
@@ -260,10 +264,10 @@ class ExecutionService:
         monday = (datetime.fromisoformat(today) -
                   timedelta(days=datetime.fromisoformat(today).weekday())).date().isoformat()
         _, realized = self._replay_fills()
-        daily = sum(p for at, p in realized if _fill_et_date(at) == today)
-        weekly = sum(p for at, p in realized if _fill_et_date(at) >= monday)
+        daily = sum(p for at, p, *_ in realized if _fill_et_date(at) == today)
+        weekly = sum(p for at, p, *_ in realized if _fill_et_date(at) >= monday)
         streak = 0
-        for _, p in reversed(realized):
+        for _, p, *_ in reversed(realized):
             if p < 0:
                 streak += 1
             else:
@@ -540,6 +544,65 @@ class ExecutionService:
             if why.startswith("reconcile mismatch"):
                 self.clear_halt()                        # cleared by a clean pass; other halts stay
         return out
+
+    # ── exits through the ONE door (completion-order step 5, 2026-07-14) ────
+    def close_symbol(self, sym: str, source: str = "manual") -> dict:
+        """SYMBOL-SCOPED exit, OMS-recorded. The audited defect: the webhook 'exit' branch called
+        broker.flatten() — an exit for ONE ticker closed the WHOLE account with no OMS record.
+        Closes REDUCE risk → deliberately allowed while submissions are halted."""
+        sym = str(sym).upper()
+        try:
+            pos = [p for p in self.broker.positions()
+                   if str(p.symbol).upper() == sym and getattr(p, "qty", 0)]
+        except Exception as e:
+            return {"action": "error", "reason": f"broker positions: {e}"}
+        if not pos:
+            return {"action": "no_position", "symbol": sym}
+        p = pos[0]
+        qty = abs(int(p.qty))
+        p_side = getattr(p.side, "value", p.side)
+        close_side = "short" if str(p_side) == "long" else "long"
+        fn = getattr(self.broker, "close_position", None)
+        if fn is None:
+            return {"action": "error", "reason": "broker has no close_position()"}
+        try:
+            res = fn(sym)
+        except Exception as e:
+            return {"action": "error", "reason": f"close failed: {e}"}
+        oid = uuid.uuid4().hex[:16]
+        self.db.execute(
+            "INSERT INTO exec_orders(order_id, correlation_id, idem_key, source, symbol, side, "
+            "qty, state, broker_order_id, created_at, updated_at, created_epoch) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (oid, uuid.uuid4().hex[:12], f"close:{sym}:{oid}", f"{source}-exit", sym, close_side,
+             qty, "SUBMITTED", str((res or {}).get("broker_order_id") or ""), utcnow_iso(),
+             utcnow_iso(), self.now()))
+        self.db.commit()
+        self._event(oid, "EXIT_SUBMITTED", f"symbol-scoped close ({source}) — {qty} {sym}")
+        return {"action": "closed", "symbol": sym, "order_id": oid, "qty": qty}
+
+    def flatten_all(self, source: str = "ui") -> dict:
+        """Close EVERYTHING — the deliberate whole-account action (UI 'Flatten All'), audited."""
+        fn = getattr(self.broker, "flatten", None)
+        if fn is None:
+            return {"flattened": False, "error": "broker has no flatten()"}
+        res = fn()
+        self._event("-", "FLATTEN_ALL", f"close ALL positions + cancel orders via {source}")
+        return res
+
+    def cancel_order(self, broker_order_id: str, source: str = "ui") -> dict:
+        """Cancel via the broker AND reflect it in the OMS row (the old path skipped the OMS)."""
+        try:
+            ev = self.broker.cancel(broker_order_id)
+        except Exception as e:
+            return {"cancelled": "error", "reason": str(e)}
+        state = str(getattr(ev.state, "value", ev.state)).lower()
+        if state == "cancelled":
+            row = self.db.execute("SELECT order_id FROM exec_orders WHERE broker_order_id=? "
+                                  "OR order_id=?", (str(broker_order_id), str(broker_order_id))).fetchone()
+            if row:
+                self._update(row[0], "CANCELLED", f"cancelled via {source}")
+        return {"cancelled": state}
 
     # ── hygiene ──────────────────────────────────────────────────────────────
     def staleness_sweep(self) -> list[str]:

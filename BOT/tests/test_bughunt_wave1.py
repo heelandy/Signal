@@ -139,7 +139,7 @@ def test_l3_direction_flip_realizes_pnl_off_the_flip_price(svc):
     svc.db.executemany("INSERT INTO exec_fills VALUES(?,?,?,?,?,?,?,?)", fills)
     svc.db.commit()
     book, realized = svc._replay_fills()
-    total = round(sum(p for _, p in realized), 6)
+    total = round(sum(p for _, p, *_ in realized), 6)
     assert total == pytest.approx(125.0), (
         f"direction-flip realized P&L wrong: got {total}, expected 125.0 — the residual short "
         f"must carry the flip-fill price (110), not the stale long avg (100)")
@@ -155,7 +155,7 @@ def test_l3_partial_reduce_still_keeps_avg(svc):
     svc.db.commit()
     book, realized = svc._replay_fills()
     assert book["QQQ"]["net"] == 6 and book["QQQ"]["avg"] == pytest.approx(100.0), book["QQQ"]
-    assert round(sum(p for _, p in realized), 6) == pytest.approx(40.0)   # (110-100)*4
+    assert round(sum(p for _, p, *_ in realized), 6) == pytest.approx(40.0)   # (110-100)*4
 
 
 # ─────────────────────────── Wave 1 remainder — concurrency / numeric / fuzz ──────────

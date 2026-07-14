@@ -821,6 +821,47 @@ plan bug — add the test, not just the fix.
   clean-record reset and 15/25 are deliberate B-grade data-collection entries — it is a warning,
   not a verdict, and Phase R + Phase 5 make future forward evidence clean.
 
+## COMPLETION-ORDER EXECUTION (2026-07-14, operator: "knock those one out") — 8 items LANDED
+
+One sitting, every item red-first → fix → green (suite progression 416 → 434):
+1. **Baseline commit** (`9cbcc9b`, the 07.8 regime-B removal).
+2. **Exits through the ONE door (step 5)**: `ExecutionService.close_symbol()` (symbol-scoped,
+   OMS-recorded, allowed during halts — closes REDUCE risk), `flatten_all()` (audited),
+   `cancel_order()` (OMS reflects it). The webhook 'exit' that FLATTENED THE WHOLE ACCOUNT for
+   one ticker is dead; `/api/flatten` + `/api/order/cancel` route through the service.
+   `AlpacaBroker.close_position()` added. Tests ×5 (`test_exit_routing.py`).
+3. **ML abstain honesty (step 10b)**: `predict_candidate` returns **None = ABSTAIN** on
+   no-champion / version-block / scoring failure — the 0.42 prior no longer enters
+   `decide_ensemble` as a phantom DOWN-vote (0.42 < 0.45!); Kelly abstains with it; proposals
+   carry `ml_status`; the console renders "ML: ABSTAIN — no compatible model". Tests ×4.
+4. **label_final gate (step 10a)**: labels carry the T4 lifecycle state;
+   `build_execution_labels()` = label_final ONLY (honestly empty until fills close). Tests ×3.
+5. **Matrix identity join (steps 6/7)**: `_replay_fills` realized tuples now carry
+   (symbol, order_id) → `_rows_paper` joins candidate→order→fill EXACTLY (the symbol-blind
+   latest-prior-order cross-attribution is dead; unattributed events counted, never guessed);
+   `_rows_shadow` is VERSION-PURE (current rule version only, like the ML dataset);
+   `/api/exec/fills` realized rows expose symbol+order_id. Tests ×2 + armor updated.
+6. **Evidence hardening (step 3)**: the evidence fingerprint is ROW-CONTENT-SENSITIVE
+   (bit_xor of per-row ts+OHLCV hashes — a price-only mutation now moves it) while staying
+   append-stable; `approve(paper/live)` REFUSES on manifest-construction failure (override
+   records `manifest_error` forever). dataqa regenerated → new-format print `41fa1f4d72715b3b`
+   (07.8 had no approval pinned yet — free format change). Tests ×3.
+7. **Observability (the F-NQ-ASIA-1 fix, 3 forensic evenings)**: `families.scan(declines_out=…)`
+   collects ENGINE rejects (the dormant `collect_rejects` hook — no_watch/chase/wick reasons) +
+   scan-level MASK kills (`_mask_reason`: VIX-regime / chop / directional stand-down) for the
+   tradeable family in the visible window; `/api/signals` serves `declines`; the Entry Console
+   renders "DECLINED / MASKED (recent)" — including on the EMPTY state, where the dead-scanner
+   doubt lived. Tests ×3.
+8. **The certificate is wired (steps 8/9 — the audit's central integration gap CLOSED)**:
+   `live._certify_signal` runs the NINE gates per tradeable proposal each cycle (pure), persists
+   + alerts via `certify_and_fire` on VERDICT TRANSITIONS only (no 60s db spam); every proposal
+   carries the BACKEND `action` (ENTER / DO NOT ENTER) + certificate summary; `_paper_autotrade`
+   requires `action == "ENTER"` (THE one door — fail closed on missing/blocked/error certs);
+   the console renders the backend verdict + blocking gates verbatim (client-side ACTION
+   computation retired; fallback only for stale processes). Context symbols (NQ/GC) can never
+   read ENTER (profitability gate); forming bars block causality. Tests ×5.
+OPERATOR STEPS UNCHANGED: restart (loads all of this), paper-approve 07.8, TV Pine reload.
+
 ## Post-remediation intake (2026-07-12) — adopted completion order + open field findings
 
 *(added per operator 2026-07-12: "add them in the doc remediation. we will circle back later." No

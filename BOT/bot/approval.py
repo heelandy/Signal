@@ -178,8 +178,16 @@ def approve(strategy_version: str, stage: str, approved_by: str = "user", notes:
             from bot.evidence_manifest import build_manifest   # evidence manifest with the record
             rec["manifest"] = build_manifest(strategy_version,
                                              waiver="frozen-span" if override else None)
-        except Exception:
-            pass
+        except Exception as e:
+            # MANIFEST IS MANDATORY for required stages (completion-order step 3, 2026-07-14):
+            # a silent construction failure used to mint an approval with NO manifest — the exact
+            # unaccountable-approval class T1 exists to kill. Refuse; override records the error
+            # FOREVER (visible on every approval screen), never hides it.
+            if not override:
+                raise ValueError(f"stage '{stage}' refused — evidence manifest construction "
+                                 f"FAILED ({e}); fix the reports or pass override=True to record "
+                                 f"a deliberate, visible exception") from e
+            rec["manifest_error"] = str(e)
         if override:
             rec["override"] = True
     recs[stage] = rec

@@ -40,18 +40,26 @@ EVIDENCE_CUTOFF = os.environ.get("HS_EVIDENCE_CUTOFF", "2026-07-10")
 def evidence_fingerprint(con, syms, tf: str = "5m", sess: str = "rth",
                          cutoff: str = None) -> str:
     """Fingerprint of the FROZEN evidence range [start, cutoff] per symbol — stable across bars
-    appended AFTER the cutoff (the operational store grows daily; the evidence snapshot must not)."""
+    appended AFTER the cutoff (the operational store grows daily; the evidence snapshot must not).
+    ROW-CONTENT-SENSITIVE (completion-order step 3, 2026-07-14): the digest XORs a hash of every
+    row's ts+OHLCV, so a historical PRICE mutation moves the fingerprint even when count / ts-span
+    / volume-sum are unchanged (the audited blind spot of the aggregate-only digest)."""
     import hashlib
     cutoff = (cutoff or EVIDENCE_CUTOFF)[:10]
     parts = []
     for sym in sorted(s.upper() for s in syms):
         row = con.execute(
-            "SELECT count(*), min(ts), max(ts), sum(volume) FROM bars "
-            "WHERE sym=? AND tf=? AND session=? AND CAST(ts AS DATE) <= ?",
+            "SELECT count(*), min(ts), max(ts), sum(volume), "
+            "  bit_xor(hash(CAST(ts AS VARCHAR) || '|' || COALESCE(CAST(open AS VARCHAR),'') "
+            "    || '|' || COALESCE(CAST(high AS VARCHAR),'') || '|' "
+            "    || COALESCE(CAST(low AS VARCHAR),'') || '|' "
+            "    || COALESCE(CAST(close AS VARCHAR),'') || '|' "
+            "    || COALESCE(CAST(volume AS VARCHAR),''))) "
+            "FROM bars WHERE sym=? AND tf=? AND session=? AND CAST(ts AS DATE) <= ?",
             [sym, tf, sess, cutoff]).fetchone()
-        n, lo, hi, vol = row
+        n, lo, hi, vol, content = row
         sub = hashlib.sha256("|".join([sym, tf, sess, str(int(n or 0)), str(lo), str(hi),
-                                       str(vol)]).encode()).hexdigest()[:16]
+                                       str(vol), str(content)]).encode()).hexdigest()[:16]
         parts.append(f"{sym}:{sub}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 FRESHNESS_BDAYS = 3            # Phase 4: span end older than this many trading days = STALE

@@ -21,19 +21,25 @@ from bot.ml.registry import FeatureStore
 OUTCOME_R = {"tp2": None, "tp1": None, "stop": None}     # result_r column is authoritative
 
 
-def build_live_labels(save: bool = True) -> pd.DataFrame:
+def build_live_labels(save: bool = True, require_state: str | None = None) -> pd.DataFrame:
     """Resolved tracker decisions -> labeled rows. Rows without a stored PIT snapshot still land
     (features NaN) so the outcome record is never lost; they upgrade once the scan stores
-    snapshots (2026-07-04 onward)."""
+    snapshots (2026-07-04 onward). Every row carries its LIFECYCLE STATE (T4: shadow /
+    entry_filled / label_final); `require_state` filters to one — see build_execution_labels
+    for the execution-grade corpus (completion-order step 10a, 2026-07-14)."""
     from bot.tracker import _con
     con = _con()
-    rows = con.execute(
-        "SELECT symbol, side, family, session, taken, outcome, result_r, mfe_r, mae_r,"
-        " signal_at, decided_at, json, strategy_version FROM decisions "
-        "WHERE outcome NOT IN ('open')").fetchall()
+    q = ("SELECT symbol, side, family, session, taken, outcome, result_r, mfe_r, mae_r,"
+         " signal_at, decided_at, json, strategy_version, state FROM decisions "
+         "WHERE outcome NOT IN ('open')")
+    args: tuple = ()
+    if require_state:
+        q += " AND state = ?"
+        args = (require_state,)
+    rows = con.execute(q, args).fetchall()
     con.close()
     out = []
-    for sym, side, fam, sess, taken, outcome, result_r, mfe_r, mae_r, sig_at, dec_at, raw, sv in rows:
+    for sym, side, fam, sess, taken, outcome, result_r, mfe_r, mae_r, sig_at, dec_at, raw, sv, state in rows:
         try:
             sig = json.loads(raw or "{}")
         except Exception:
@@ -44,6 +50,7 @@ def build_live_labels(save: bool = True) -> pd.DataFrame:
                # P1.1: the row's OWN immutable version rides into training (never back-stamped)
                "strategy_version": sv or sig.get("strategy_version") or "unknown",
                "session": sess, "taken": int(taken or 0), "outcome": outcome,
+               "state": state or "legacy",           # T4 lifecycle rides with every label
                "tf": sig.get("tf") or sig.get("timeframe") or "5m",   # capture timeframe (journal->training-lab tf match)
                **{k: pit.get(k, np.nan) for k in FEATURE_COLUMNS},
                "net_r": r, "mfe_r": mfe_r, "mae_r": mae_r,
@@ -57,6 +64,14 @@ def build_live_labels(save: bool = True) -> pd.DataFrame:
         if save:
             FeatureStore().save("live_outcomes", "v1", df)
     return df
+
+
+def build_execution_labels(save: bool = False) -> pd.DataFrame:
+    """EXECUTION-GRADE labels (completion-order step 10a): ONLY broker-closed round trips
+    (state='label_final'). A broker-linked entry whose round trip is still open (entry_filled)
+    can NEVER be scored as a completed trade — no matter what the theoretical first-touch
+    resolver said. Empty until real fills close (0/60 burn-in) — and that emptiness is honest."""
+    return build_live_labels(save=save, require_state="label_final")
 
 
 def summary() -> dict:

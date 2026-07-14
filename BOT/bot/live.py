@@ -23,6 +23,95 @@ from bot.journal import Journal
 from bot.store import Store
 from bot.options.exit_plan import options_exit_plan
 from bot.ml.pipeline import predict_candidate
+
+LAST_DECLINES: list = []   # declined/masked decisions from the LAST scan (F-NQ-ASIA-1 observability)
+
+# ── SIGNAL CERTIFICATE wiring (completion-order steps 8/9, 2026-07-14) ──────────────────────────
+_CERT_STATE: dict = {}     # candidate_id -> last overall verdict (persist/alert on TRANSITION only)
+_QA_CACHE: dict = {}       # {"ts": epoch, "qa": dataqa dict} — 300s TTL
+_CFG_HASH: list = []       # cached config identity (git short or version hash)
+
+
+def _config_hash() -> str:
+    if not _CFG_HASH:
+        try:
+            from bot.evidence_manifest import _git_commit
+            _CFG_HASH.append(_git_commit() or "")
+        except Exception:
+            _CFG_HASH.append("")
+        if not _CFG_HASH[0]:
+            import hashlib
+            from bot.strategy.orb_candidates import STRATEGY_VERSION
+            _CFG_HASH[0] = hashlib.sha1(STRATEGY_VERSION.encode()).hexdigest()[:10]
+    return _CFG_HASH[0]
+
+
+def _data_qa_ok(sym: str):
+    """Per-symbol QA verdict from the dataqa report (300s cache); None = unknown = cert blocks."""
+    import time as _t
+    try:
+        if _t.time() - _QA_CACHE.get("ts", 0) > 300:
+            import json as _json
+            from bot.ml.registry import REPORTS_DIR
+            _QA_CACHE["qa"] = _json.loads((REPORTS_DIR / "dataqa.json").read_text(encoding="utf-8"))
+            _QA_CACHE["ts"] = _t.time()
+        return (_QA_CACHE["qa"].get("symbols", {}).get(sym.upper(), {}) or {}).get("ok")
+    except Exception:
+        return None
+
+
+def _certify_signal(c, sdict: dict, rd, conf, src: str, healthy: bool, age_min,
+                    removed) -> tuple[str, dict]:
+    """Run the NINE-GATE certificate for one tradeable proposal and return the BACKEND action
+    (steps 8/9: the console renders this verbatim — ACTION is never computed client-side again;
+    paper autotrade requires ENTER). Persists + alerts only when the verdict TRANSITIONS (a 60s
+    rescan of the same candidate must not spam the audit db). Fail-closed: any error here is
+    DO NOT ENTER."""
+    from bot.signal_certificate import certify, certify_and_fire
+    from bot.strategy.entry_group import entry_group_id
+    from bot.strategy.orb_candidates import STRATEGY_VERSION
+    from bot.strategy.pattern_advisory import EVIDENCE
+    from bot.config import settings
+    sym = str(sdict.get("symbol") or c.symbol).upper()
+    gen = (sdict.get("candidate") or {}).get("generated_at") or sdict.get("generated_at")
+    ctx = {
+        "strategy_version": STRATEGY_VERSION, "config_hash": _config_hash(),
+        "code_commit": _config_hash(),
+        "data_qa_ok": _data_qa_ok(sym),
+        "data_age_sec": None if age_min is None else int(age_min) * 60,
+        "data_provider": src,
+        "closed_bar": bool((sdict.get("bars_ago") or 0) >= 1),   # forming bar = lookahead = block
+        "entry_state": ("confirmed" if (sdict.get("tradeable")
+                                        and sdict.get("signal_state") == "active")
+                        else str(sdict.get("signal_state") or "unknown")),
+        "entry_group_id": entry_group_id(sym, str(sdict.get("side") or ""),
+                                         sdict.get("session"), sdict.get("tf") or "5m",
+                                         sdict.get("family")),
+        "removed": bool(removed),
+        "profitability_evidence": ("certified" if EVIDENCE.get(sym) == "CERTIFIED"
+                                   else str(EVIDENCE.get(sym, "unknown")).lower()),
+        "risk_decision": rd,
+        "broker_reachable": True if settings.alpaca_paper else None,
+        "idempotency_ready": True, "halted": None,
+        "ml_status": "score" if isinstance(conf, float) else "abstain",
+        "ml_full_inputs": bool(sdict.get("pit_features")),
+        "session": sdict.get("session"), "signal_bar_ts": gen,
+    }
+    cert = certify(c, ctx)
+    key = getattr(c, "candidate_id", None) or f"{sym}:{gen}"
+    if _CERT_STATE.get(key) != cert["overall"]:                  # transition -> persist + alert
+        _CERT_STATE[key] = cert["overall"]
+
+        def _alert(msg):
+            try:
+                from bot.alerts import alert
+                alert(msg, level="info", source="certificate")
+            except Exception:
+                pass
+        cert = certify_and_fire(c, ctx, alert_fn=_alert, submit_fn=None)
+    action = "ENTER" if cert["overall"] == "ORDER_READY" else "DO NOT ENTER"
+    return action, {"overall": cert["overall"], "hash": cert.get("certificate_hash"),
+                    "blocking": [b["gate"] for b in cert.get("blocking", [])]}
 from bot.orderflow.confirm import orderflow_confirm
 
 _journal = Journal()
@@ -118,6 +207,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
     """Signal-engine scan: data -> 4 families -> P(win) -> order-flow -> options exit-plan. No trades.
     tf selects the signal timeframe (5m default; the 15m pass drives the 15m lineage's live journal)."""
     proposals = []
+    _declines: list = []               # observability: what was evaluated-and-declined
     _period = "20d" if tf in ("15m", "30m", "1h") else "5d"    # wider window so higher-TF bars fill
     for sym in symbols:
         sym = sym.upper()
@@ -195,7 +285,8 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
         _cl = bars["close"].to_numpy(float)[-120:]
         _ret = _np.diff(_np.log(_cl)) if len(_cl) > 6 else _np.array([0.0])
         iv_est = (_cal(float(_np.std(_ret) * (252 * 78) ** 0.5), dte=0) if len(_ret) > 5 else _div(0))
-        for s in families.scan(bars, sym, bars_back=bars_back, bars_1m=b1):   # 1m feed -> gate + grade at 1m speed
+        for s in families.scan(bars, sym, bars_back=bars_back, bars_1m=b1,
+                               declines_out=_declines):   # 1m feed -> gate + grade at 1m speed
             c = s["candidate"]
             # PREDICTIVE: calibrated P(win) from the champion, scored on the SAME PIT feature
             # snapshot the model was trained on (train/live parity); prior when no champion.
@@ -274,7 +365,7 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                                      nn_p=s.get("nn_seq"))
             except Exception:
                 ai = None
-            proposals.append({
+            _p = {
                 "symbol": sym, "source": src, "last_price": last_px, "price_source": px_src,
                 "bar_age_min": age_min, "source_healthy": healthy,
                 # ZONE STATE (staleness fix 2026-07): is the proposal still structurally valid at the
@@ -310,6 +401,9 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 "tp1": (plan["underlying"]["tp1"] if plan else round(c.entry + c.side.sign * 1.5 * c.risk, 2)),
                 "tp2": (plan["underlying"]["tp2"] if plan else round(c.entry + c.side.sign * 4.0 * c.risk, 2)),
                 "rr": round(c.rr, 2), "confidence": conf, "orderflow": flow, "features": feats, "iv_est": iv_est,
+                # ML honesty (step 10, 2026-07-14): conf is None when no compatible champion —
+                # the UI says ABSTAIN, never a phantom prior rendered as a prediction
+                "ml_status": "score" if isinstance(conf, float) else "abstain — no compatible model",
                 "heads": heads_out or None, "ai_decision": ai, "ml_explain": ml_explain,
                 "nn_seq": s.get("nn_seq"), "similarity": sim_out,
                 # PIT SNAPSHOT PLUMBING (journal-feed fix 2026-07-09): the family candidate carries
@@ -331,7 +425,21 @@ def scan_watchlist(symbols: list[str], provider: str | None = None, equity: floa
                 # per (sym,family,session,side,tf) EVER and signal_at was NULL, so outcomes never
                 # resolved (every journal row stuck 'open'). This one field feeds both.
                 "candidate": {"candidate_id": c.candidate_id, "generated_at": c.generated_at},
-                "options": plan})
+                "options": plan}
+            # BACKEND-AUTHORITATIVE ACTION (steps 8/9, 2026-07-14): the certificate verdict is
+            # computed HERE and rendered verbatim by the console — never client-side again.
+            # Fail-closed: a certify error is DO NOT ENTER.
+            if _p.get("tradeable"):
+                try:
+                    _p["action"], _p["certificate"] = _certify_signal(
+                        c, _p, rd, conf, src, healthy, age_min, _rm_rec)
+                except Exception as _ce:
+                    _p["action"], _p["certificate"] = "DO NOT ENTER", {
+                        "overall": "ERROR", "hash": None, "blocking": [f"certify: {_ce}"[:60]]}
+            else:
+                _p["action"], _p["certificate"] = "DO NOT ENTER", None
+            proposals.append(_p)
+    LAST_DECLINES[:] = _declines[-60:]         # publish for the API/console (watch-only)
     return proposals
 
 

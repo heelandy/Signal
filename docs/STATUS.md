@@ -1,5 +1,15 @@
 # STATUS — single source of truth
-*(updated 2026-07-11 · maintained under `docs/REMEDIATION_PLAN.md` Phase 0.6 — update on every landed phase)*
+*(updated 2026-07-14 · maintained under `docs/REMEDIATION_PLAN.md` Phase 0.6 — update on every landed phase)*
+
+> **COMPLETION ORDER EXECUTED (2026-07-14): 8 of the 12 audit steps landed in one sitting**
+> (see REMEDIATION_PLAN §Completion-order execution). Headlines: the CERTIFICATE IS WIRED —
+> every tradeable signal is nine-gate certified server-side, the console renders the backend
+> ACTION verbatim, and paper autotrade only opens on ENTER (the one door) · webhook exit no
+> longer flattens the whole account (symbol-scoped, OMS-recorded) · ML abstains honestly (the
+> 0.42 phantom down-vote is dead) · matrix attribution is identity-joined (candidate→order→fill)
+> and version-pure · evidence fingerprint is row-content-sensitive + manifest fail-closed ·
+> declines/masks render on the console with reasons. Remaining: operator clicks (07.8 approval,
+> restart, TV reload) + the 60-fill/56-day burn-in + Pine parity (steps 4/11/12).
 
 > **Remediation scoreboard (2026-07-12): Phases 0–7 + R + E + P1 (complete) + U (complete) ALL
 > LANDED — suite 294 green, every fix red-first-tested, the operator console LIVE on :8000**
