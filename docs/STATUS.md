@@ -72,7 +72,11 @@
 
 ## Right now
 
-- **Strategy version:** `orb-standard-2026.07.7` (close-confirm / watch-state, F78 pullback rules)
+- **Strategy version:** `orb-standard-2026.07.8` (2026-07-14: **regime-B block REMOVED** — it had
+  killed 34/34 tradeable fires over 5 live days; isolation-tested, 2x-slip-stressed, maxDD
+  measured; D-block + SPY-directional kept; also closes an undocumented Pine-parity divergence —
+  both Pines defaulted B-block Off. Evidence regenerated; predicates GREEN; **operator must
+  paper-approve 07.8 + restart** — until both, autotrade places no orders under the new version.)
 - **Mode:** PAPER · live **HARD-LOCKED** (`config/LIVE_APPROVED.lock` absent — double gate) · kill switch OFF
 - **Paper autotrade:** **ARMED** (re-armed after Phase 5 landed 2026-07-11 — decision 0.5's
   condition met; forward gates running since 2026-07-11 ~23:00 ET via the cross-process ctl

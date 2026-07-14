@@ -56,7 +56,15 @@ _SESS = {"rth": Session.RTH, "asia": Session.ASIA, "london": Session.LONDON}
 #     Everything else CONFIRMED at 07.6 values: vol-confirm/gap-skip/side-budget/%OR-depth/
 #     reclaim/VWAP-retest all cost edge on every symbol; timeout 8 is the local optimum;
 #     min-depth is a no-op at 15m (retests always retrace >0.5 ATR). QQQ/SPY/ES unchanged.
-STRATEGY_VERSION = "orb-standard-2026.07.7"
+# .8 (2026-07-14, operator "apply the fix"): the macro REGIME-B BLOCK is REMOVED (hs_harness
+#     P.block_b=False; D-block + SPY-directional stand-down KEPT — the directional layer earns
+#     its OOS keep, QQQ 1.40 vs 1.19 without it). The B-block had killed 34/34 tradeable fires
+#     across 5 live days (QQQ 2 · SPY 1 · NQ 31, 2026-07-08..13). Isolation study: removing JUST
+#     B adds R in every window on every symbol — QQQ IS +25.9->+49.0R / OOS 16-23 +38.8->+55.8R
+#     (both eras positive) · SPY +18.0->+32.2 / +14.3->+40.8 · NQ 16-23 +104.5R PF 1.13; survives
+#     2x slip (QQQ +41.2/1.16, SPY +27.4/1.11); maxDD sub-linear (SPY OOS improves -24.7->-21.4).
+#     Evidence: REMEDIATION_PLAN §regime-B isolation · tests/test_regime_b_removal.py.
+STRATEGY_VERSION = "orb-standard-2026.07.8"
 
 
 @contextlib.contextmanager

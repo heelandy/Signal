@@ -123,6 +123,12 @@ class P:
     use_vwap2: bool = True; use_ema3: bool = True
     trig_confluence: str = "VWAP+EMA (both)"
     macro_en: bool = True; macro_standdown: bool = True
+    # regime blocks (2026-07-14, orb-standard-2026.07.8): the B-block is REMOVED by default — it
+    # killed 34/34 live tradeable fires over 5 days, and the isolation study (REMEDIATION_PLAN
+    # §regime-B isolation) shows removing it ADDS R in every window on every symbol (QQQ OOS
+    # +38.8->+55.8, SPY +14.3->+40.8, both eras positive, survives 2x slip, maxDD sub-linear).
+    # D (extreme vol) still blocks; block_b=True replays the pre-07.8 behavior for research.
+    block_d: bool = True; block_b: bool = False
     vix_calm: float = 15.0; vix_volatile: float = 25.0; vix_extreme: float = 35.0
     spy_adx_min: float = 25.0; macro_persist_n: int = 3
 
@@ -339,7 +345,8 @@ def _macro_regime(d, p):
         out.append(conf if conf != "—" else raw[i])
     d["macro_regime"] = out
     reg = pd.Series(out)
-    allow = ~((p.macro_en) & (((reg == "D")) | ((reg == "B"))))   # block_d + block_b_rng both default True
+    blocked = ((reg == "D") & p.block_d) | ((reg == "B") & p.block_b)   # 07.8: B no longer blocks by default
+    allow = ~(p.macro_en & blocked)
     d["macro_allow_trades"] = allow.to_numpy()
     d["macro_long_ok"]  = (~np.bool_(p.macro_en)) | (~np.bool_(p.macro_standdown)) | (~spy_dn.to_numpy())
     d["macro_short_ok"] = (~np.bool_(p.macro_en)) | (~np.bool_(p.macro_standdown)) | (~spy_up.to_numpy())

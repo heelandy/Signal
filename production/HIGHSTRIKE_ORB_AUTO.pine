@@ -204,7 +204,7 @@ show_dash        = input.bool(true, "Show dashboard", group="Display")
 //   RANGE-regime block: equities ON · futures OFF (chop cohort positive: NQ +0.19 ES +0.18)
 //   retest    : ES 0.5 · others 0.25 (gauntlet-adopted)
 auto_asset = input.bool(true, "AUTO per-asset entry knobs (F75-F78 — chase/stale/cooldown/fill-timing/range-block/retest)", group="Entry standard",
-            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.7). OFF = use the manual inputs.")
+            tooltip="Applies the cohort-adopted per-asset values by SYMBOL (see each manual input's tooltip for the evidence): NQ/MNQ chase 1.5 + Impulse-midpoint retest (F78 combined: NQ 257.6->283.8R, PF 1.36, same DD), others chase 0 · ES stale 24 + cooldown 3, others 0 · QQQ fills the breakout candle itself (no next-bar wait) · instant fill OFF on ES+SPY · RANGE block equities-only · retest ES 0.5 / others 0.25. Matches BOT asset_config exactly (rule orb-standard-2026.07.8 — regime-B block removed 2026-07-14, matching this file's own 'Off' default). OFF = use the manual inputs.")
 string _aroot   = syminfo.type == "futures" ? syminfo.root : syminfo.ticker
 bool _aNQ  = _aroot == "NQ" or _aroot == "MNQ"
 bool _aES  = _aroot == "ES" or _aroot == "MES"

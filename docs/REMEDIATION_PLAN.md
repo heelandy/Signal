@@ -1178,6 +1178,46 @@ operator's worker restart.
   the best-known asia/london policy: best asia = old gates −1.5/0.99 (2024-26), best london =
   old gates −5.0/0.95. No positive overnight book exists in anything tested.
 
+**THE 3-DAY SILENCE QUANTIFIED + REGIME-B ISOLATION (operator, 2026-07-13/14 — "no signal has
+been fired... sitting for 3 days"; verification run twice).** VERIFIED ×2: all 7 landed edits
+present in the tree (pass 1), suite 412 green + functional probes on live data (pass 2); the
+operator RESTARTED the stack ~18:15 ET Mon (new code live — objectives served; restart was AFTER
+Monday RTH, so the shadow books' first live session is TUESDAY). SILENCE ROOT CAUSE, measured:
+the raw engine fired **34 tradeable signals in 5 days (QQQ 2 · SPY 1 · NQ 31) and the REGIME-B
+block killed ALL 34 (100%)** — including QQQ's Monday-selloff 12:30 short; zero kills came from
+the SPY-directional layer; regime B persists as of Mon 23:50 ET, so canonical stays silent until
+the regime shifts or the gate changes. **REGIME-B ISOLATION (mode D: B-block OFF · D-block KEPT ·
+SPY-directional KEPT — the operator's exact "remove regime B, VIX stays" directive, never before
+isolated):**
+| sym | IS 2024-26: gates-live → D | OOS 2016-23: gates-live → D |
+|---|---|---|
+| QQQ | +25.9/PF 2.46 → **+49.0/1.56** | +38.8/1.40 → **+55.8/1.22** (both eras positive 1.26/1.21) |
+| SPY | +18.0/1.76 → **+32.2/1.37** | +14.3/1.15 → **+40.8/1.17** (2016-19 flat 1.00 · 2020-23 +41.0/1.25) |
+| NQ  | +4.0/1.01 → +12.2/1.05 | (2016-23) **+104.5/1.13**, 2020-23 +95.3/1.25 |
+**The operator's remove-regime-B instinct is now EVIDENCE-BACKED where the earlier bundle tests
+were not**: more total R in every window on every symbol, both OOS eras positive on QQQ, PF
+trade-off (fewer-but-cleaner → more-but-still-positive) visible and quantified. ALSO run: the
+equity SPY-directional A/B (mode B): helps IS (QQQ +53.8/2.54), hurts OOS (1.19 vs 1.40) — the
+DIRECTIONAL layer earns its OOS keep on equities; only the B-block is the over-suppressor.
+CAVEATS measured before shipping (operator "apply the fix", 2026-07-14): **2x-slip stress PASSES**
+(QQQ OOS +41.2/PF 1.16 · SPY +27.4/1.11); **maxDD sub-linear** (QQQ −9.8→−17.4R on 2.5× trades;
+SPY OOS IMPROVES −24.7→−21.4R).
+
+**LANDED — orb-standard-2026.07.8 (2026-07-14): the regime-B block is REMOVED.**
+`hs_harness.P` gains `block_d=True / block_b=False` (B no longer blocks; D still does;
+SPY-directional stand-down UNCHANGED — it earns its OOS keep). `block_b=True` replays pre-07.8
+for research. Red-first ×4 (`tests/test_regime_b_removal.py`); suite 416 green. PARITY BONUS:
+both Pine files' B-block default was ALREADY "Off" — the BOT's hardcoded B-block was itself an
+undocumented Pine-parity divergence; 07.8 CLOSES it (Pine tooltips re-stamped 07.8; the
+pine-config-sync armor caught the second file). RE-EVIDENCE COMPLETE: dataqa regenerated (traded
+book GREEN, ES/GC visibly red on legacy short days), A/B regenerated (stamped 07.8 → version-match
+green), matrix rows rebuilt (2,740 → **7,945 rows**, now carrying entry_group_ids). Approval
+predicates for 07.8: **data_qa_traded_ok=True · ab_strategy_version_match=True · evidence
+fingerprint 363735ff7316ba6f @ cutoff 2026-07-10** → the operator's paper-approval click mints
+the FIRST non-legacy, T1-fingerprint-pinned, manifest-attached record. OPERATOR STEPS REMAINING:
+(1) worker+API restart (loads 07.8), (2) paper-approve orb-standard-2026.07.8 on /training
+(no override needed — predicates green), (3) TV: reload the two updated Pine files.
+
 **PINE-SIDE MACRO CHANGE (operator directive, 2026-07-13 after the Monday selloff: 'Macro B SPY↑'
 kept SPY/NVDA shorts on WAIT while both dumped −2/−3% on stale Friday SPY dailies).**
 `production/HIGHSTRIKE_ORB_STACK.pine` updated: (1) **macro trend ref is PER-ASSET** (the chart's
